@@ -27,7 +27,6 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unused_must_use = "deny"
-missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -81,6 +80,12 @@ unreadable_literal = "allow"
 # readable form; vec![] macro forces trailing commas and obscures the
 # per-variant `StrategyVariant { ... }` block.
 vec_init_then_push = "allow"
+# Numeric kernels index both input and output arrays in the same loop —
+# range-based iteration is clearer than zip+enumerate.
+needless_range_loop = "allow"
+# Some structs carry trait objects (`Box<dyn CryptoStrategy>`) that do not
+# implement Debug. Allowed workspace-wide.
+missing_debug_implementations = "allow"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

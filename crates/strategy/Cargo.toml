@@ -19,11 +19,16 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 
 [[bin]]
 name = "ablate"
 path = "src/bin/ablate.rs"
+
+[[bin]]
+name = "real_ablate"
+path = "src/bin/real_ablate.rs"
 
 [lints]
 workspace = true

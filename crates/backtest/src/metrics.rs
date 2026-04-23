@@ -43,8 +43,10 @@ pub fn compute_metrics(trades: &[Trade], _cfg: &TraderConfig) -> RiskMetrics {
     let down_sd = down_var.sqrt().max(1e-12);
     m.sortino = mean / down_sd;
 
-    // Max drawdown measured against an initial capital baseline so equity
-    // never goes negative from the ratio's perspective.
+    // Max drawdown measured against an initial capital baseline and capped
+    // at 1.0 (100%). Losing more than 100% of capital is a stop — we
+    // floor equity at zero for the drawdown calculation. Raw total PnL
+    // still reflects the underlying dollar loss.
     let initial_capital = 10_000.0_f64;
     let mut peak = initial_capital;
     let mut max_dd = 0.0_f64;
@@ -54,7 +56,8 @@ pub fn compute_metrics(trades: &[Trade], _cfg: &TraderConfig) -> RiskMetrics {
         if eq > peak {
             peak = eq;
         }
-        let dd = (peak - eq) / peak.max(1.0);
+        let effective_eq = eq.max(0.0);
+        let dd = ((peak - effective_eq) / peak.max(1.0)).min(1.0);
         if dd > max_dd {
             max_dd = dd;
         }

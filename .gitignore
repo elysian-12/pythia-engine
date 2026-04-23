@@ -7,7 +7,9 @@
 /data
 /reports/runtime
 /reports/backtest/synthetic
-/reports/ablation
+/reports/ablation/
+# Keep PnL runs in git — they are the deliverable.
+!/reports/pnl/
 node_modules
 .next
 out
