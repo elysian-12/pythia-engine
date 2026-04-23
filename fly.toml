@@ -1,0 +1,49 @@
+app = "pythia"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHIA_BIND = "0.0.0.0:8080"
+  PYTHIA_DB = "/app/data/pythia.duckdb"
+  PYTHIA_API = "http://localhost:8080"
+  RUST_LOG = "info,pythia=debug,api=debug,ingest=info"
+
+[[mounts]]
+  source = "pythia_data"
+  destination = "/app/data"
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 100
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 8080
+    handlers = ["tls", "http"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024

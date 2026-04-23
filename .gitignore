@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+.env
+.env.local
+.env.*.local
+.DS_Store
+/data
+/reports/runtime
+/reports/backtest/synthetic
+/reports/ablation
+node_modules
+.next
+out
+.vercel
+*.log
+

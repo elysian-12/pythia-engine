@@ -1,0 +1,36 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+store = { path = "../store" }
+signal-engine = { path = "../signal-engine" }
+reports = { path = "../reports" }
+backtest = { path = "../backtest" }
+paper-trader = { path = "../paper-trader" }
+ingest = { path = "../ingest" }
+kiyotaka-client = { path = "../kiyotaka-client" }
+evaluation = { path = "../evaluation" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+chrono = { workspace = true }
+
+[[bin]]
+name = "pythia"
+path = "src/main.rs"
+
+[lints]
+workspace = true

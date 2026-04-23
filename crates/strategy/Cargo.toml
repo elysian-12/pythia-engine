@@ -1,0 +1,29 @@
+[package]
+name = "strategy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+signal-engine = { path = "../signal-engine" }
+paper-trader = { path = "../paper-trader" }
+backtest = { path = "../backtest" }
+evaluation = { path = "../evaluation" }
+reports = { path = "../reports" }
+econometrics = { path = "../econometrics" }
+store = { path = "../store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[[bin]]
+name = "ablate"
+path = "src/bin/ablate.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+services:
+  pythia:
+    build: .
+    environment:
+      KIYOTAKA_API_KEY: ${KIYOTAKA_API_KEY}
+      PYTHIA_BIND: 0.0.0.0:8080
+      PYTHIA_DB: /app/data/pythia.duckdb
+      PYTHIA_API: http://localhost:8080
+      RUST_LOG: info,pythia=debug,api=debug,ingest=info
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+    volumes:
+      - pythia_data:/app/data
+      - ./reports:/app/reports
+volumes:
+  pythia_data:

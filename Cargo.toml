@@ -1,0 +1,119 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/kiyotaka-client",
+    "crates/polymarket-gamma",
+    "crates/store",
+    "crates/ingest",
+    "crates/econometrics",
+    "crates/signal-engine",
+    "crates/paper-trader",
+    "crates/evaluation",
+    "crates/strategy",
+    "crates/backtest",
+    "crates/reports",
+    "crates/integrity",
+    "crates/api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+panic = "warn"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+# Noisy for domain-specific prose. We use names like "PolyEdge", "PM", "SWP"
+# that aren't Rust identifiers and don't need backticking.
+doc_markdown = "allow"
+# Signal-engine's `evaluate_with_reason` returns a rich enum.
+result_large_err = "allow"
+large_stack_arrays = "allow"
+# Many test helpers are tiny float-heavy functions where explicit returns
+# inflate without helping readability.
+float_cmp = "allow"
+uninlined_format_args = "allow"
+# Domain code uses short names (`r`, `c`, `t`) that mirror math notation.
+many_single_char_names = "allow"
+# Test expectations on stable types don't need the lint.
+expect_used = "allow"
+unwrap_used = "allow"
+# Stylistic preferences that don't improve this codebase.
+map_unwrap_or = "allow"
+items_after_statements = "allow"
+needless_lifetimes = "allow"
+manual_let_else = "allow"
+redundant_closure_for_method_calls = "allow"
+unnecessary_wraps = "allow"
+cast_lossless = "allow"
+if_not_else = "allow"
+needless_pass_by_value = "allow"
+too_many_arguments = "allow"
+naive_bytecount = "allow"
+# HashMap hasher genericity adds noise without preventing real bugs here.
+implicit_hasher = "allow"
+# An async fn without awaits is intentional when the signature is part of a
+# trait interface or future-ready path.
+unused_async = "allow"
+# Long numeric literals (LCG multipliers, FNV seeds) are standard constants;
+# inserting underscores reduces readability in our case.
+unreadable_literal = "allow"
+# We build strategy lists by sequential `push` calls which is the most
+# readable form; vec![] macro forces trailing commas and obscures the
+# per-variant `StrategyVariant { ... }` block.
+vec_init_then_push = "allow"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "brotli", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+futures = "0.3"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+rust_decimal = { version = "1", features = ["serde-with-float"] }
+duckdb = { version = "1", features = ["bundled"] }
+nalgebra = "0.33"
+statrs = "0.17"
+dotenvy = "0.15"
+proptest = "1"
+once_cell = "1"
+rand = "0.8"
+parking_lot = "0.12"
+governor = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1

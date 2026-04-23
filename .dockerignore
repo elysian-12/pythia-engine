@@ -1,0 +1,10 @@
+target
+node_modules
+.next
+out
+data
+reports/runtime
+.git
+.env
+.env.local
+*.log
