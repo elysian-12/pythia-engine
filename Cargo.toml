@@ -15,6 +15,8 @@ members = [
     "crates/reports",
     "crates/integrity",
     "crates/api",
+    "crates/exchange-hyperliquid",
+    "crates/live-executor",
 ]
 
 [workspace.package]
@@ -80,6 +82,8 @@ unreadable_literal = "allow"
 # readable form; vec![] macro forces trailing commas and obscures the
 # per-variant `StrategyVariant { ... }` block.
 vec_init_then_push = "allow"
+# String argument to write_json ergonomics.
+needless_borrows_for_generic_args = "allow"
 # Numeric kernels index both input and output arrays in the same loop —
 # range-based iteration is clearer than zip+enumerate.
 needless_range_loop = "allow"
@@ -113,6 +117,12 @@ once_cell = "1"
 rand = "0.8"
 parking_lot = "0.12"
 governor = "0.7"
+futures-util = "0.3"
+hex = "0.4"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
+rmp-serde = "1"
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 opt-level = 3

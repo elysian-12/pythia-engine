@@ -8,10 +8,12 @@
 
 #![deny(unused_must_use)]
 
+pub mod binance_ws;
 mod dto;
 mod error;
 mod parsing;
 mod rate;
+pub mod ws;
 
 use std::time::Duration;
 

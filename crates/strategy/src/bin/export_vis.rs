@@ -24,8 +24,8 @@ use paper_trader::{Sizing, TraderConfig};
 use serde::Serialize;
 use store::Store;
 use strategy::crypto_native::{
-    ensemble::Ensemble, liq_fade::LiquidationFade, liq_variants::liq_trend_with,
-    vol_bo::VolBreakout, AssetInput, CryptoStrategy,
+    ensemble::Ensemble, liq_fade::LiquidationFade, vol_bo::VolBreakout, AssetInput,
+    CryptoStrategy,
 };
 
 const STARTING: f64 = 1_000.0;

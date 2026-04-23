@@ -1,5 +1,5 @@
 [package]
-name = "kiyotaka-client"
+name = "live-executor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,31 +8,24 @@ publish.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
-reqwest = { workspace = true }
+kiyotaka-client = { path = "../kiyotaka-client" }
+exchange-hyperliquid = { path = "../exchange-hyperliquid" }
+paper-trader = { path = "../paper-trader" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
-async-trait = { workspace = true }
-governor = { workspace = true }
-once_cell = { workspace = true }
-tokio-tungstenite = { workspace = true }
-futures-util = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true }
 dotenvy = { workspace = true }
-chrono = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
 
-[[example]]
-name = "smoke"
-path = "examples/smoke.rs"
-
-[features]
-default = []
-smoke-live = []
+[[bin]]
+name = "pythia-live"
+path = "src/bin/pythia_live.rs"
 
 [lints]
 workspace = true
