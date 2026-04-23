@@ -122,8 +122,98 @@ pub fn run(
 }
 
 /// Run a pre-computed signal stream through the paper-trader with a
-/// no-overlap-per-asset rule. Used by crypto-native strategies that
-/// emit signals without going through `signal_engine::evaluate`.
+/// no-overlap-per-asset rule, **compounding equity after every closed
+/// trade**. Starting equity is `trader.equity_usd`; on each signal we
+/// refresh the trader's equity snapshot so `Sizing::AtrRisk` scales
+/// position size by the up-to-date balance.
+///
+/// This is the apples-to-apples comparison with a live account where
+/// winning trades grow risk per trade and losing trades shrink it.
+pub fn run_signal_stream_compound(
+    name: &str,
+    signals: &[Signal],
+    forward: &ForwardData,
+    trader: &TraderConfig,
+) -> BacktestReport {
+    let mut ordered: Vec<&Signal> = signals.iter().collect();
+    ordered.sort_by_key(|s| s.ts.0);
+
+    let initial_equity = trader.equity_usd;
+    let mut equity = initial_equity;
+    let mut trades: Vec<Trade> = Vec::new();
+    let mut last_exit: HashMap<Asset, EventTs> = HashMap::new();
+    let mut equity_curve: Vec<(i64, f64)> = Vec::new();
+
+    for sig in ordered {
+        if let Some(prev_exit) = last_exit.get(&sig.asset) {
+            if sig.ts.0 < prev_exit.0 {
+                continue;
+            }
+        }
+        let mut dyn_trader = trader.clone();
+        dyn_trader.equity_usd = equity;
+
+        let Some(candles_all) = forward.candles.get(&sig.asset) else {
+            continue;
+        };
+        let Some(funding_all) = forward.funding.get(&sig.asset) else {
+            continue;
+        };
+        let pre_owned: Vec<Candle> = candles_all
+            .iter()
+            .filter(|c| c.ts.0 <= sig.ts.0)
+            .cloned()
+            .collect();
+        let Some(entry_atr) = atr(&pre_owned, dyn_trader.atr_window) else {
+            continue;
+        };
+        let fwd_candles: Vec<Candle> = candles_all
+            .iter()
+            .filter(|c| c.ts.0 >= sig.ts.0 && c.ts.0 <= sig.ts.0 + sig.horizon_s)
+            .cloned()
+            .collect();
+        if fwd_candles.is_empty() {
+            continue;
+        }
+        let fwd_funding: Vec<FundingRate> = funding_all
+            .iter()
+            .filter(|f| f.ts.0 >= sig.ts.0 && f.ts.0 <= sig.ts.0 + sig.horizon_s)
+            .cloned()
+            .collect();
+
+        if let Some(trade) = simulate(sig, &fwd_candles, &fwd_funding, entry_atr, &dyn_trader) {
+            if let (Some(exit_ts), Some(pnl)) = (trade.exit_ts, trade.pnl_usd) {
+                equity += pnl;
+                equity_curve.push((exit_ts.0, equity - initial_equity));
+                last_exit.insert(sig.asset, exit_ts);
+            }
+            trades.push(trade);
+        }
+    }
+
+    let main = compute_metrics(&trades, trader);
+    let r_hist = r_histogram(&trades);
+    let (start_ts, end_ts) = signals
+        .first()
+        .zip(signals.last())
+        .map(|(a, b)| (a.ts.0, b.ts.0))
+        .unwrap_or((0, 0));
+
+    BacktestReport {
+        name: name.into(),
+        start_ts,
+        end_ts,
+        config_hash: format!("compound:{}", trader_hash(trader)),
+        main,
+        ablations: Vec::new(),
+        equity_curve,
+        r_histogram: r_hist,
+    }
+}
+
+/// Non-compounding variant — each trade uses the same fixed equity
+/// snapshot from `trader.equity_usd`. Used by strategy ablation for
+/// apples-to-apples comparison and by tests.
 pub fn run_signal_stream(
     name: &str,
     signals: &[Signal],

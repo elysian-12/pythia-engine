@@ -34,5 +34,9 @@ path = "src/bin/real_ablate.rs"
 name = "find_best"
 path = "src/bin/find_best.rs"
 
+[[bin]]
+name = "find_best_v2"
+path = "src/bin/find_best_v2.rs"
+
 [lints]
 workspace = true

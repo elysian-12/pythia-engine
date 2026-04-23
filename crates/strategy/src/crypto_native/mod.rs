@@ -18,6 +18,7 @@ pub mod baselines;
 pub mod ensemble;
 pub mod funding_rev;
 pub mod liq_fade;
+pub mod liq_variants;
 pub mod oi_div;
 pub mod vol_bo;
 
