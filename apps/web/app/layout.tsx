@@ -19,9 +19,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 Prediction markets as crypto&apos;s leading indicator
               </h1>
             </div>
-            <div className="text-xs text-mist">
-              <span className="chip chip-cyan">Live</span>
-              <span className="ml-2 num">v0.1.0</span>
+            <div className="flex items-center gap-4 text-xs text-mist">
+              <a
+                className="chip chip-cyan hover:opacity-80 transition-opacity"
+                href="/visualize"
+              >
+                Visualize →
+              </a>
+              <span className="num">v0.1.0</span>
             </div>
           </header>
           <main className="mt-8">{children}</main>
