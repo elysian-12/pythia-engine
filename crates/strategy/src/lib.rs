@@ -10,6 +10,7 @@
 
 #![deny(unused_must_use)]
 
+pub mod confluence;
 pub mod crypto_native;
 pub mod registry;
 pub mod runner;

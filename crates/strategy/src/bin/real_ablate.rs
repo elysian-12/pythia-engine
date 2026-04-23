@@ -19,8 +19,9 @@ use evaluation::{
     block_bootstrap_sharpe, deflated_sharpe_ratio, probabilistic_sharpe_ratio,
     probability_of_backtest_overfitting, LatencyCollector,
 };
-use paper_trader::TraderConfig;
+use paper_trader::{Sizing, TraderConfig};
 use reports::{backtest_report::RiskMetrics, write_pair, BacktestReport};
+use strategy::confluence::{filter_signals, ConfluenceCfg};
 use strategy::crypto_native::{
     baselines::buy_and_hold, ensemble::Ensemble, funding_rev::FundingReversion,
     liq_fade::LiquidationFade, oi_div::OiDivergence, vol_bo::VolBreakout, AssetInput,
@@ -128,6 +129,93 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bh_eth = buy_and_hold("buy-hold", Asset::Eth, &eth.candles, &trader);
     let baselines = vec![bh_btc, bh_eth];
 
+    // --- ATR-risk sized variants (1 % risk per trade on $2k equity) ---
+    let pro_trader = TraderConfig {
+        sizing: Sizing::AtrRisk {
+            risk_fraction: 0.01,
+            max_notional_mult: 3.0,
+        },
+        equity_usd: 2_000.0,
+        ..TraderConfig::default()
+    };
+    let mut pro_rows: Vec<Row> = Vec::new();
+    for strat in &strategies {
+        let name = format!("{}-atr1pct@2k", strat.name());
+        let mut signals: Vec<Signal> = Vec::new();
+        signals.extend(strat.signals(&btc.as_input(Asset::Btc)));
+        signals.extend(strat.signals(&eth.as_input(Asset::Eth)));
+        let bt = run_signal_stream(&name, &signals, &forward, &pro_trader);
+        let per_trade = per_trade_returns(&bt);
+        let psr = probabilistic_sharpe_ratio(&per_trade, 0.0).psr;
+        let ci = block_bootstrap_sharpe(&per_trade, 500, 4.0, 0.95, 44);
+        pro_rows.push(Row {
+            name,
+            n_signals: signals.len(),
+            backtest: bt,
+            psr,
+            dsr: 0.0,
+            ci_lo: ci.lo,
+            ci_hi: ci.hi,
+            ci_median: ci.median,
+        });
+    }
+    pro_rows.sort_by(|a, b| {
+        b.backtest
+            .main
+            .total_pnl_usd
+            .partial_cmp(&a.backtest.main.total_pnl_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // --- Confluence-gated variants on the winning trend strategies ---
+    let confluence_cfg = ConfluenceCfg::default();
+    let trend_strats: Vec<Box<dyn CryptoStrategy>> = vec![
+        Box::new(LiquidationFade::trend()),
+        Box::new(VolBreakout::default()),
+        Box::new(Ensemble::trend()),
+    ];
+    let mut confluence_rows: Vec<Row> = Vec::new();
+    for strat in &trend_strats {
+        let name = format!("{}+confluence", strat.name());
+        let mut sigs_btc = strat.signals(&btc.as_input(Asset::Btc));
+        sigs_btc.sort_by_key(|s| s.ts.0);
+        let btc_filtered = filter_signals(&sigs_btc, &btc.candles, &btc.funding, &confluence_cfg);
+        let mut sigs_eth = strat.signals(&eth.as_input(Asset::Eth));
+        sigs_eth.sort_by_key(|s| s.ts.0);
+        let eth_filtered = filter_signals(&sigs_eth, &eth.candles, &eth.funding, &confluence_cfg);
+        let mut kept: Vec<Signal> = Vec::new();
+        kept.extend(btc_filtered.kept);
+        kept.extend(eth_filtered.kept);
+        let n_in = sigs_btc.len() + sigs_eth.len();
+        let bt = run_signal_stream(&name, &kept, &forward, &trader);
+        let per_trade = per_trade_returns(&bt);
+        let psr = probabilistic_sharpe_ratio(&per_trade, 0.0).psr;
+        let ci = block_bootstrap_sharpe(&per_trade, 500, 4.0, 0.95, 45);
+        tracing::info!(
+            strategy = strat.name(),
+            signals_in = n_in,
+            signals_kept = kept.len(),
+            "confluence filter"
+        );
+        confluence_rows.push(Row {
+            name,
+            n_signals: kept.len(),
+            backtest: bt,
+            psr,
+            dsr: 0.0,
+            ci_lo: ci.lo,
+            ci_hi: ci.hi,
+            ci_median: ci.median,
+        });
+    }
+    confluence_rows.sort_by(|a, b| {
+        b.backtest
+            .main
+            .sharpe
+            .partial_cmp(&a.backtest.main.sharpe)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     // Stress test: re-run every strategy with doubled costs.
     let mut stress_rows: Vec<Row> = Vec::new();
     for strat in &strategies {
@@ -208,6 +296,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!("\nPBO across grid: {pbo:.2}");
+
+    println!("\n=== ATR-risk sizing on $2,000 equity (1% risk/trade) ===");
+    for r in &pro_rows {
+        let m = &r.backtest.main;
+        println!(
+            "{:<28} trades={:>4}  pnl={:+10.2}  sharpe={:+.2}  max_dd={:.1}%  winrate={:.1}%",
+            r.name,
+            m.n_trades,
+            m.total_pnl_usd,
+            m.sharpe,
+            m.max_drawdown * 100.0,
+            m.win_rate * 100.0
+        );
+    }
+
+    println!("\n=== Confluence-gated trend strategies ===");
+    for r in &confluence_rows {
+        let m = &r.backtest.main;
+        println!(
+            "{:<32} trades={:>4}  pnl={:+10.0}  sharpe={:+.2}  max_dd={:.1}%  winrate={:.1}%",
+            r.name,
+            m.n_trades,
+            m.total_pnl_usd,
+            m.sharpe,
+            m.max_drawdown * 100.0,
+            m.win_rate * 100.0
+        );
+    }
 
     println!("\n=== Stress (10 bps fee + 5 bps slippage) ===");
     for r in &stress_rows {

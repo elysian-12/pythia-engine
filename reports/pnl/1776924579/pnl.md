@@ -5,7 +5,7 @@
 - Paper execution: 5 bps taker, 3 bps slippage, funding accrued at market rate.
 - Sizing: $10,000 notional per signal; no compounding; no leverage.
 - PBO across grid: **0.00**
-- Wall-clock: 0.36 s
+- Wall-clock: 0.60 s
 
 ## Strategy ranking
 
@@ -196,26 +196,26 @@
 
 | Phase | N | Total | Mean | P50 | P95 | P99 | Max |
 |---|---|---|---|---|---|---|---|
-| load:btc | 1 | 15.648ms | 15648.21µs | 15648.21µs | 15648.21µs | 15648.21µs | 15648.21µs |
-| backtest:ensemble-trend | 1 | 15.608ms | 15607.71µs | 15607.71µs | 15607.71µs | 15607.71µs | 15607.71µs |
-| backtest:liq-fade | 1 | 15.334ms | 15334.04µs | 15334.04µs | 15334.04µs | 15334.04µs | 15334.04µs |
-| backtest:ensemble | 1 | 14.138ms | 14137.75µs | 14137.75µs | 14137.75µs | 14137.75µs | 14137.75µs |
-| backtest:liq-trend | 1 | 13.961ms | 13960.67µs | 13960.67µs | 13960.67µs | 13960.67µs | 13960.67µs |
-| backtest:vol-breakout | 1 | 10.761ms | 10761.17µs | 10761.17µs | 10761.17µs | 10761.17µs | 10761.17µs |
-| load:eth | 1 | 10.239ms | 10239.17µs | 10239.17µs | 10239.17µs | 10239.17µs | 10239.17µs |
-| backtest:funding-reversion | 1 | 9.133ms | 9132.75µs | 9132.75µs | 9132.75µs | 9132.75µs | 9132.75µs |
-| backtest:funding-trend | 1 | 8.066ms | 8065.50µs | 8065.50µs | 8065.50µs | 8065.50µs | 8065.50µs |
-| backtest:oi-divergence | 1 | 4.901ms | 4900.83µs | 4900.83µs | 4900.83µs | 4900.83µs | 4900.83µs |
-| backtest:oi-trend | 1 | 4.841ms | 4840.54µs | 4840.54µs | 4840.54µs | 4840.54µs | 4840.54µs |
-| strategy:ensemble-trend | 1 | 3.509ms | 3509.08µs | 3509.08µs | 3509.08µs | 3509.08µs | 3509.08µs |
-| strategy:ensemble | 1 | 3.331ms | 3331.04µs | 3331.04µs | 3331.04µs | 3331.04µs | 3331.04µs |
-| strategy:liq-fade | 1 | 1.954ms | 1954.21µs | 1954.21µs | 1954.21µs | 1954.21µs | 1954.21µs |
-| strategy:liq-trend | 1 | 1.914ms | 1913.96µs | 1913.96µs | 1913.96µs | 1913.96µs | 1913.96µs |
-| strategy:vol-breakout | 1 | 0.815ms | 814.75µs | 814.75µs | 814.75µs | 814.75µs | 814.75µs |
-| strategy:funding-reversion | 1 | 0.320ms | 319.54µs | 319.54µs | 319.54µs | 319.54µs | 319.54µs |
-| strategy:funding-trend | 1 | 0.243ms | 242.92µs | 242.92µs | 242.92µs | 242.92µs | 242.92µs |
-| strategy:oi-trend | 1 | 0.198ms | 198.04µs | 198.04µs | 198.04µs | 198.04µs | 198.04µs |
-| strategy:oi-divergence | 1 | 0.195ms | 194.71µs | 194.71µs | 194.71µs | 194.71µs | 194.71µs |
+| backtest:ensemble-trend | 1 | 15.893ms | 15893.17µs | 15893.17µs | 15893.17µs | 15893.17µs | 15893.17µs |
+| backtest:ensemble | 1 | 15.039ms | 15038.83µs | 15038.83µs | 15038.83µs | 15038.83µs | 15038.83µs |
+| backtest:liq-trend | 1 | 14.559ms | 14559.50µs | 14559.50µs | 14559.50µs | 14559.50µs | 14559.50µs |
+| load:btc | 1 | 14.153ms | 14153.33µs | 14153.33µs | 14153.33µs | 14153.33µs | 14153.33µs |
+| backtest:liq-fade | 1 | 14.079ms | 14079.29µs | 14079.29µs | 14079.29µs | 14079.29µs | 14079.29µs |
+| backtest:vol-breakout | 1 | 10.001ms | 10000.79µs | 10000.79µs | 10000.79µs | 10000.79µs | 10000.79µs |
+| load:eth | 1 | 8.827ms | 8827.17µs | 8827.17µs | 8827.17µs | 8827.17µs | 8827.17µs |
+| backtest:funding-reversion | 1 | 8.706ms | 8705.88µs | 8705.88µs | 8705.88µs | 8705.88µs | 8705.88µs |
+| backtest:funding-trend | 1 | 8.321ms | 8320.58µs | 8320.58µs | 8320.58µs | 8320.58µs | 8320.58µs |
+| backtest:oi-divergence | 1 | 5.029ms | 5029.21µs | 5029.21µs | 5029.21µs | 5029.21µs | 5029.21µs |
+| backtest:oi-trend | 1 | 4.920ms | 4920.42µs | 4920.42µs | 4920.42µs | 4920.42µs | 4920.42µs |
+| strategy:ensemble-trend | 1 | 3.799ms | 3799.04µs | 3799.04µs | 3799.04µs | 3799.04µs | 3799.04µs |
+| strategy:ensemble | 1 | 3.486ms | 3486.12µs | 3486.12µs | 3486.12µs | 3486.12µs | 3486.12µs |
+| strategy:liq-fade | 1 | 2.044ms | 2044.38µs | 2044.38µs | 2044.38µs | 2044.38µs | 2044.38µs |
+| strategy:liq-trend | 1 | 1.827ms | 1826.75µs | 1826.75µs | 1826.75µs | 1826.75µs | 1826.75µs |
+| strategy:vol-breakout | 1 | 0.801ms | 801.50µs | 801.50µs | 801.50µs | 801.50µs | 801.50µs |
+| strategy:funding-reversion | 1 | 0.296ms | 296.50µs | 296.50µs | 296.50µs | 296.50µs | 296.50µs |
+| strategy:funding-trend | 1 | 0.295ms | 295.29µs | 295.29µs | 295.29µs | 295.29µs | 295.29µs |
+| strategy:oi-trend | 1 | 0.255ms | 255.08µs | 255.08µs | 255.08µs | 255.08µs | 255.08µs |
+| strategy:oi-divergence | 1 | 0.246ms | 245.58µs | 245.58µs | 245.58µs | 245.58µs | 245.58µs |
 
 ## Interpretation
 

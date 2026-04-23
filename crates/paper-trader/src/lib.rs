@@ -16,23 +16,45 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Position-sizing rule.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Sizing {
+    /// Every trade uses `notional_usd` notional. Simple but crude.
+    FixedNotional,
+    /// Risk-parity: risk a fixed fraction of equity per trade, computed
+    /// from the stop distance. Standard professional sizing (Van Tharp).
+    AtrRisk {
+        /// Fraction of equity to risk per trade, e.g. 0.01 for 1 %.
+        risk_fraction: f64,
+        /// Hard cap on notional as a multiple of equity.
+        max_notional_mult: f64,
+    },
+}
+
+impl Default for Sizing {
+    fn default() -> Self {
+        Self::FixedNotional
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TraderConfig {
-    /// Taker fee in basis points per side.
     pub taker_fee_bps: f64,
-    /// Slippage constant in basis points per side.
     pub slippage_bps: f64,
-    /// Notional size in USD. The paper trader doesn't use leverage — PnL is
-    /// reported in USD on this notional.
+    /// Fallback notional when `sizing == FixedNotional`.
     pub notional_usd: f64,
-    /// Stop-loss multiple of ATR.
     pub stop_atr_mult: f64,
-    /// Take-profit multiple of ATR.
     pub tp_atr_mult: f64,
-    /// ATR window (candles).
     pub atr_window: usize,
-    /// Funding applied per 8h period at mean rate of window.
     pub funding_window: usize,
+    #[serde(default)]
+    pub sizing: Sizing,
+    #[serde(default = "default_equity")]
+    pub equity_usd: f64,
+}
+
+fn default_equity() -> f64 {
+    10_000.0
 }
 
 impl Default for TraderConfig {
@@ -45,6 +67,41 @@ impl Default for TraderConfig {
             tp_atr_mult: 3.0,
             atr_window: 14,
             funding_window: 24,
+            sizing: Sizing::FixedNotional,
+            equity_usd: 10_000.0,
+        }
+    }
+}
+
+impl TraderConfig {
+    /// Professional default — ATR-scaled 1 % risk per trade on the
+    /// supplied equity. This is what you run with real money.
+    pub fn professional(equity_usd: f64) -> Self {
+        Self {
+            equity_usd,
+            sizing: Sizing::AtrRisk {
+                risk_fraction: 0.01,
+                max_notional_mult: 3.0,
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Effective notional for a trade given the stop distance in $/contract.
+    fn size_notional(&self, stop_dist: f64, entry_price: f64) -> f64 {
+        match self.sizing {
+            Sizing::FixedNotional => self.notional_usd,
+            Sizing::AtrRisk {
+                risk_fraction,
+                max_notional_mult,
+            } => {
+                if stop_dist <= 0.0 || entry_price <= 0.0 {
+                    return 0.0;
+                }
+                let risk_dollars = self.equity_usd * risk_fraction;
+                let notional = risk_dollars * entry_price / stop_dist;
+                notional.min(self.equity_usd * max_notional_mult).max(0.0)
+            }
         }
     }
 }
@@ -151,19 +208,22 @@ pub fn simulate(
         ),
     };
 
-    let qty = cfg.notional_usd / entry_price.max(1e-9);
+    let notional = cfg.size_notional(stop_dist, entry_price);
+    if notional <= 0.0 {
+        return None;
+    }
+    let qty = notional / entry_price.max(1e-9);
     let side_pnl = match signal.direction {
         Direction::Long => (exit_px - entry_price) * qty,
         Direction::Short => (entry_price - exit_px) * qty,
     };
-    let fees = (cfg.taker_fee_bps / 10_000.0) * cfg.notional_usd * 2.0;
-    let slippage = (cfg.slippage_bps / 10_000.0) * cfg.notional_usd * 2.0;
+    let fees = (cfg.taker_fee_bps / 10_000.0) * notional * 2.0;
+    let slippage = (cfg.slippage_bps / 10_000.0) * notional * 2.0;
     let hours = ((exit_ts.0 - signal.ts.0).max(0) as f64) / 3600.0;
-    let funding_cost = funding_pnl(signal.direction, future_funding, hours, cfg.notional_usd);
+    let funding_cost = funding_pnl(signal.direction, future_funding, hours, notional);
     let pnl = side_pnl - fees - funding_cost;
     let r_mult = if stop_dist > 0.0 {
-        (pnl / (cfg.notional_usd * (stop_dist / entry_price.max(1e-9)))).abs()
-            * pnl.signum()
+        (pnl / (notional * (stop_dist / entry_price.max(1e-9)))).abs() * pnl.signum()
     } else {
         0.0
     };
