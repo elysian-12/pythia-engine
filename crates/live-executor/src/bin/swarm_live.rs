@@ -10,12 +10,19 @@
 //!                                │
 //!                                ├──▶ Scoreboard.record (pending)
 //!                                │
-//!                                └──▶ consensus() ─▶ Hyperliquid REST
+//!                                ├──▶ Scoreboard.champion() → agent_id
+//!                                │
+//!                                └──▶ if champion emitted a decision,
+//!                                       the Executor places the trade
+//!                                       on Hyperliquid REST.
 //!
-//!   tokio ticker (60 s) ──▶ mark expired pending decisions
-//!                                        (using current HL mids)
-//!   tokio ticker (10 s) ──▶ write snapshot JSON for the UI
+//!   tokio ticker (10 s) ──▶ mark expired pending decisions (using HL mids)
+//!                           + write snapshot JSON for the UI
 //! ```
+//!
+//! `consensus()` is still computed per event but only as a diagnostic
+//! (exported to the snapshot for the UI) — the champion drives live
+//! execution.
 //!
 //! Env:
 //!   HL_PRIVATE_KEY           — required for `--mode live`. Hex.
@@ -41,7 +48,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use swarm::{
     agent::Event as SwarmEvent,
-    consensus::{consensus, ConsensusCfg, ConsensusDecision},
+    consensus::{consensus, ConsensusCfg},
     population::Swarm,
     scoring::{AgentStats, Scoreboard},
     systematic::SystematicBuilder,
@@ -172,12 +179,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Main loop — drain the internal event channel, broadcast to the
-    // swarm, run consensus, place orders.
+    // swarm, place orders on the **champion's** decisions. Consensus is
+    // still computed for diagnostic purposes (shown in the snapshot)
+    // but does not drive execution.
     while let Some(event) = swarm_rx.recv().await {
-        // Refresh champion so social agents + consensus see it.
-        swarm.current_champion = scoreboard
+        // Refresh champion so social agents + downstream routing see it.
+        let champion_id = scoreboard
             .champion(cons_cfg.min_decisions_for_champion)
             .map(|c| c.agent_id);
+        swarm.current_champion = champion_id.clone();
 
         let decisions = swarm.broadcast(&event).await;
 
@@ -189,7 +199,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             client.all_mids().await.unwrap_or_default()
         };
 
-        // Record every decision in the scoreboard + pending map.
+        // Record every decision in the scoreboard + pending map so the
+        // whole population stays ranked over time.
         for d in &decisions {
             scoreboard.record(d.clone());
             let entry_px = mid_for_asset(&mids, d.asset).unwrap_or(0.0);
@@ -206,21 +217,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        // Consensus across all decisions on this event.
-        if let Some(c) = consensus(&decisions, &scoreboard, &cons_cfg) {
+        // Consensus — diagnostic only.
+        if consensus(&decisions, &scoreboard, &cons_cfg).is_some() {
             consensus_stats.lock().fires += 1;
-            if let Err(e) = try_place_consensus_order(
+        }
+
+        // Execution — place an order iff the current champion emitted a
+        // decision on this event. No champion yet (early in the run) →
+        // no trade. Multiple decisions from champion (unlikely) → fire
+        // on the first, others ignored for this tick.
+        let Some(champ_id) = champion_id.as_deref() else {
+            continue;
+        };
+        if let Some(d) = decisions.iter().find(|d| d.agent_id == champ_id) {
+            if let Err(e) = try_place_champion_order(
                 &client,
                 &address,
                 &guard,
-                &c,
+                d,
                 &mids,
                 mode,
                 risk_floor,
             )
             .await
             {
-                warn!(error=%e, "consensus order failed");
+                warn!(error=%e, "champion order failed");
             }
         }
     }
@@ -322,17 +343,17 @@ struct ConsensusStats {
     fires: usize,
 }
 
-async fn try_place_consensus_order<S: Signer>(
+async fn try_place_champion_order<S: Signer>(
     client: &HyperliquidClient<S>,
     address: &str,
     guard: &RiskGuard,
-    c: &ConsensusDecision,
+    d: &swarm::agent::AgentDecision,
     mids: &HashMap<String, String>,
     mode: Mode,
     risk_floor: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Per-asset symbol translation.
-    let (symbol, asset_ix, hl_coin) = match c.asset {
+    let (symbol, asset_ix, hl_coin) = match d.asset {
         Asset::Btc => ("BTCUSDT", 0u32, "BTC"),
         Asset::Eth => ("ETHUSDT", 1u32, "ETH"),
     };
@@ -340,7 +361,7 @@ async fn try_place_consensus_order<S: Signer>(
     match guard.permit_signal(symbol) {
         live_executor::risk::GuardDecision::Ok => {}
         other => {
-            info!(symbol, decision=?other, "consensus rejected by risk guard");
+            info!(symbol, decision=?other, "champion order rejected by risk guard");
             return Ok(());
         }
     }
@@ -353,13 +374,12 @@ async fn try_place_consensus_order<S: Signer>(
     let equity = us.margin_summary.account_value_f64();
     guard.update_equity(equity);
     if guard.is_disabled() {
-        warn!("guard disabled; skipping consensus order");
+        warn!("guard disabled; skipping champion order");
         return Ok(());
     }
 
-    // Use max(agent preferences, risk_floor). Consensus already averaged
-    // across the contributing agents; clamp for safety.
-    let risk_fraction = c.avg_risk_fraction.clamp(risk_floor, 0.02);
+    // Honour the champion's preferred risk, clamped to [floor, 2 %].
+    let risk_fraction = d.risk_fraction.clamp(risk_floor, 0.02);
     let atr = (mid * 0.005).max(10.0);
     let stop_dist = 1.5 * atr;
     let risk_dollars = equity * risk_fraction;
@@ -369,7 +389,7 @@ async fn try_place_consensus_order<S: Signer>(
         return Ok(());
     }
 
-    let side = match c.direction {
+    let side = match d.direction {
         Direction::Long => OrderSide::Buy,
         Direction::Short => OrderSide::Sell,
     };
@@ -388,10 +408,9 @@ async fn try_place_consensus_order<S: Signer>(
 
     info!(
         ?mode, symbol, side=?side, size, entry=entry_est, stop=stop_price, tp=tp_price,
-        direction=?c.direction, champ_n=c.champion_count,
-        champ_agree=format!("{:.2}", c.champion_agreement),
-        overall=format!("{:.2}", c.overall_agreement),
-        "CONSENSUS FIRE"
+        direction=?d.direction, agent=%d.agent_id,
+        conviction=d.conviction,
+        "CHAMPION FIRE"
     );
 
     match mode {

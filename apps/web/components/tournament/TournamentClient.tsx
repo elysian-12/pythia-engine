@@ -63,8 +63,9 @@ export function TournamentClient() {
             </h2>
             <p className="text-xs text-mist mt-2 max-w-md">
               Heterogeneous traders — systematic rules, LLM personas,
-              meta-agents — all see the same event stream. The top-5 by
-              realised R vote; consensus drives execution.
+              meta-agents — all see the same event stream. The
+              scoreboard picks the champion; the champion&apos;s
+              strategy drives the executor.
             </p>
           </div>
           <div className="text-right text-xs text-mist">
@@ -153,10 +154,12 @@ export function TournamentClient() {
                 Every agent emits an independent opinion (or passes).
               </li>
               <li>
-                Scoreboard tracks per-agent rolling Sharpe + Σ R.
+                Scoreboard tracks per-agent rolling Sharpe + Σ R and
+                identifies the current champion.
               </li>
               <li>
-                Top-K skill-filtered champions vote; consensus ≥ 60 % fires.
+                The champion&apos;s own decision is applied via the
+                executor — Hyperliquid EIP-712 + risk guard.
               </li>
               <li>
                 Every N events, the weakest half are replaced via log-space

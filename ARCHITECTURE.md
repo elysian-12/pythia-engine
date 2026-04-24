@@ -18,11 +18,11 @@ every `N` events via evolution.
  │                      · MomentumFollower / Contrarian meta-agents       │
  │                      PeerView lets agents read recent peer decisions.  │
  ├───────────────────────────────────────────────────────────────────────┤
- │ 4. SCOREBOARD      per-agent rolling Sharpe + total-R + Bayesian skill │
+ │ 4. SCOREBOARD      per-agent rolling Sharpe + total-R; picks champion │
  ├───────────────────────────────────────────────────────────────────────┤
- │ 5. CONSENSUS       majority-of-top-K champions → directional signal    │
- ├───────────────────────────────────────────────────────────────────────┤
- │ 6. EXECUTION       Hyperliquid EIP-712 REST + per-trade risk guard     │
+ │ 5. EXECUTOR        champion's decision → Hyperliquid EIP-712 +        │
+ │                      per-trade risk guard                              │
+ │                    (consensus() still computed as a diagnostic)       │
  └───────────────────────────────────────────────────────────────────────┘
              ▲                                              │
              │                                              │
@@ -60,8 +60,8 @@ funding / OI / candles.
 `regime::classify(window) → Trending | Ranging | Chaotic | Calm`. Inputs
 are ADX-proxy, Donchian width, realised vol percentiles over rolling
 windows. Swarm agents don't see the regime directly — the portfolio
-allocator does, so each regime tilts which top-K agents get promoted to
-the consensus.
+allocator does, so each regime tilts which rule family the current
+champion is most likely to come from.
 
 ### 3. Swarm — the discovery engine
 
@@ -80,36 +80,33 @@ once the horizon elapses. Per-agent `AgentStats` aggregates:
 - `win_rate` and `rolling_sharpe` (rolling last N decisions)
 - `total_pnl_usd`, `last_r`, `total_decisions`, `active` flag
 
-The scoreboard is the **oracle**. Evolution reads it; consensus reads
-it; the UI reads it.
+The scoreboard is the **oracle**. Evolution reads it; the executor
+reads it to resolve the current champion; the UI reads it.
 
-### 5. Consensus
+### 5. Executor — champion-driven
 
-```rust
-ConsensusCfg {
-    top_k: 5,
-    min_decisions_for_champion: 3,
-    champion_agreement: 0.6,      // 60 % of champions agree
-    min_agent_count: 3,           // at least 3 agents voted
-    overall_agreement: 0.5,
-}
-```
+The scoreboard picks the champion (highest `total_r` among agents with
+`>= min_decisions`). On every event the swarm broadcasts to, if the
+champion emits a decision, the executor places the trade:
 
-Bucket decisions by `(asset, direction)`, pick the largest group,
-verify overall + champion agreement both clear their thresholds, emit a
-`ConsensusDecision`. Size comes from vol-targeted
-`portfolio::Allocator`.
-
-### 6. Execution
+1. Translate `(Asset, Direction)` → HL asset index + `OrderSide`.
+2. Size via ATR-risk on the champion's preferred `risk_fraction`,
+   clamped to `[risk_floor, 2 %]`.
+3. Place IOC entry + reduce-only SL + reduce-only TP triggers.
 
 `exchange-hyperliquid` signs an EIP-712 `{Order, Tif}` action with a
-k256 private key, POSTs to `https://api.hyperliquid.xyz/exchange`, and
-`live-executor` maintains local state to reconcile fills. A per-trade
-risk guard enforces:
+k256 private key, POSTs to `https://api.hyperliquid.xyz/exchange`.
+`live-executor` maintains local state to reconcile fills. The risk
+guard enforces:
 
 - per-trade ≤ 1 % equity risk (ATR-scaled)
 - per-day stop at −3 % equity
 - portfolio halt at 15 % drawdown
+
+`consensus()` still runs on every event and is exported to the snapshot
+for UI display, but it does **not** drive execution — the champion
+does. This keeps the mental model simple: "this is the agent that is
+winning right now; these are its live trades."
 
 **Two binaries:**
 
@@ -117,8 +114,8 @@ risk guard enforces:
   z-score > 2.5 σ → direct HL order). Still useful as a minimal
   reference.
 - `pythia-swarm-live` — swarm-driven. Converts Binance WS events into
-  `swarm::Event`, broadcasts to the 20-agent population, runs
-  `consensus()`, places one order per firing. Writes a
+  `swarm::Event`, broadcasts to the 20-agent population, routes the
+  champion's decisions to the executor. Writes
   `data/swarm-snapshot.json` every 10 s for the `/tournament` UI.
 
 ### Evolution — the loop close
@@ -145,7 +142,7 @@ A Three.js arena that renders the 20-agent scoreboard in 3D:
   scales with `total_r`, colour with rule family
 - the champion sits on a centre pedestal with a rotating halo + light
   beam
-- faint cyan filaments connect the top-5 to imply consensus
+- faint cyan filaments connect the top-5 (the elite cluster)
 - positions lerp smoothly when ranks reshuffle — so you literally watch
   evolution happen
 - bloom + vignette post-processing, orbit camera rig

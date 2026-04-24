@@ -5,18 +5,20 @@ An **agent-swarm** for crypto derivatives trade discovery.
 Pythia stands up a heterogeneous population of simulated traders — each with
 its own rule family, risk appetite, horizon, and (optionally) LLM persona —
 feeds them the same real-time event stream (liquidations, funding, OI,
-candles), ranks them by realised PnL, and has the **consensus of the top
-performers** drive live execution.
+candles), and ranks them by realised PnL. The scoreboard picks the
+**champion**; the champion's strategy is then applied via the live
+**executor** that signs + sends orders to Hyperliquid.
 
-Inspired by [camel-ai/oasis](https://github.com/camel-ai/oasis): instead of
-one monolithic strategy, use a tournament of disagreeing agents and let the
-scoreboard pick the champion.
+One monolithic strategy is fragile; a tournament of disagreeing agents
+surfaces the rule that is actually paying out under the current regime.
 
 ```
   Binance public WS ──┐
-  Kiyotaka REST ──────┼──▶ Swarm (20+ agents) ──▶ Scoreboard ──▶ Consensus ──▶ Hyperliquid REST
-  DuckDB replay ──────┘        │                      │
-                                │                      └──▶ Evolution (every N events)
+  Kiyotaka REST ──────┼──▶ Swarm (20+ agents) ──▶ Scoreboard ──▶ Champion ──▶ Executor ──▶ Hyperliquid
+  DuckDB replay ──────┘        │                                                  │
+                                │                                                  └─ EIP-712 + risk guard
+                                │
+                                ├──▶ Evolution (every N events)
                                 └──▶ PeerView (social influence)
 ```
 
@@ -51,9 +53,8 @@ Six layers — see [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 │ 1. DATA          Binance WS · Kiyotaka REST · DuckDB replay             │
 │ 2. REGIME        trending / ranging / chaotic / calm classifier         │
 │ 3. SWARM         20+ agents — systematic, LLM-driven, social            │
-│ 4. SCOREBOARD    rolling Sharpe + total-R ranking, Bayesian skill       │
-│ 5. CONSENSUS     majority-of-top-K champions → directional signal       │
-│ 6. EXECUTION     Hyperliquid EIP-712 REST + per-trade risk guard        │
+│ 4. SCOREBOARD    rolling Sharpe + total-R ranking; picks the champion   │
+│ 5. EXECUTOR      champion's decision → Hyperliquid EIP-712 + risk guard │
 │    EVOLUTION     every N events: elite preserve + mutate + crossover    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -77,12 +78,12 @@ crates/
 ├── tuner/                   bounded-autonomy AI tuner (LLM tool-use)
 ├── exchange-hyperliquid/    EIP-712 signing + typed REST client
 ├── live-executor/           pythia-live binary (24/7 daemon)
-└── swarm/ ★                 the tournament — agents, scoring, consensus,
-                             genetic evolution, LLM personalities
+└── swarm/ ★                 the tournament — agents, scoring, champion
+                             selection, genetic evolution, LLM personas
 apps/web/                    Next.js 15 · three.js
 ├── /visualize               cinematic equity-curve + strategy grid
 └── /tournament ★            live 3D arena: 20 agents, champion pedestal,
-                             consensus filaments, auto-reshuffling ranks
+                             elite-cluster filaments, auto-reshuffling ranks
 ```
 
 ★ = the hero crate. Everything else feeds it or is fed by it.
@@ -90,7 +91,7 @@ apps/web/                    Next.js 15 · three.js
 ## What's validated
 
 - **365 days · Binance BTC + ETH perps · 69,026 events** replayed through 20
-  agents in 0.7 s wall. Ranking + consensus report at
+  agents in 0.7 s wall. Ranking + champion report at
   `reports/swarm/<ts>/swarm.md`.
 - Underlying systematic rules (grid-searched independently of the swarm) —
   `liq-trend` at 1 % risk compound: $1k → $64k over the same year with

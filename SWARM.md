@@ -1,13 +1,12 @@
 # Swarm — trade discovery via tournament of agents
 
-Pythia's core discovery mechanism. Inspired by
-[camel-ai/oasis](https://github.com/camel-ai/oasis), adapted from social
-simulation to trading.
+Pythia's core discovery mechanism.
 
 > **Core idea:** rather than hand-pick one strategy and hope, instantiate a
 > heterogeneous *population* of simulated traders, feed them all the same
-> real-time event stream, rank them by realised PnL, and let the
-> **consensus of the top performers** drive execution.
+> real-time event stream, rank them by realised PnL, and route the
+> **current champion's** decisions to the live executor. As the regime
+> shifts, a different agent rises to the top and the executor follows.
 
 Code lives in [`crates/swarm/`](crates/swarm/).
 
@@ -31,12 +30,19 @@ Code lives in [`crates/swarm/`](crates/swarm/).
     Scoreboard.mark_outcome(decision_id, r_multiple, pnl_usd)
            │
            ▼
-    Consensus.decide(top_k_champions) ──▶  Real-money execution
+    Scoreboard.champion()      → agent_id of the leader
+           │
+           ▼
+    if champion emitted a decision this event:
+        Executor ──▶ Hyperliquid REST (EIP-712 signed order)
            │
            └──(every N events) ──▶  Evolution.advance()
                                           │
                                           └──▶ new population
 ```
+
+`consensus()` is still computed and exported to the snapshot for
+diagnostics, but the default live path is **champion-driven**.
 
 ## Agent taxonomy
 
@@ -78,9 +84,8 @@ runs; `AnthropicDecider` uses Anthropic tool-use when
 ### `MomentumFollower` / `Contrarian` (meta)
 
 Don't watch raw events — watch `PeerView`. Amplify or fade whatever
-fraction of peers are currently long. The social-influence bit of the
-OASIS pattern. Small-weighted but meaningful when a few strong agents
-converge.
+fraction of peers are currently long. A social-influence layer that
+matters when a few strong agents converge.
 
 ## Peer influence
 
@@ -116,10 +121,36 @@ pub struct AgentStats {
 ```
 
 `Scoreboard::top_n(k, min_decisions)` and
-`Scoreboard::champion(min_decisions)` expose the oracle that consensus
-+ evolution both read.
+`Scoreboard::champion(min_decisions)` expose the oracle the executor
+and evolution both read.
 
-## Consensus
+## Executor routing
+
+Each event, after `Swarm::broadcast()` returns the slate of
+`AgentDecision`s:
+
+```rust
+let champion = scoreboard.champion(min_decisions_for_champion);
+if let Some(champ) = champion {
+    if let Some(d) = decisions.iter().find(|d| d.agent_id == champ.agent_id) {
+        // Champion emitted a decision this event — apply it.
+        executor.place(d).await?;
+    }
+}
+```
+
+One agent drives trading at a time. If the champion passes on this
+event, no trade. If a different agent climbs the scoreboard, the
+executor follows it smoothly — no config change, no restart.
+
+## Consensus (diagnostic)
+
+`consensus()` runs on every event and is reported in the snapshot /
+UI, but it no longer drives execution. Useful for:
+
+- visualising how much the top-K agree (filaments in the 3D arena)
+- catching regimes where the champion is a statistical fluke
+- optional alternative firing rule for research
 
 ```rust
 let cfg = ConsensusCfg {
@@ -129,11 +160,8 @@ let cfg = ConsensusCfg {
     min_agent_count: 3,             // at least 3 agents vote this event
     overall_agreement: 0.5,         // > 50 % overall tilt
 };
-let signal = consensus(&decisions, &scoreboard, &cfg);
+let diagnostic = consensus(&decisions, &scoreboard, &cfg);
 ```
-
-Returns `Option<ConsensusDecision>` or `None` when either bar fails.
-No consensus → no trade. The system is allowed to pass.
 
 ## Evolution
 
@@ -173,11 +201,10 @@ Top 5 by total R:
 | 4 | `liq-trend-aggressive` | 577 | 48.9 | +66.86 | +501 |
 | 5 | `liq-trend-degen` | 577 | 48.9 | +66.86 | +1003 |
 
-Consensus fired 751× with 49 % directional wins (near-coin-flip) — the
-value of the swarm is **picking the champion**, not averaging votes.
-
-A naïve majority consensus is a coin-flip; the skill-filtered top-K
-consensus is what we ship.
+Naïve consensus voting fired 751× with 49 % directional wins (coin-flip)
+— confirming that the **value of the swarm is picking the champion**,
+not averaging votes. The live executor routes the champion's own
+decisions; consensus is kept only as a diagnostic.
 
 Full report: [reports/swarm/1777015617/swarm.md](reports/swarm/1777015617/swarm.md)
 
@@ -205,7 +232,7 @@ detect.
 # 1. full swarm backtest on scraped data → reports/swarm/<ts>/swarm.md
 cargo run --release -p swarm --bin swarm-backtest
 
-# 2. live daemon — Binance WS → swarm → consensus → HL REST
+# 2. live daemon — Binance WS → swarm → champion → executor → HL REST
 #    writes data/swarm-snapshot.json every 10 s for the UI
 cargo run --release -p live-executor --bin pythia-swarm-live
 
@@ -226,7 +253,7 @@ A 3D arena renders all 20 agents simultaneously:
   liq-fade red, vol-breakout amber, funding-trend blue,
   funding-arb purple)
 - champion sits on a centre pedestal with a rotating halo + light beam
-- top-5 connected by faint cyan filaments (consensus structure)
+- top-5 connected by faint cyan filaments (the elite cluster)
 - positions lerp smoothly when ranks reshuffle — evolution visualised
 
 Falls back to a deterministic demo snapshot when the daemon isn't

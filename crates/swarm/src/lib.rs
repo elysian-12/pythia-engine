@@ -1,12 +1,12 @@
-//! Agent-swarm trading framework (OASIS-for-markets).
+//! Agent-swarm trading framework.
 //!
-//! The idea borrowed from camel-ai/oasis: instead of a single
-//! "engine" deciding what to trade, we stand up a population of
-//! heterogeneous agents — each with its own strategy template, risk
-//! appetite, horizon preference, and (optionally) awareness of what
-//! other agents just did. They all see the same real-time event stream,
-//! each forms an independent decision, and we rank them by realised
-//! PnL. The **consensus of the top performers** becomes the live trade.
+//! Instead of a single "engine" deciding what to trade, we stand up a
+//! population of heterogeneous agents — each with its own strategy
+//! template, risk appetite, horizon preference, and (optionally)
+//! awareness of what other agents just did. They all see the same
+//! real-time event stream, each forms an independent decision, and we
+//! rank them by realised PnL. The **scoreboard picks the champion**,
+//! and the **champion's strategy drives the live executor**.
 //!
 //! Flow:
 //!
@@ -27,10 +27,10 @@
 //!                      Scoreboard.mark_outcome(decision_id, pnl)
 //!                                         │
 //!                                         ▼
-//!                Consensus.decide(decisions, top_k_champions)
+//!                       Scoreboard.champion() → agent_id
 //!                                         │
 //!                                         ▼
-//!                           Real-money execution
+//!              champion's next AgentDecision  ──▶ Executor
 //! ```
 //!
 //! Design choices:
@@ -40,8 +40,9 @@
 //!   * Everything is trait-based, so LLM-backed agents are a drop-in
 //!     later (`Box<dyn SwarmAgent>` already supports any type).
 //!   * Agents can optionally see recent peer decisions, enabling
-//!     momentum/contrarian meta-behaviours — the social-influence bit
-//!     of the OASIS pattern.
+//!     momentum/contrarian meta-behaviours — the social-influence layer.
+//!   * `consensus()` remains available as a diagnostic / alternative
+//!     firing rule, but the default live path is **champion-driven**.
 
 #![deny(unused_must_use)]
 

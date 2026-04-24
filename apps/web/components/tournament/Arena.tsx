@@ -127,7 +127,8 @@ function ChampionBeam({ enabled }: { enabled: boolean }) {
 }
 
 function AgreementLines({ agents }: { agents: AgentStats[] }) {
-  // Draw faint filaments between the top-5 champions to imply consensus.
+  // Faint filaments between the top-5 agents — visualises the elite
+  // cluster that the executor is currently sampling from.
   const top = agents.slice(0, 5);
   const points: Array<{ from: THREE.Vector3; to: THREE.Vector3; key: string }> = [];
   for (let i = 0; i < top.length; i++) {

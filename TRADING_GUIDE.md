@@ -13,9 +13,9 @@ stops me out, what confirms I should trust the signal.
 ## 1. How trades are generated
 
 Pythia does **not** hard-code a strategy. A swarm of 20+ agents observes
-the live event stream; the top-5 by rolling Sharpe (filtered by a
-minimum-decisions floor) vote on direction; a consensus fires a trade when
-at least 60 % of those champions agree.
+the live event stream; the scoreboard tracks each agent's realised R; the
+agent on top — the **champion** — has its decisions routed to the live
+executor on every event it fires.
 
 In the 2025–2026 trending regime, the agents that consistently float to
 the top are the **`liq-trend` family**: enter in the direction of an
@@ -153,9 +153,11 @@ fast whether your gut is net additive (almost never).
 
 ## 5. Confluence filters
 
-The swarm's top-K + skill-floor + majority rule already acts as
-confluence. For additional belt-and-braces, `confluence` module adds
-five orthogonal gates applied to the final consensus decision:
+The scoreboard's champion-selection already acts as confluence (only
+agents that have been profitable across many decisions rise to the top).
+For additional belt-and-braces, the `confluence` module adds five
+orthogonal gates applied to the champion's decision before the order is
+placed:
 
 | Filter | Rule | Intuition |
 |--------|------|-----------|
@@ -187,8 +189,8 @@ signals were below-average, so Sharpe went up.
      -p live-executor --bin pythia-swarm-live
    ```
    Run for 48 h. Watch the tournament at
-   `http://localhost:3000/tournament`. Compare the emerging champion +
-   consensus rate to the backtest.
+   `http://localhost:3000/tournament`. Compare the emerging champion
+   against the backtest.
 4. **Size first real trade at 0.5 % risk** (half of backtest) until you
    see the live edge confirm.
 5. **Journal every trade:** signal details, entry/exit, realised R, any
