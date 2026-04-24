@@ -24,6 +24,29 @@ function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+function RegimeBadge({
+  regime,
+}: {
+  regime: NonNullable<SwarmSnapshot["regime"]> | undefined | null;
+}) {
+  if (!regime) return null;
+  const color = {
+    trending: "text-green",
+    ranging: "text-cyan",
+    chaotic: "text-red",
+    calm: "text-mist",
+  }[regime.label];
+  return (
+    <span className="inline-flex items-center gap-2 text-[0.65rem] text-mist">
+      <span className={`font-mono uppercase tracking-[0.3em] ${color}`}>
+        {regime.label}
+      </span>
+      <span className="num">dir {regime.directional.toFixed(2)}</span>
+      <span className="num">vol {regime.vol_ratio.toFixed(2)}×</span>
+    </span>
+  );
+}
+
 function PhaseBadge({ phase }: { phase: "swarm" | "ranking" | "podium" }) {
   const map = {
     swarm: { label: "SWARM", color: "text-cyan", ring: "ring-cyan/60" },
@@ -174,6 +197,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           <div className="text-right space-y-1 pointer-events-auto">
             <KiyotakaBadge />
             <SourceBadge source={snap.source} />
+            <RegimeBadge regime={snap.regime} />
             <div className="text-[0.65rem] text-mist num">
               {fmt(snap.generated_at)}
             </div>

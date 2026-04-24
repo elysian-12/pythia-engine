@@ -16,6 +16,7 @@ use store::Store;
 use swarm::{
     agent::Event,
     consensus::{consensus, ConsensusCfg},
+    llm_agent::{LlmAgent, MockLlmDecider, Personality},
     population::Swarm,
     scoring::Scoreboard,
     systematic::SystematicBuilder,
@@ -34,8 +35,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(&db_path)?;
     let wall = Instant::now();
 
-    // Build the house roster of 20 agents.
-    let agents = SystematicBuilder::new().house_roster().build();
+    // Build the house roster: 20 systematic agents + 5 LLM personas.
+    // In backtest mode LLM personas use MockLlmDecider so everything
+    // is deterministic — the whole replay stays reproducible.
+    let mut agents = SystematicBuilder::new().house_roster().build();
+    for p in Personality::roster() {
+        agents.push(Box::new(LlmAgent::new(
+            p,
+            Box::<MockLlmDecider>::default(),
+        )));
+    }
     let n_agents = agents.len();
     let mut swarm = Swarm::new(agents);
     let scoreboard = Scoreboard::new();
@@ -110,9 +119,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Close any still-pending at the end of data.
     close_expired(&mut pending, i64::MAX, &close_lookup, &scoreboard);
 
-    // Rank + print.
-    let all = scoreboard.all();
-    let mut ranked = all;
+    // Rank + print. Pad with zero-stat rows for agents that never fired
+    // (e.g. LLM personas in a fully deterministic mock run) so the UI
+    // renders the full population, not just the scorers.
+    let mut ranked = scoreboard.all();
+    {
+        let seen: std::collections::HashSet<String> =
+            ranked.iter().map(|s| s.agent_id.clone()).collect();
+        for a in swarm.agents() {
+            if !seen.contains(a.id()) {
+                ranked.push(swarm::AgentStats {
+                    agent_id: a.id().into(),
+                    active: true,
+                    ..Default::default()
+                });
+            }
+        }
+    }
     ranked.sort_by(|a, b| {
         b.total_r
             .partial_cmp(&a.total_r)
@@ -171,6 +194,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(dir.join("swarm.json"), serde_json::to_string_pretty(&ranked)?)?;
     println!("\nreport: {}/swarm.md", dir.display());
 
+    // Regime classification on the final candle window — surfaced in
+    // the UI so users know which strategy family should be favoured.
+    let regime_info = regime::classify(
+        &store.candles_asc(Asset::Btc, 200).unwrap_or_default(),
+        &regime::RegimeCfg::default(),
+    );
+
     // Also write data/swarm-snapshot.json so the /tournament UI shows
     // the backtest run directly (same schema the live daemon uses).
     let snapshot = serde_json::json!({
@@ -181,6 +211,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "agents": ranked,
         "recent_decisions": [],
         "consensus": { "fires": consensus_count, "wins": consensus_wins },
+        "regime": regime_info.map(|r| serde_json::json!({
+            "label": r.regime.as_str(),
+            "directional": r.directional,
+            "vol_ratio": r.vol_ratio,
+        })),
         "source": "backtest"
     });
     let data_dir = PathBuf::from("data");

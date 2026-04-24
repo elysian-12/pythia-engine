@@ -12,14 +12,32 @@ candles), and ranks them by realised PnL. The scoreboard picks the
 One monolithic strategy is fragile; a tournament of disagreeing agents
 surfaces the rule that is actually paying out under the current regime.
 
+### The feedback loop in one sentence
+
+> **Kiyotaka events → 25 quant personas compete → scoreboard picks the
+> champion → executor copy-trades the champion → realised PnL feeds
+> back into the scoreboard → every N events, `Evolution` replaces the
+> weakest half of the population with mutated + crossed elite.**
+
+- **PeerView** = what agents see *of each other* within one event
+  (momentum / contrarian meta-behaviour).
+- **Evolution** = how the population *improves* across events
+  (log-space mutation + same-family crossover on the elite).
+- **DuckDB replay** = Kiyotaka REST data warehouse that seeds the
+  scoreboard via `swarm-backtest` before live trading starts.
+
+Full details in [SWARM.md](SWARM.md).
+
 ```
   Binance public WS ──┐
-  Kiyotaka REST ──────┼──▶ Swarm (20+ agents) ──▶ Scoreboard ──▶ Champion ──▶ Executor ──▶ Hyperliquid
-  DuckDB replay ──────┘        │                                                  │
-                                │                                                  └─ EIP-712 + risk guard
+  Kiyotaka REST ──────┼──▶ Swarm (25 agents) ──▶ Scoreboard ──▶ Champion ──▶ Executor ──▶ Hyperliquid
+  DuckDB replay ──────┘        │                      ▲                            │
+                                │                      │                            └─ EIP-712 + risk guard
+                                │                      │
+                                │                      └── realised PnL feedback
                                 │
-                                ├──▶ Evolution (every N events)
-                                └──▶ PeerView (social influence)
+                                ├──▶ Evolution (every N events) — mutate + crossover
+                                └──▶ PeerView (social influence during one event)
 ```
 
 ## Quick start

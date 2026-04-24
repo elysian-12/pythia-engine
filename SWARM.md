@@ -87,7 +87,11 @@ Don't watch raw events — watch `PeerView`. Amplify or fade whatever
 fraction of peers are currently long. A social-influence layer that
 matters when a few strong agents converge.
 
-## Peer influence
+## PeerView — social influence *inside* one event
+
+**Short answer to "does the swarm see each other?": yes, in two ways —
+`PeerView` happens *during* an event; `Evolution` happens *across*
+events.**
 
 Every broadcast computes a rolling `PeerView`:
 
@@ -99,8 +103,121 @@ pub struct PeerView {
 }
 ```
 
-Non-social agents ignore it. Social agents weight it directly. Cost is
-one VecDeque push per broadcast — negligible.
+Non-social agents ignore it. Social agents weight it directly — the
+`MomentumFollower` amplifies the dominant side, the `Contrarian` fades
+it, and LLM personas are explicitly told in their prompt what the
+peers/champion just did so they can account for it. Cost is one
+VecDeque push per broadcast — negligible.
+
+**What PeerView changes in practice:** when a liquidation cascade
+fires and 12 of 20 agents go long, a momentum-follower amplifies
+long exposure; a contrarian-fader inverts it. Over time the
+scoreboard sorts out which peer-reading behaviour was right in this
+regime — and that winner becomes the champion.
+
+## Evolution — persistent improvement *across* events
+
+Every `PYTHIA_EVOLVE_EVERY` events (default 500 ≈ a couple of trading
+hours of live liquidations):
+
+1. **Score** every current systematic agent via the scoreboard —
+   realised R-multiples from trades that have closed since last
+   generation.
+2. **Keep the elite** — top `elite_fraction` (default 0.5) carry
+   forward unchanged. No innovation loss.
+3. **Rank-weighted parent selection** — pick two elite as parents,
+   top rank has 2× the pick probability of the bottom rank.
+4. **Log-space Gaussian mutation** — each continuous parameter
+   (`z_threshold`, `risk_fraction`, `horizon_hours`, `donchian_bars`,
+   `atr_pct_min`) gets `param · exp(N(0, σ_mut)·σ)` with `σ_mut = 0.15`
+   default, then clamped to family-safe bounds.
+5. **Same-family crossover** (prob 0.3) — blend two parents' params
+   within the same `RuleFamily`. Never crosses `LiqZScore` with
+   `FundingZScore` — different signal types wouldn't produce a
+   coherent hybrid.
+6. **Evicted agents** keep their history in the scoreboard (so the
+   UI can still show what they did) but stop firing.
+
+The result is a **self-improving quant floor**: each agent is its
+own systematic or LLM persona, they compete in parallel, PnL selects
+winners, mutation + crossover produce the next generation, and the
+cycle repeats. No LLM judge in this loop — PnL *is* the judge.
+
+## How the whole feedback loop closes
+
+```
+  Kiyotaka REST ── candles / funding / OI ──┐
+                                             │
+  Binance WS ──── liquidations ─────────────┤──▶ swarm::Event
+                                             │
+  DuckDB replay ─ historical events ────────┘
+                                 │
+                                 ▼
+                    Swarm::broadcast(event)
+                                 │
+                                 ├──▶ each agent decides (PeerView-aware)
+                                 │
+                                 ▼
+                    Scoreboard.record(decision)
+                                 │            ≤ horizon later, outcome known
+                                 ▼
+                 Scoreboard.mark_outcome(r, pnl)  ◀── realised PnL
+                                 │                      feeds back in
+                                 ▼
+                    Scoreboard.champion()
+                                 │
+                                 ├──▶ Executor trades the champion's signal
+                                 │    (Hyperliquid REST, EIP-712)
+                                 │
+                                 └──▶ every N events: Evolution.advance()
+                                              │
+                                              └─ swap out weak agents
+                                                 for mutated + crossed elite
+```
+
+The loop closes at the scoreboard: every realised R flows *back*
+into `mark_outcome`, which updates ranking, which changes who is
+champion, which changes what the executor trades on the next event.
+Separately, every N events the population mutates toward
+parameter regions the scoreboard says are paying out. Over time, the
+swarm *becomes* the strategy the current regime rewards.
+
+## DuckDB replay — the time machine
+
+`store::Store` is an embedded DuckDB file at `data/pythia.duckdb`
+(24 MB scraped) with four tables per asset:
+
+| Table | Source | Granularity |
+|-------|--------|-------------|
+| `candles` | Kiyotaka REST `/v1/points` (TRADE_SIDE_AGNOSTIC_AGG) | hourly OHLCV |
+| `funding` | Kiyotaka REST `/v1/points` (FUNDING_RATE_AGG) | hourly |
+| `open_interest` | Kiyotaka REST `/v1/points` (OPEN_INTEREST_AGG) | hourly |
+| `liquidations` | Kiyotaka REST `/v1/points` (ASYMMETRIC_LIQ_USD_AGG) | 1-hour bucket |
+
+Every row has both an **event timestamp** (when the thing happened in
+the market) and an **asof timestamp** (when we ingested it) — so
+backfilled data can coexist with live data without contaminating
+walk-forward tests.
+
+### Three places replay is used
+
+1. **`swarm-backtest` binary** — reads all 365 days, interleaves the
+   four event streams by timestamp, and pumps them through the swarm
+   at full speed (69,026 events in 0.7 s wall). This is how the
+   scoreboard you see in `/tournament` gets seeded: every agent
+   already has hundreds of real-data trades before the live daemon
+   even starts.
+2. **Walk-forward CV in `backtest`** — replays rolling training /
+   test splits to compute PBO and out-of-sample Sharpe CIs.
+3. **`pythia-swarm-live` warm-start** (planned) — replay the last
+   48 h of DuckDB data through a fresh swarm so new agents have
+   *some* scoreboard history before their first live decision,
+   instead of firing blind.
+
+The same `swarm::Event` type is produced whether the source is
+Binance WS (live), Kiyotaka REST (historical scrape), or DuckDB
+(replay). Agents can't tell the difference — which is exactly what
+makes the backtest honest.
 
 ## Scoring
 

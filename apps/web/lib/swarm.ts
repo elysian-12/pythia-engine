@@ -11,6 +11,12 @@ export type AgentStats = {
   active: boolean;
 };
 
+export type RegimeInfo = {
+  label: "trending" | "ranging" | "chaotic" | "calm";
+  directional: number; // 0..1
+  vol_ratio: number; // 1 = normal
+};
+
 export type SwarmSnapshot = {
   generated_at: number;
   generation?: number;
@@ -19,6 +25,7 @@ export type SwarmSnapshot = {
   agents: AgentStats[];
   recent_decisions: unknown[];
   consensus: { fires: number; wins?: number };
+  regime?: RegimeInfo | null;
   source: "live" | "backtest" | "empty";
 };
 
@@ -29,7 +36,10 @@ export async function fetchSwarm(): Promise<SwarmSnapshot> {
 }
 
 /** Parent rule-family for colouring / clustering. */
-export function agentFamily(id: string): "liq-trend" | "liq-fade" | "vol-breakout" | "funding-trend" | "funding-arb" | "other" {
+export function agentFamily(
+  id: string,
+): "liq-trend" | "liq-fade" | "vol-breakout" | "funding-trend" | "funding-arb" | "llm" | "other" {
+  if (id.startsWith("llm-")) return "llm";
   if (id.startsWith("liq-trend")) return "liq-trend";
   if (id.startsWith("liq-fade")) return "liq-fade";
   if (id.startsWith("vol-breakout")) return "vol-breakout";
@@ -44,5 +54,6 @@ export const FAMILY_COLORS: Record<string, string> = {
   "vol-breakout": "#fbbf24",
   "funding-trend": "#60a5fa",
   "funding-arb": "#c084fc",
+  llm: "#f0abfc",
   other: "#94a3b8",
 };

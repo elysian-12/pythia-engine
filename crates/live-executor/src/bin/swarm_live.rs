@@ -50,6 +50,7 @@ use swarm::{
     agent::Event as SwarmEvent,
     consensus::{consensus, ConsensusCfg},
     evolution::{Evolution, EvolutionCfg},
+    llm_agent::{AnthropicDecider, LlmAgent, LlmDecider, MockLlmDecider, Personality},
     population::Swarm,
     scoring::{AgentStats, Scoreboard},
     systematic::SystematicBuilder,
@@ -126,11 +127,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0.0);
     let guard = Arc::new(RiskGuard::new(RiskCfg::default(), initial_equity.max(1.0)));
 
-    // Build swarm — 20 diverse systematic agents from the house roster.
-    // `Swarm` stays single-owner in the main task (avoids holding a
-    // sync mutex across an await). The snapshot writer only needs the
-    // current agent-id roster, which we refresh after each evolution.
-    let agents = SystematicBuilder::new().house_roster().build();
+    // Build swarm — 20 systematic agents (each a quant persona with its
+    // own rule-family parameters) PLUS 5 LLM-driven personas that reason
+    // over the same event stream. Together they form the "trading floor":
+    // every persona competes, scoreboard ranks, champion drives execution.
+    //
+    // LLM deciders use AnthropicDecider when ANTHROPIC_API_KEY is set,
+    // otherwise MockLlmDecider (deterministic, hash-based) so the personas
+    // still participate offline.
+    let mut agents = SystematicBuilder::new().house_roster().build();
+    let llm_decider_factory: Box<dyn Fn() -> Box<dyn LlmDecider>> =
+        match std::env::var("ANTHROPIC_API_KEY").ok() {
+            Some(k) if !k.is_empty() => {
+                info!("LLM personas using AnthropicDecider");
+                let k = k.clone();
+                Box::new(move || Box::new(AnthropicDecider::new(k.clone())) as Box<dyn LlmDecider>)
+            }
+            _ => {
+                info!("LLM personas using MockLlmDecider (no ANTHROPIC_API_KEY)");
+                Box::new(|| Box::<MockLlmDecider>::default() as Box<dyn LlmDecider>)
+            }
+        };
+    for persona in Personality::roster() {
+        agents.push(Box::new(LlmAgent::new(persona, llm_decider_factory())));
+    }
     let n_agents = agents.len();
     let agent_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
         agents.iter().map(|a| a.id().to_string()).collect(),
