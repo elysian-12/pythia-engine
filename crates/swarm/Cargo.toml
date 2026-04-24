@@ -1,0 +1,31 @@
+[package]
+name = "swarm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+strategy = { path = "../strategy" }
+paper-trader = { path = "../paper-trader" }
+backtest = { path = "../backtest" }
+reports = { path = "../reports" }
+store = { path = "../store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+
+[[bin]]
+name = "swarm-backtest"
+path = "src/bin/swarm_backtest.rs"
+
+[lints]
+workspace = true

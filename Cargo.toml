@@ -21,6 +21,7 @@ members = [
     "crates/regime",
     "crates/portfolio",
     "crates/tuner",
+    "crates/swarm",
 ]
 
 [workspace.package]
