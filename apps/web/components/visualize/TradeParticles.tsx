@@ -76,8 +76,6 @@ export function TradeParticles({
   useFrame(({ clock }) => {
     if (!ref.current || !count) return;
     const t = clock.elapsedTime;
-    const tMin = equity[0].ts;
-    const tMax = equity[equity.length - 1].ts;
     for (let i = 0; i < count; i++) {
       const [x, y, z] = positions[i];
       const [r, g, b] = colors[i];

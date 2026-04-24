@@ -16,6 +16,7 @@ use store::Store;
 use swarm::{
     agent::Event,
     consensus::{consensus, ConsensusCfg},
+    evolution::{Evolution, EvolutionCfg},
     llm_agent::{LlmAgent, MockLlmDecider, Personality},
     population::Swarm,
     scoring::Scoreboard,
@@ -48,6 +49,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_agents = agents.len();
     let mut swarm = Swarm::new(agents);
     let scoreboard = Scoreboard::new();
+    // Evolution: same configuration the live executor uses, so the backtest
+    // measures the evolved population's PnL — not just the static seed roster.
+    // PYTHIA_EVOLVE_EVERY controls the cadence (default: 500 events).
+    let evolution_interval: usize = std::env::var("PYTHIA_EVOLVE_EVERY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(500);
+    let mut evolution = Evolution::new(
+        EvolutionCfg {
+            // Only evolve the systematic half — LLM personas are fixed.
+            population_cap: n_agents.saturating_sub(Personality::roster().len()).max(1),
+            ..Default::default()
+        },
+        0xDEADBEEF, // deterministic seed so the backtest is reproducible
+    );
 
     // Load data.
     tracing::info!("loading 365d dataset");
@@ -68,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut consensus_count = 0usize;
     let mut consensus_wins = 0usize;
     let cons_cfg = ConsensusCfg::default();
+    let mut event_counter: usize = 0;
 
     for event in &events {
         // Before broadcasting, close any pending decision whose horizon has expired.
@@ -77,6 +94,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         swarm.current_champion = scoreboard
             .champion(cons_cfg.min_decisions_for_champion)
             .map(|c| c.agent_id);
+
+        event_counter += 1;
+        // Every N events: replace weak systematic agents with elite-seeded
+        // mutants / crossovers, exactly like the live path. LLM personas are
+        // re-attached verbatim so the final population remains 20 systematic
+        // + 5 LLM.
+        if event_counter.is_multiple_of(evolution_interval) {
+            let current_params: Vec<_> = swarm
+                .agents()
+                .filter_map(|a| a.systematic_params().map(|p| (p, a.id().to_string())))
+                .collect();
+            if !current_params.is_empty() {
+                let mut next_agents = evolution.advance(current_params, &scoreboard);
+                for p in Personality::roster() {
+                    next_agents.push(Box::new(LlmAgent::new(
+                        p,
+                        Box::<MockLlmDecider>::default(),
+                    )));
+                }
+                swarm = Swarm::new(next_agents);
+                tracing::info!(
+                    generation = evolution.generation(),
+                    event = event_counter,
+                    "evolution: next generation spawned"
+                );
+            }
+        }
 
         let decisions = swarm.broadcast(event).await;
         for d in &decisions {
@@ -205,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the backtest run directly (same schema the live daemon uses).
     let snapshot = serde_json::json!({
         "generated_at": ts,
-        "generation": 0u64,
+        "generation": evolution.generation(),
         "n_agents": n_agents,
         "champion": ranked.first(),
         "agents": ranked,

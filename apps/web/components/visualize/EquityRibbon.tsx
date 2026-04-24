@@ -24,7 +24,6 @@ interface Props {
  * "baseline" at Y=0 anchors the viewer.
  */
 export function EquityRibbon({ equity, width = 80, yScale = 20, drawProgress = 1.0 }: Props) {
-  const lineRef = useRef<THREE.Line>(null!);
   const tubeRef = useRef<THREE.Mesh>(null!);
 
   const { curve, tubeGeom } = useMemo(() => {

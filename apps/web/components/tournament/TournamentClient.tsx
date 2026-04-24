@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Arena } from "./Arena";
 import { Leaderboard } from "./Leaderboard";
 import { SettingsForm } from "./SettingsForm";
@@ -8,6 +8,9 @@ import { EventSimulator } from "./EventSimulator";
 import { CopyTradePanel } from "./CopyTradePanel";
 import { LiveTradeFeed, type FeedEntry } from "./LiveTradeFeed";
 import { KiyotakaBadge } from "./KiyotakaBadge";
+import { AutoPilot } from "./AutoPilot";
+import { HyperliquidPanel } from "./HyperliquidPanel";
+import { PipelineRail } from "./PipelineRail";
 import {
   fetchSwarm,
   FAMILY_COLORS,
@@ -15,10 +18,15 @@ import {
   type SwarmSnapshot,
 } from "@/lib/swarm";
 import type { SimEvent } from "@/lib/simulate";
-import { simulateReactions } from "@/lib/simulate";
+import { simulateReactions, simulateCopyTrade } from "@/lib/simulate";
+import { checkTriggers, sumRealized, type PaperPosition } from "@/lib/paper";
 
 const COPY_LS_KEY = "pythia-copytrade-agent";
 const FEED_MAX = 25;
+const EQUITY_USD = 1000;
+const RISK_FRACTION = 0.01;
+const DEFAULT_BTC = 77_500;
+const DEFAULT_ETH = 3_200;
 
 function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
@@ -85,6 +93,24 @@ export function TournamentClient() {
   const [copyAgent, setCopyAgent] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [lastEvent, setLastEvent] = useState<SimEvent | null>(null);
+  const [pulseKey, setPulseKey] = useState(0);
+  const [autopilotOn, setAutopilotOn] = useState(false);
+
+  // Paper HL ledger — opens when the copy-trader's agent reacts to an event.
+  const [openPositions, setOpenPositions] = useState<PaperPosition[]>([]);
+  const [closedPositions, setClosedPositions] = useState<PaperPosition[]>([]);
+  const [marks, setMarks] = useState<{ BTC: number | null; ETH: number | null }>(
+    { BTC: null, ETH: null },
+  );
+
+  const snapRef = useRef<SwarmSnapshot | null>(null);
+  const copyAgentRef = useRef<string | null>(null);
+  useEffect(() => {
+    snapRef.current = snap;
+  }, [snap]);
+  useEffect(() => {
+    copyAgentRef.current = copyAgent;
+  }, [copyAgent]);
 
   useEffect(() => {
     let alive = true;
@@ -127,15 +153,99 @@ export function TournamentClient() {
     }
   }, []);
 
+  // Poll live BTC/ETH marks every 6s once we have any open positions or the
+  // autopilot is active — saves bandwidth in the idle case.
+  useEffect(() => {
+    let alive = true;
+    if (!autopilotOn && openPositions.length === 0) return;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/marks", { cache: "no-store" });
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          ok: boolean;
+          marks: { BTC: number | null; ETH: number | null };
+        };
+        if (!alive) return;
+        if (d.marks.BTC != null || d.marks.ETH != null) setMarks(d.marks);
+      } catch {
+        // ignore
+      }
+    };
+    load();
+    const t = setInterval(load, 6000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [autopilotOn, openPositions.length]);
+
+  // Stop/TP sweep: when marks change, auto-close positions whose triggers hit.
+  useEffect(() => {
+    if (openPositions.length === 0) return;
+    const hits: PaperPosition[] = [];
+    const survivors: PaperPosition[] = [];
+    for (const p of openPositions) {
+      const m = p.asset === "BTC" ? marks.BTC : marks.ETH;
+      if (m == null) {
+        survivors.push(p);
+        continue;
+      }
+      const trig = checkTriggers(p, m);
+      if (!trig) {
+        survivors.push(p);
+        continue;
+      }
+      const diff = p.side === "long" ? m - p.entry : p.entry - m;
+      hits.push({
+        ...p,
+        closed_at: Math.floor(Date.now() / 1000),
+        close_px: m,
+        close_reason: trig,
+        pnl_usd: diff * p.size_contracts,
+      });
+    }
+    if (hits.length === 0) return;
+    setOpenPositions(survivors);
+    setClosedPositions((prev) => [...prev, ...hits]);
+  }, [marks, openPositions]);
+
   const reactions = useMemo(() => {
     if (!snap || !lastEvent) return [];
     return simulateReactions(lastEvent, snap.agents);
   }, [snap, lastEvent]);
 
-  const onFire = (ev: SimEvent) => {
-    if (!snap) return;
-    const rxs = simulateReactions(ev, snap.agents);
-    const championId = snap.champion?.agent_id ?? null;
+  const handleClosePosition = useCallback((id: string) => {
+    setOpenPositions((prev) => {
+      const p = prev.find((x) => x.id === id);
+      if (!p) return prev;
+      const m = p.asset === "BTC" ? marks.BTC : marks.ETH;
+      const px = m ?? p.entry;
+      const diff = p.side === "long" ? px - p.entry : p.entry - px;
+      setClosedPositions((c) => [
+        ...c,
+        {
+          ...p,
+          closed_at: Math.floor(Date.now() / 1000),
+          close_px: px,
+          close_reason: "manual",
+          pnl_usd: diff * p.size_contracts,
+        },
+      ]);
+      return prev.filter((x) => x.id !== id);
+    });
+  }, [marks]);
+
+  const handleReset = useCallback(() => {
+    setOpenPositions([]);
+    setClosedPositions([]);
+  }, []);
+
+  const onFire = useCallback((ev: SimEvent) => {
+    const currentSnap = snapRef.current;
+    if (!currentSnap) return;
+    const rxs = simulateReactions(ev, currentSnap.agents);
+    const championId = currentSnap.champion?.agent_id ?? null;
     const entry: FeedEntry = {
       id: ev.id,
       ts: ev.ts,
@@ -145,7 +255,47 @@ export function TournamentClient() {
     };
     setLastEvent(ev);
     setFeed((prev) => [entry, ...prev].slice(0, FEED_MAX));
-  };
+    setPulseKey((k) => k + 1);
+
+    // Paper-HL placement: whichever agent the user is mirroring (champion by
+    // default) reacts → open a paper position sized like the Rust executor.
+    const mirroredId = copyAgentRef.current ?? championId;
+    if (!mirroredId) return;
+    const mirrored = currentSnap.agents.find((a) => a.agent_id === mirroredId);
+    if (!mirrored) return;
+    const btcPx = marks.BTC ?? DEFAULT_BTC;
+    const ethPx = marks.ETH ?? DEFAULT_ETH;
+    const sim = simulateCopyTrade(
+      mirrored,
+      ev,
+      rxs,
+      EQUITY_USD,
+      RISK_FRACTION,
+      btcPx,
+      ethPx,
+    );
+    if (!sim) return;
+    const pos: PaperPosition = {
+      id: `pos-${ev.id}`,
+      agent_id: sim.agent_id,
+      asset: ev.asset,
+      side: sim.direction,
+      size_contracts: sim.size_contracts,
+      notional_usd: sim.size_usd,
+      entry: sim.entry,
+      stop: sim.stop,
+      take_profit: sim.take_profit,
+      opened_at: ev.ts,
+    };
+    setOpenPositions((prev) => [...prev, pos]);
+  }, [marks]);
+
+  const onPrices = useCallback(
+    (p: { BTC: number | null; ETH: number | null }) => {
+      if (p.BTC != null || p.ETH != null) setMarks(p);
+    },
+    [],
+  );
 
   if (!snap) {
     return (
@@ -177,13 +327,11 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
   const familiesActive = Array.from(
     new Set(snap.agents.map((a) => agentFamily(a.agent_id))),
   );
-  const BTC_PX = 77_500;
-  const ETH_PX = 3_200;
 
   return (
     <div className="space-y-6">
       {/* HERO Arena */}
-      <section className="relative rounded-2xl overflow-hidden h-[68vh] -mx-6 md:mx-0 border border-edge/60">
+      <section className="relative rounded-2xl overflow-hidden h-[60vh] -mx-6 md:mx-0 border border-edge/60">
         <Arena agents={snap.agents} generation={snap.generation ?? 0} />
         <div className="pointer-events-none absolute top-0 left-0 right-0 p-5 flex items-start justify-between">
           <div>
@@ -259,31 +407,59 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
         ) : null}
       </section>
 
-      {/* 3-ZONE DECK: Simulator+Settings | Copy-trade + Explainer | Trade Feed */}
+      {/* Closed-loop pipeline visualizer */}
+      <section>
+        <PipelineRail
+          pulseKey={pulseKey}
+          autopilotOn={autopilotOn}
+          openCount={openPositions.length}
+          realizedPnl={sumRealized(closedPositions)}
+          generation={snap.generation ?? 0}
+          championId={champ?.agent_id ?? null}
+        />
+      </section>
+
+      {/* 3-column deck: Inputs | Trading | Outputs */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-6">
+          <AutoPilot
+            onFire={onFire}
+            onPrices={onPrices}
+            onStatus={setAutopilotOn}
+          />
           <EventSimulator onFire={onFire} lastFired={lastEvent} />
           <SettingsForm />
         </div>
 
         <div className="space-y-6">
+          <HyperliquidPanel
+            open={openPositions}
+            closed={closedPositions}
+            marks={marks}
+            equity_usd={EQUITY_USD}
+            onClose={handleClosePosition}
+            onReset={handleReset}
+          />
           <CopyTradePanel
             agents={snap.agents}
             selected={copyAgent}
             onSelect={setCopyAgent}
-            equity_usd={1000}
-            risk_fraction={0.01}
-            btc_price={BTC_PX}
-            eth_price={ETH_PX}
+            equity_usd={EQUITY_USD}
+            risk_fraction={RISK_FRACTION}
+            btc_price={marks.BTC ?? DEFAULT_BTC}
+            eth_price={marks.ETH ?? DEFAULT_ETH}
             reactions={reactions}
             lastEvent={lastEvent}
           />
+        </div>
 
+        <div className="space-y-6">
+          <LiveTradeFeed entries={feed} />
           <div className="panel p-5">
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
               How the swarm gets smart
             </div>
-            <ol className="mt-3 space-y-3 text-xs text-slate-300">
+            <ol className="mt-3 space-y-2 text-xs text-slate-300">
               <li>
                 <span className="text-cyan font-mono">1. Event →</span>{" "}
                 Every agent observes the same liquidation / funding / candle
@@ -292,35 +468,31 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               <li>
                 <span className="text-cyan font-mono">2. Vote →</span>{" "}
                 Each agent fires (or abstains) independently using its own
-                rule family and parameters.
+                rule family.
               </li>
               <li>
                 <span className="text-cyan font-mono">3. PeerView →</span>{" "}
-                Social agents additionally see what peers + the current
-                champion just did → momentum / contrarian meta-behaviours.
+                Social agents see peer + champion directions → momentum /
+                contrarian meta-behaviours.
               </li>
               <li>
                 <span className="text-cyan font-mono">4. Scoreboard →</span>{" "}
-                Every closed trade updates Σ R, rolling Sharpe, win rate.
-                The oracle the rest of the system reads.
+                Realized R updates Σ R, rolling Sharpe, win rate — the
+                oracle the system reads.
               </li>
               <li>
                 <span className="text-cyan font-mono">5. Evolution →</span>{" "}
-                Every N events, weak agents are replaced by log-space
-                Gaussian mutants + same-family crossovers of the elite.
-                Drift toward profitable parameter regions.
+                Every N events, weak agents replaced by log-space Gaussian
+                mutants + elite crossovers.
               </li>
               <li>
                 <span className="text-amber font-mono">6. Copy trade →</span>{" "}
-                Whoever leads now is the agent you mirror. When the regime
-                shifts, a different family rises → execution follows, no
-                restart.
+                Champion → paper HL — when regime shifts, a different family
+                rises → execution follows, no restart.
               </li>
             </ol>
           </div>
         </div>
-
-        <LiveTradeFeed entries={feed} />
       </section>
 
       {/* Full leaderboard */}
@@ -330,3 +502,4 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
     </div>
   );
 }
+

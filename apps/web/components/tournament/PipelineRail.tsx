@@ -1,0 +1,148 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+type Stage = "kiyotaka" | "event" | "swarm" | "champion" | "hl" | "feedback";
+
+type Props = {
+  // bump the key to animate a flash across the pipeline — TournamentClient
+  // increments on every new event it fires, giving the rail a heartbeat
+  pulseKey: number;
+  autopilotOn: boolean;
+  openCount: number;
+  realizedPnl: number;
+  generation: number;
+  championId: string | null;
+};
+
+const STAGES: Array<{ id: Stage; label: string; caption: string }> = [
+  { id: "kiyotaka", label: "Kiyotaka", caption: "live candles + funding + liquidations" },
+  { id: "event", label: "Signal", caption: "z-score spike detection" },
+  { id: "swarm", label: "Swarm", caption: "25 agents vote independently" },
+  { id: "champion", label: "Champion", caption: "leaderboard selects the trader" },
+  { id: "hl", label: "Hyperliquid", caption: "paper position placed" },
+  { id: "feedback", label: "Feedback", caption: "realized R → evolution" },
+];
+
+export function PipelineRail({
+  pulseKey,
+  autopilotOn,
+  openCount,
+  realizedPnl,
+  generation,
+  championId,
+}: Props) {
+  const [active, setActive] = useState<Stage | null>(null);
+
+  useEffect(() => {
+    if (pulseKey === 0) return;
+    // sweep a glow left→right over ~1.5s
+    const ids: Stage[] = ["kiyotaka", "event", "swarm", "champion", "hl", "feedback"];
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    ids.forEach((id, i) => {
+      timers.push(setTimeout(() => setActive(id), i * 220));
+    });
+    timers.push(setTimeout(() => setActive(null), ids.length * 220 + 400));
+    return () => timers.forEach(clearTimeout);
+  }, [pulseKey]);
+
+  return (
+    <div className="panel p-4 relative overflow-hidden">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-xs uppercase tracking-[0.3em] text-mist">
+          Closed-loop pipeline
+        </div>
+        <div className="flex items-center gap-3 text-[0.65rem] text-mist num">
+          <span>
+            Autopilot:{" "}
+            <span className={autopilotOn ? "text-green" : "text-mist"}>
+              {autopilotOn ? "ON" : "OFF"}
+            </span>
+          </span>
+          <span>Gen {generation}</span>
+          <span>Open {openCount}</span>
+          <span
+            className={
+              realizedPnl >= 0 ? "text-green" : "text-red"
+            }
+          >
+            {realizedPnl >= 0 ? "+" : ""}${realizedPnl.toFixed(2)}
+          </span>
+        </div>
+      </div>
+
+      <div className="relative flex items-center justify-between gap-2">
+        {/* connector line */}
+        <div className="absolute top-1/2 left-3 right-3 h-px -translate-y-1/2 bg-edge/70" />
+        {STAGES.map((s, i) => (
+          <Node
+            key={s.id}
+            idx={i}
+            total={STAGES.length}
+            active={active === s.id}
+            label={s.label}
+            caption={s.caption}
+            extra={
+              s.id === "champion" && championId
+                ? championId
+                : undefined
+            }
+          />
+        ))}
+      </div>
+
+      <p className="mt-3 text-[0.65rem] text-mist leading-relaxed">
+        Each Kiyotaka tick that breaks the z-threshold pulses left → right
+        through the rail. Closed trades feed realized R into the scoreboard
+        and, every N events, the evolver replaces weak agents — closing the
+        loop on the next event.
+      </p>
+    </div>
+  );
+}
+
+function Node({
+  idx,
+  total,
+  active,
+  label,
+  caption,
+  extra,
+}: {
+  idx: number;
+  total: number;
+  active: boolean;
+  label: string;
+  caption: string;
+  extra?: string;
+}) {
+  const isLast = idx === total - 1;
+  return (
+    <div
+      className="relative z-10 flex-1 flex flex-col items-center"
+      style={{ transition: "transform 0.2s ease" }}
+    >
+      <div
+        className={`w-10 h-10 rounded-full border flex items-center justify-center text-[0.65rem] font-mono transition-all duration-300 ${
+          active
+            ? "border-cyan bg-cyan/20 text-cyan shadow-[0_0_18px_rgba(34,211,238,0.6)] scale-110"
+            : "border-edge bg-black/40 text-mist"
+        }`}
+      >
+        {idx + 1}
+      </div>
+      <div className="mt-1.5 text-[0.7rem] text-slate-200 text-center leading-tight">
+        {label}
+      </div>
+      <div className="text-[0.6rem] text-mist text-center mt-0.5 max-w-[9rem]">
+        {caption}
+      </div>
+      {extra ? (
+        <div className="mt-1 text-[0.6rem] text-amber font-mono truncate max-w-[9rem]">
+          {extra}
+        </div>
+      ) : null}
+      {!isLast ? null : null}
+    </div>
+  );
+}
