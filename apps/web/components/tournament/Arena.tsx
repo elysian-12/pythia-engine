@@ -10,9 +10,24 @@ import {
   Noise,
 } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { Suspense, useMemo, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { agentFamily, FAMILY_COLORS, type AgentStats } from "@/lib/swarm";
+
+/** Intro animation: deterministic "blob" position for an agent, used
+ *  for the first ~4 s before the podium layout takes over. Clustered
+ *  around the centre with turbulence so it reads as a swarm. */
+function blobPosition(seedIdx: number, t: number): THREE.Vector3 {
+  const a = seedIdx * 2.3998; // golden-angle spread
+  const r = 2.5 + ((seedIdx * 13) % 7) * 0.4;
+  const wob = Math.sin(t * 2.1 + seedIdx) * 0.6;
+  const wob2 = Math.cos(t * 1.3 + seedIdx * 1.7) * 0.5;
+  return new THREE.Vector3(
+    Math.cos(a) * r + wob,
+    3 + wob2,
+    Math.sin(a) * r + wob,
+  );
+}
 
 /** Amphitheater layout — champion at centre-front, three tiers behind. */
 function amphitheaterPosition(rank: number): THREE.Vector3 {
@@ -59,11 +74,15 @@ function normR(r: number, max: number): number {
 function AgentOrb({
   agent,
   rank,
+  seedIdx,
   maxAbsR,
+  introProgress,
 }: {
   agent: AgentStats;
   rank: number;
+  seedIdx: number;
   maxAbsR: number;
+  introProgress: number; // 0 = pure blob · 1 = pure podium
 }) {
   const group = useRef<THREE.Group>(null!);
   const satellite = useRef<THREE.Mesh>(null!);
@@ -81,11 +100,15 @@ function AgentOrb({
   useFrame(({ clock }) => {
     if (!group.current) return;
     const t = clock.elapsedTime + phase;
-    // Smoothly ease toward target on rerank.
+    // Blend between the blob (swarm) position and the podium target.
+    const blob = blobPosition(seedIdx, clock.elapsedTime);
+    const k = introProgress;
+    const ease = k * k * (3 - 2 * k); // smoothstep
+    const desired = new THREE.Vector3().lerpVectors(blob, target, ease);
     const p = group.current.position;
-    p.x += (target.x - p.x) * 0.05;
-    p.y += (target.y + Math.sin(t * 0.8) * 0.18 - p.y) * 0.05;
-    p.z += (target.z - p.z) * 0.05;
+    p.x += (desired.x - p.x) * 0.08;
+    p.y += (desired.y + Math.sin(t * 0.8) * 0.18 * ease - p.y) * 0.08;
+    p.z += (desired.z - p.z) * 0.08;
     if (satellite.current) {
       const r = size * 1.6;
       satellite.current.position.x = Math.cos(t * 1.5) * r;
@@ -129,10 +152,17 @@ function AgentOrb({
   );
 }
 
-function ChampionPedestal({ champion }: { champion: AgentStats | null }) {
+function ChampionPedestal({
+  champion,
+  introProgress,
+}: {
+  champion: AgentStats | null;
+  introProgress: number;
+}) {
   const coreRef = useRef<THREE.Mesh>(null!);
   const haloRef = useRef<THREE.Mesh>(null!);
   const beamRef = useRef<THREE.Mesh>(null!);
+  const groupRef = useRef<THREE.Group>(null!);
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
@@ -147,6 +177,14 @@ function ChampionPedestal({ champion }: { champion: AgentStats | null }) {
       const mat = beamRef.current.material as THREE.MeshBasicMaterial;
       mat.opacity = 0.28 + 0.14 * Math.sin(t * 1.4);
     }
+    if (groupRef.current) {
+      // Pedestal rises from below during the intro.
+      const k = introProgress;
+      const ease = k * k * (3 - 2 * k);
+      groupRef.current.position.y = -14 + ease * 14;
+      (groupRef.current as THREE.Group & { __scaleY?: number }).__scaleY = ease;
+      groupRef.current.scale.y = 0.1 + ease * 0.9;
+    }
   });
 
   if (!champion) return null;
@@ -156,7 +194,7 @@ function ChampionPedestal({ champion }: { champion: AgentStats | null }) {
   const positive = champion.total_r >= 0;
 
   return (
-    <group position={[0, 0, 8]}>
+    <group ref={groupRef} position={[0, 0, 8]}>
       {/* Glass pedestal column. */}
       <mesh position={[0, -1.4, 0]} castShadow>
         <cylinderGeometry args={[1.1, 1.45, 2.2, 48, 1, true]} />
@@ -402,6 +440,23 @@ function Rig() {
   return null;
 }
 
+/** Animates 0 → 1 over `duration` seconds then holds. */
+function useIntro(duration = 4.5) {
+  const [p, setP] = useState(0);
+  useEffect(() => {
+    const start = performance.now();
+    let raf = 0;
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - start) / 1000 / duration);
+      setP(t);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [duration]);
+  return p;
+}
+
 export function Arena({
   agents,
   generation = 0,
@@ -412,6 +467,15 @@ export function Arena({
   const ranked = agents;
   const maxAbsR = Math.max(1, ...ranked.map((a) => Math.abs(a.total_r)));
   const champion = ranked[0] ?? null;
+  const introProgress = useIntro(4.5);
+
+  // Give each agent a stable seedIdx so its blob spot is deterministic
+  // even if ranks reshuffle mid-session.
+  const seeds = useMemo(() => {
+    const m = new Map<string, number>();
+    ranked.forEach((a, i) => m.set(a.agent_id, i));
+    return m;
+  }, [ranked]);
 
   return (
     <Canvas
@@ -445,11 +509,20 @@ export function Arena({
         <EmberField />
         <Floor />
         <BackWall generation={generation} />
-        <EliteLinks ranked={ranked} />
-        <ChampionPedestal champion={champion} />
+        {/* Only show filaments + champion pedestal once the podium has
+            materialised — hides them during the blob phase. */}
+        {introProgress > 0.5 ? <EliteLinks ranked={ranked} /> : null}
+        <ChampionPedestal champion={champion} introProgress={introProgress} />
         {ranked.map((a, i) =>
           i === 0 ? null : (
-            <AgentOrb key={a.agent_id} agent={a} rank={i} maxAbsR={maxAbsR} />
+            <AgentOrb
+              key={a.agent_id}
+              agent={a}
+              rank={i}
+              seedIdx={seeds.get(a.agent_id) ?? i}
+              maxAbsR={maxAbsR}
+              introProgress={introProgress}
+            />
           ),
         )}
         <Rig />

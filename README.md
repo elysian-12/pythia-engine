@@ -39,10 +39,28 @@ cargo run --release -p strategy --bin find_best_v2
 cargo run --release -p live-executor --bin pythia-swarm-live
 #    (legacy single-strategy path: --bin pythia-live)
 
-# 4. Watch the tournament live in the browser
+# 4. Watch the tournament live in the browser (bundles the latest
+#    snapshot into public/ so it works even without the daemon)
 cd apps/web && npm install && npm run dev
 #    open http://localhost:3000/tournament
 ```
+
+### Deploying `/tournament` to Vercel
+
+```sh
+cd apps/web
+npx vercel deploy --prod
+```
+
+The prebuild hook (`scripts/bundle-snapshot.mjs`) copies the most
+recent `data/swarm-snapshot.json` → `public/swarm-snapshot.json` so
+the arena renders real Σ R numbers from your latest backtest even
+without a running daemon. Re-run `swarm-backtest` and redeploy to
+refresh.
+
+Risk + sizing settings entered in `/tournament` POST to `/api/config`
+and land at `data/swarm-config.json`, which `pythia-swarm-live`
+reloads every 15 s — so you can tune live.
 
 ## Architecture
 
@@ -117,6 +135,7 @@ apps/web/                    Next.js 15 · three.js
 | `PYTHIA_RISK` | ○ | `0.005` | risk-fraction floor applied on top of agent prefs |
 | `PYTHIA_EVOLVE_EVERY` | ○ | `500` | events between evolution generations |
 | `PYTHIA_SNAPSHOT` | ○ | `data/swarm-snapshot.json` | swarm state dump for `/tournament` |
+| `PYTHIA_CONFIG` | ○ | `data/swarm-config.json` | user-tuned risk + sizing (written by UI) |
 | `PYTHIA_BIND` | ○ | `0.0.0.0:8080` | axum bind |
 | `PYTHIA_DB` | ○ | `data/pythia.duckdb` | DuckDB path |
 | `RUST_LOG` | ○ | `info,pythia=debug` | tracing filter |

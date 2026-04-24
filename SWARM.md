@@ -221,6 +221,29 @@ Naïve consensus voting fired 751× with 49 % directional wins (coin-flip)
 not averaging votes. The live executor routes the champion's own
 decisions; consensus is kept only as a diagnostic.
 
+## Sizing + uncertainty filter — ideas from PolySwarm (arXiv 2604.03888)
+
+Two concrete techniques from Barot & Borkhatariya's *PolySwarm:
+Multi-Agent LLM Framework for Prediction Market Trading* are
+integrated as opt-in executor behaviours, exposed via the
+`/tournament` settings form (which writes `data/swarm-config.json`):
+
+- **Quarter-Kelly sizing (§III.E).** When `kelly_enabled = true`,
+  position notional is `0.25 × ((p·b − q) / b) × equity` where
+  `p = conviction / 100`, `b = TP_mult / SL_mult = 2.0`, `q = 1 − p`.
+  Falls back to ATR-risk sizing otherwise. Clamped by `position_cap_mult`.
+- **Uncertainty filter (§III.D).** Before firing, the executor
+  computes the fraction of top-K agents (on the same asset this
+  event) whose direction *differs* from the champion's. If that
+  dissent exceeds `uncertainty_filter` (default 0.4), the trade is
+  skipped. Stateless, cheap, and prevents trading against a
+  divided swarm.
+
+Not integrated (yet): KL/JS divergence between swarm and market
+distributions, cross-market consistency checks. Those require a
+probability-distribution output from agents that the current
+`AgentDecision` (direction + conviction) doesn't expose directly.
+
 Full report: [reports/swarm/1777015617/swarm.md](reports/swarm/1777015617/swarm.md)
 
 ## Underlying-strategy validation

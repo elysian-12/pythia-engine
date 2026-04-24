@@ -27,6 +27,7 @@ type AgentStats = {
 
 type Snapshot = {
   generated_at: number;
+  generation: number;
   n_agents: number;
   champion: AgentStats | null;
   agents: AgentStats[];
@@ -40,9 +41,20 @@ function repoRoot(): string {
   return path.resolve(process.cwd(), "..", "..");
 }
 
-function snapshotPath(): string {
-  return process.env.PYTHIA_SNAPSHOT
-    ?? path.join(repoRoot(), "data", "swarm-snapshot.json");
+/**
+ * Snapshot sources, in priority order:
+ *   1. PYTHIA_SNAPSHOT env var (explicit override)
+ *   2. repo-root data/swarm-snapshot.json (live daemon + swarm-backtest write here)
+ *   3. bundled public/swarm-snapshot.json (copied at build time by
+ *      scripts/bundle-snapshot.mjs — the only path that works on Vercel)
+ */
+function snapshotCandidates(): string[] {
+  const env = process.env.PYTHIA_SNAPSHOT;
+  const out: string[] = [];
+  if (env) out.push(env);
+  out.push(path.join(repoRoot(), "data", "swarm-snapshot.json"));
+  out.push(path.join(process.cwd(), "public", "swarm-snapshot.json"));
+  return out;
 }
 
 async function readJson(p: string): Promise<unknown | null> {
@@ -77,6 +89,7 @@ async function latestBacktestReport(): Promise<AgentStats[] | null> {
 function emptySnapshot(): Snapshot {
   return {
     generated_at: Math.floor(Date.now() / 1000),
+    generation: 0,
     n_agents: 0,
     champion: null,
     agents: [],
@@ -87,17 +100,20 @@ function emptySnapshot(): Snapshot {
 }
 
 export async function GET() {
-  // 1. Preferred — atomic snapshot written by live daemon / backtest.
-  const live = (await readJson(snapshotPath())) as Partial<Snapshot> | null;
-  if (live && Array.isArray(live.agents) && live.agents.length > 0) {
-    return NextResponse.json({ ...live, source: live.source ?? "live" });
+  // 1. Try each snapshot candidate path in order.
+  for (const p of snapshotCandidates()) {
+    const live = (await readJson(p)) as Partial<Snapshot> | null;
+    if (live && Array.isArray(live.agents) && live.agents.length > 0) {
+      return NextResponse.json({ ...live, source: live.source ?? "live" });
+    }
   }
 
-  // 2. Fall back to the latest backtest report.
+  // 2. Fall back to the latest backtest report (dev-only; no fs on Vercel).
   const ranked = await latestBacktestReport();
   if (ranked && ranked.length > 0) {
     return NextResponse.json({
       generated_at: Math.floor(Date.now() / 1000),
+      generation: 0,
       n_agents: ranked.length,
       champion: ranked[0],
       agents: ranked,

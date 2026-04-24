@@ -3,10 +3,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Arena } from "./Arena";
 import { Leaderboard } from "./Leaderboard";
+import { SettingsForm } from "./SettingsForm";
 import { fetchSwarm, FAMILY_COLORS, agentFamily, type SwarmSnapshot } from "@/lib/swarm";
 
 function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
+}
+
+function PhaseBadge({ phase }: { phase: "swarm" | "ranking" | "podium" }) {
+  const map = {
+    swarm: { label: "SWARM", color: "text-cyan", ring: "ring-cyan/60" },
+    ranking: { label: "RANKING", color: "text-amber", ring: "ring-amber/60" },
+    podium: { label: "PODIUM", color: "text-green", ring: "ring-green/60" },
+  } as const;
+  const { label, color, ring } = map[phase];
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 tracking-[0.4em] text-[0.6rem] rounded-sm ring-1 ${ring} ${color} bg-black/30`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function SourceBadge({ source }: { source: SwarmSnapshot["source"] }) {
@@ -27,6 +44,7 @@ function SourceBadge({ source }: { source: SwarmSnapshot["source"] }) {
 export function TournamentClient() {
   const [snap, setSnap] = useState<SwarmSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"swarm" | "ranking" | "podium">("swarm");
 
   useEffect(() => {
     let alive = true;
@@ -46,6 +64,19 @@ export function TournamentClient() {
     return () => {
       alive = false;
       clearInterval(t);
+    };
+  }, []);
+
+  // Phase badge (mirrors the Arena intro animation):
+  //   0.0–1.6 s  "SWARM"    — agents blob around the centre
+  //   1.6–4.0 s  "RANKING"  — lerp into the amphitheater
+  //   4.0 s +    "PODIUM"   — champion up, scoreboard settled
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase("ranking"), 1600);
+    const t2 = setTimeout(() => setPhase("podium"), 4000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
     };
   }, []);
 
@@ -118,6 +149,9 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 Generation {snap.generation.toString().padStart(3, "0")}
               </div>
             ) : null}
+            <div className="num">
+              <PhaseBadge phase={phase} />
+            </div>
           </div>
         </div>
 
@@ -188,6 +222,8 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           <Leaderboard agents={snap.agents} />
         </div>
         <div className="space-y-6">
+          <SettingsForm />
+
           <div className="panel p-5">
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
               Aggregate

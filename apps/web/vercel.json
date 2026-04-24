@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": ".next",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/swarm/route.ts": {
+      "maxDuration": 10
+    },
+    "app/api/config/route.ts": {
+      "maxDuration": 5
+    }
+  }
+}

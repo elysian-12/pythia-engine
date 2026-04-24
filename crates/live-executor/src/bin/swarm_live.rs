@@ -45,7 +45,7 @@ use kiyotaka_client::binance_ws::spawn_binance_liq;
 use kiyotaka_client::ws::LiveEvent;
 use live_executor::{RiskCfg, RiskGuard};
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use swarm::{
     agent::Event as SwarmEvent,
     consensus::{consensus, ConsensusCfg},
@@ -81,6 +81,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into();
     if let Some(parent) = snapshot_path.parent() {
         std::fs::create_dir_all(parent).ok();
+    }
+    let config_path: PathBuf = std::env::var("PYTHIA_CONFIG")
+        .unwrap_or_else(|_| "data/swarm-config.json".into())
+        .into();
+    // Shared user-tuned config — reloaded every 15 s so edits from the
+    // /tournament UI take effect without restarting the daemon.
+    let user_config: Arc<Mutex<UserConfig>> = Arc::new(Mutex::new(
+        UserConfig::load_or_default(&config_path),
+    ));
+    {
+        let user_config = user_config.clone();
+        let p = config_path.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(15));
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                *user_config.lock() = UserConfig::load_or_default(&p);
+            }
+        });
     }
 
     // HL signer — dummy in dry-run, mandatory in live.
@@ -281,6 +301,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         if let Some(d) = decisions.iter().find(|d| d.agent_id == champ_id) {
+            // Uncertainty filter (PolySwarm §III.D):
+            // skip when the top-K agents disagree with the champion
+            // beyond a user-tuned threshold. Computed on *this event's*
+            // decisions only — stateless and cheap.
+            let cfg_now = user_config.lock().clone();
+            let dissent = top_k_dissent(
+                &decisions,
+                &scoreboard,
+                &cons_cfg,
+                d.direction,
+                d.asset,
+            );
+            if dissent > cfg_now.uncertainty_filter {
+                info!(
+                    dissent = format!("{:.2}", dissent),
+                    threshold = format!("{:.2}", cfg_now.uncertainty_filter),
+                    "uncertainty gate rejected champion trade"
+                );
+                continue;
+            }
             if let Err(e) = try_place_champion_order(
                 &client,
                 &address,
@@ -288,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 d,
                 &mids,
                 mode,
+                &cfg_now,
                 risk_floor,
             )
             .await
@@ -297,6 +338,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UserConfig {
+    #[serde(default = "default_risk")]
+    risk_fraction: f64,
+    #[serde(default = "default_cap")]
+    position_cap_mult: f64,
+    #[serde(default)]
+    kelly_enabled: bool,
+    #[serde(default = "default_uncertainty")]
+    uncertainty_filter: f64,
+}
+
+fn default_risk() -> f64 { 0.005 }
+fn default_cap() -> f64 { 3.0 }
+fn default_uncertainty() -> f64 { 0.4 }
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        Self {
+            risk_fraction: default_risk(),
+            position_cap_mult: default_cap(),
+            kelly_enabled: false,
+            uncertainty_filter: default_uncertainty(),
+        }
+    }
+}
+
+impl UserConfig {
+    fn load_or_default(p: &PathBuf) -> Self {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// Fraction of the current top-K champions whose latest decision
+/// disagrees with `dir` on `asset`. 0.0 = unanimous agreement;
+/// 1.0 = unanimous disagreement. Newly spawned agents with fewer than
+/// `min_decisions_for_champion` decisions are ignored.
+fn top_k_dissent(
+    decisions: &[swarm::agent::AgentDecision],
+    scoreboard: &Scoreboard,
+    cfg: &ConsensusCfg,
+    dir: domain::signal::Direction,
+    asset: Asset,
+) -> f64 {
+    let top = scoreboard.top_n(cfg.top_k, cfg.min_decisions_for_champion);
+    if top.is_empty() {
+        return 0.0;
+    }
+    let ids: std::collections::HashSet<String> =
+        top.iter().map(|s| s.agent_id.clone()).collect();
+    // Only count top-K agents that emitted a decision on this same
+    // asset this tick — otherwise abstention != disagreement.
+    let relevant: Vec<_> = decisions
+        .iter()
+        .filter(|d| ids.contains(&d.agent_id) && d.asset == asset)
+        .collect();
+    if relevant.is_empty() {
+        return 0.0;
+    }
+    let dissenting = relevant.iter().filter(|d| d.direction != dir).count();
+    dissenting as f64 / relevant.len() as f64
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -401,6 +508,7 @@ async fn try_place_champion_order<S: Signer>(
     d: &swarm::agent::AgentDecision,
     mids: &HashMap<String, String>,
     mode: Mode,
+    cfg: &UserConfig,
     risk_floor: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Per-asset symbol translation.
@@ -429,12 +537,32 @@ async fn try_place_champion_order<S: Signer>(
         return Ok(());
     }
 
-    // Honour the champion's preferred risk, clamped to [floor, 2 %].
-    let risk_fraction = d.risk_fraction.clamp(risk_floor, 0.02);
+    // Sizing — two modes:
+    //   ATR-risk (default): risk_fraction of equity hits the stop.
+    //   Quarter-Kelly (PolySwarm §III.E): f = 0.25 × (pb − q) / b
+    //     p = agent's calibrated win prob ≈ conviction / 100
+    //     b = reward:risk ratio = TP_mult / SL_mult = 3.0 / 1.5 = 2.0
+    //     q = 1 − p
+    //   Both honour `position_cap_mult` and `risk_floor`.
     let atr = (mid * 0.005).max(10.0);
     let stop_dist = 1.5 * atr;
-    let risk_dollars = equity * risk_fraction;
-    let notional = (risk_dollars * mid / stop_dist).min(equity * 3.0);
+    let notional_cap = equity * cfg.position_cap_mult.max(1.0);
+
+    let notional = if cfg.kelly_enabled {
+        let p = (f64::from(d.conviction) / 100.0).clamp(0.05, 0.95);
+        let b = 3.0 / 1.5; // TP_mult / SL_mult
+        let kelly_f = ((p * b) - (1.0 - p)) / b;
+        let qk = (0.25 * kelly_f).max(0.0);
+        (equity * qk).min(notional_cap)
+    } else {
+        let risk_fraction = cfg
+            .risk_fraction
+            .max(risk_floor)
+            .min(0.02)
+            .max(d.risk_fraction.clamp(risk_floor, 0.02));
+        let risk_dollars = equity * risk_fraction;
+        (risk_dollars * mid / stop_dist).min(notional_cap)
+    };
     let size = notional / mid;
     if size <= 0.0 {
         return Ok(());

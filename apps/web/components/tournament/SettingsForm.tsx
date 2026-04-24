@@ -1,0 +1,206 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export type SwarmConfig = {
+  risk_fraction: number;
+  position_cap_mult: number;
+  kelly_enabled: boolean;
+  uncertainty_filter: number;
+  updated_at: number;
+};
+
+const DEFAULT_CONFIG: SwarmConfig = {
+  risk_fraction: 0.005,
+  position_cap_mult: 3,
+  kelly_enabled: false,
+  uncertainty_filter: 0.4,
+  updated_at: 0,
+};
+
+const LS_KEY = "pythia-swarm-config";
+
+export function SettingsForm() {
+  const [cfg, setCfg] = useState<SwarmConfig>(DEFAULT_CONFIG);
+  const [saved, setSaved] = useState<"idle" | "saving" | "ok" | "err">("idle");
+  const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Prefer server persisted config; fall back to localStorage.
+    (async () => {
+      try {
+        const res = await fetch("/api/config", { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as SwarmConfig;
+          setCfg(data);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+      const ls = typeof window !== "undefined" ? localStorage.getItem(LS_KEY) : null;
+      if (ls) {
+        try {
+          setCfg(JSON.parse(ls) as SwarmConfig);
+        } catch {
+          // ignore
+        }
+      }
+    })();
+  }, []);
+
+  const onChange = <K extends keyof SwarmConfig>(k: K, v: SwarmConfig[K]) => {
+    setCfg((p) => ({ ...p, [k]: v }));
+    setSaved("idle");
+  };
+
+  const save = async () => {
+    setSaved("saving");
+    setWarning(null);
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as SwarmConfig & { persisted?: boolean; warning?: string };
+      setCfg(data);
+      localStorage.setItem(LS_KEY, JSON.stringify(data));
+      if (data.persisted === false) {
+        setWarning("Saved to browser only — server is read-only (Vercel).");
+      }
+      setSaved("ok");
+      setTimeout(() => setSaved("idle"), 2000);
+    } catch (e) {
+      setWarning((e as Error).message);
+      setSaved("err");
+    }
+  };
+
+  return (
+    <div className="panel p-5">
+      <div className="text-xs uppercase tracking-[0.3em] text-mist mb-4">
+        Your trade settings
+      </div>
+
+      <div className="space-y-4">
+        {/* Risk per trade */}
+        <Slider
+          label="Risk per trade"
+          sublabel="% of equity sacrificed if stop hits (ATR-scaled sizing)"
+          value={cfg.risk_fraction}
+          min={0.001}
+          max={0.02}
+          step={0.0005}
+          fmt={(v) => `${(v * 100).toFixed(2)} %`}
+          onChange={(v) => onChange("risk_fraction", v)}
+        />
+
+        {/* Position cap */}
+        <Slider
+          label="Position cap"
+          sublabel="max notional as × of equity (leverage upper bound)"
+          value={cfg.position_cap_mult}
+          min={1}
+          max={10}
+          step={0.5}
+          fmt={(v) => `${v.toFixed(1)}×`}
+          onChange={(v) => onChange("position_cap_mult", v)}
+        />
+
+        {/* Uncertainty filter */}
+        <Slider
+          label="Uncertainty filter"
+          sublabel="skip trade when top-K disagreement exceeds this (PolySwarm §III.D)"
+          value={cfg.uncertainty_filter}
+          min={0}
+          max={1}
+          step={0.05}
+          fmt={(v) => `${(v * 100).toFixed(0)} %`}
+          onChange={(v) => onChange("uncertainty_filter", v)}
+        />
+
+        {/* Kelly toggle */}
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-1 accent-cyan"
+            checked={cfg.kelly_enabled}
+            onChange={(e) => onChange("kelly_enabled", e.target.checked)}
+          />
+          <div>
+            <div className="text-sm text-slate-200">Quarter-Kelly sizing</div>
+            <div className="text-[0.7rem] text-mist mt-0.5">
+              f = 0.25 × [p·b − (1−p)] / b · overrides risk-fraction sizing when on.
+            </div>
+          </div>
+        </label>
+      </div>
+
+      <div className="mt-5 flex items-center justify-between">
+        <button
+          onClick={save}
+          disabled={saved === "saving"}
+          className="chip chip-cyan px-4 py-1.5 hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          {saved === "saving"
+            ? "Saving…"
+            : saved === "ok"
+              ? "Saved"
+              : saved === "err"
+                ? "Retry"
+                : "Save"}
+        </button>
+        <span className="text-[0.65rem] text-mist num">
+          {cfg.updated_at
+            ? `updated ${new Date(cfg.updated_at * 1000).toLocaleTimeString()}`
+            : "—"}
+        </span>
+      </div>
+
+      {warning ? (
+        <p className="mt-2 text-[0.7rem] text-amber">{warning}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function Slider({
+  label,
+  sublabel,
+  value,
+  min,
+  max,
+  step,
+  fmt,
+  onChange,
+}: {
+  label: string;
+  sublabel: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  fmt: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="flex justify-between items-baseline">
+        <span className="text-sm text-slate-200">{label}</span>
+        <span className="text-sm num text-cyan">{fmt(value)}</span>
+      </div>
+      <div className="text-[0.65rem] text-mist mt-0.5">{sublabel}</div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full mt-2 accent-cyan"
+      />
+    </div>
+  );
+}
