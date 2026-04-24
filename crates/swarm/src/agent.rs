@@ -137,4 +137,12 @@ pub trait SwarmAgent: Send + Sync {
     ///
     /// `peers` is only populated when `profile.social == true`.
     async fn observe(&mut self, event: &Event, peers: &PeerView) -> Option<AgentDecision>;
+
+    /// Expose the agent's systematic parameters if it is a systematic
+    /// agent — the evolution engine uses this to pull the current
+    /// population into a `(params, id)` list for the next generation.
+    /// Non-systematic agents (LLM, meta) return `None` (the default).
+    fn systematic_params(&self) -> Option<crate::systematic::SystematicParams> {
+        None
+    }
 }

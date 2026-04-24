@@ -13,12 +13,13 @@ export type AgentStats = {
 
 export type SwarmSnapshot = {
   generated_at: number;
+  generation?: number;
   n_agents: number;
   champion: AgentStats | null;
   agents: AgentStats[];
   recent_decisions: unknown[];
-  consensus: { fires: number };
-  source: "live" | "demo";
+  consensus: { fires: number; wins?: number };
+  source: "live" | "backtest" | "empty";
 };
 
 export async function fetchSwarm(): Promise<SwarmSnapshot> {

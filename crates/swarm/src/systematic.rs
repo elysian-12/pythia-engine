@@ -372,6 +372,10 @@ impl SwarmAgent for SystematicAgent {
             Event::OpenInterest { .. } | Event::HourClose { .. } => None,
         }
     }
+
+    fn systematic_params(&self) -> Option<SystematicParams> {
+        Some(self.params.clone())
+    }
 }
 
 /// Fluent builder for populating a swarm with diverse agents.

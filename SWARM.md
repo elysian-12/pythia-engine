@@ -163,16 +163,24 @@ let cfg = ConsensusCfg {
 let diagnostic = consensus(&decisions, &scoreboard, &cfg);
 ```
 
-## Evolution
+## Evolution — the self-improvement loop
 
-Every `generation_interval` events (default ~2000):
+Every `PYTHIA_EVOLVE_EVERY` events (default 500) in the live binary:
 
 ```rust
-let next: Vec<Box<dyn SwarmAgent>> = evolution.advance(current_params, &scoreboard);
+let current: Vec<(SystematicParams, String)> = swarm
+    .agents()
+    .filter_map(|a| a.systematic_params().map(|p| (p, a.id().into())))
+    .collect();
+let next = evolution.advance(current, &scoreboard);
+swarm = Swarm::new(next);
 ```
 
-1. Score every current agent via the scoreboard.
-2. Retain top `elite_fraction` (default 0.5) verbatim.
+What happens inside `advance()`:
+
+1. Score every current agent via the scoreboard — uses the realised
+   PnL from decisions that have already closed.
+2. Retain the top `elite_fraction` (default 0.5) verbatim.
 3. Fill the rest via:
    - **rank-weighted parent selection** — index 0 has 2× the odds of the
      last-ranked elite
@@ -180,11 +188,18 @@ let next: Vec<Box<dyn SwarmAgent>> = evolution.advance(current_params, &scoreboa
      clamped to family bounds; `σ_mut = 0.15` default
    - **same-family crossover** (prob 0.3) — never blend LiqZScore params
      with FundingZScore
-4. Evicted agents keep their history in the scoreboard but stop firing.
+4. Evicted agents' decisions stay recorded in the scoreboard (history
+   is never lost), they just stop firing.
 
-Result: the population drifts toward parameter regions that are actually
-paying out on the live feed. Slow monotone improvement, not population
-collapse.
+Result: the population drifts toward parameter regions that are
+actually paying out on the live feed. The feedback loop is
+**scoreboard → evolution → new agents → broadcast → scoreboard**. No
+LLM in the critical path; PnL is the only signal. Context stays O(1)
+because the scoreboard holds aggregate stats, not per-decision
+history.
+
+Slow monotone improvement, not population collapse — the elite are
+preserved verbatim and mutation sigmas are conservative by default.
 
 ## Backtest result (reference)
 

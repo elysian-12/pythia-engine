@@ -115,6 +115,7 @@ apps/web/                    Next.js 15 · three.js
 | `HL_PRIVATE_KEY` | ○ | — | Hyperliquid signer (required in live mode) |
 | `PYTHIA_MODE` | ○ | `dryrun` | `dryrun` \| `live` — live places real orders |
 | `PYTHIA_RISK` | ○ | `0.005` | risk-fraction floor applied on top of agent prefs |
+| `PYTHIA_EVOLVE_EVERY` | ○ | `500` | events between evolution generations |
 | `PYTHIA_SNAPSHOT` | ○ | `data/swarm-snapshot.json` | swarm state dump for `/tournament` |
 | `PYTHIA_BIND` | ○ | `0.0.0.0:8080` | axum bind |
 | `PYTHIA_DB` | ○ | `data/pythia.duckdb` | DuckDB path |

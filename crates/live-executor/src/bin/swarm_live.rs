@@ -49,6 +49,7 @@ use serde::Serialize;
 use swarm::{
     agent::Event as SwarmEvent,
     consensus::{consensus, ConsensusCfg},
+    evolution::{Evolution, EvolutionCfg},
     population::Swarm,
     scoring::{AgentStats, Scoreboard},
     systematic::SystematicBuilder,
@@ -108,15 +109,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build swarm — 20 diverse systematic agents from the house roster.
     // `Swarm` stays single-owner in the main task (avoids holding a
     // sync mutex across an await). The snapshot writer only needs the
-    // fixed agent-id roster, which we take once up front.
+    // current agent-id roster, which we refresh after each evolution.
     let agents = SystematicBuilder::new().house_roster().build();
     let n_agents = agents.len();
-    let agent_ids: Vec<String> = agents.iter().map(|a| a.id().to_string()).collect();
+    let agent_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
+        agents.iter().map(|a| a.id().to_string()).collect(),
+    ));
     let mut swarm = Swarm::new(agents);
     let scoreboard = Arc::new(Scoreboard::new());
     let pending: Arc<Mutex<HashMap<String, PendingOutcome>>> = Arc::new(Mutex::new(HashMap::new()));
     let consensus_stats = Arc::new(Mutex::new(ConsensusStats::default()));
     let cons_cfg = ConsensusCfg::default();
+    let mut evolution = Evolution::new(
+        EvolutionCfg {
+            population_cap: n_agents,
+            ..Default::default()
+        },
+        chrono::Utc::now().timestamp() as u64,
+    );
+    let evolution_interval: usize = std::env::var("PYTHIA_EVOLVE_EVERY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(500); // ~every few hours at typical liq cadence
+    let generation_arc: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 
     info!(
         ?mode, n_agents, initial_equity, %address,
@@ -155,13 +170,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Periodic ticker that resolves expired pending decisions + writes
     // the snapshot JSON for the UI. Does not need the `Swarm` — only the
-    // scoreboard (which has its own internal Mutex) + fixed agent-id list.
+    // scoreboard (which has its own internal Mutex) + the current
+    // agent-id list (refreshed by evolution in the main task).
     {
         let client = client.clone();
         let scoreboard = scoreboard.clone();
         let pending = pending.clone();
         let consensus_stats = consensus_stats.clone();
         let agent_ids = agent_ids.clone();
+        let generation_arc = generation_arc.clone();
         let snapshot_path = snapshot_path.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(10));
@@ -172,7 +189,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     mark_expired(&pending, &scoreboard, &mids);
                 }
                 let stats_clone = consensus_stats.lock().clone();
-                let snap = build_snapshot(&scoreboard, &stats_clone, &agent_ids, n_agents);
+                let ids = agent_ids.lock().clone();
+                let generation = *generation_arc.lock();
+                let snap =
+                    build_snapshot(&scoreboard, &stats_clone, &ids, n_agents, generation);
                 write_snapshot(&snapshot_path, &snap);
             }
         });
@@ -181,8 +201,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Main loop — drain the internal event channel, broadcast to the
     // swarm, place orders on the **champion's** decisions. Consensus is
     // still computed for diagnostic purposes (shown in the snapshot)
-    // but does not drive execution.
+    // but does not drive execution. Every `evolution_interval` events,
+    // the scoreboard feeds the Evolution engine and the weaker half
+    // of the population is replaced by mutants / crossovers of the elite.
+    let mut event_counter: usize = 0;
     while let Some(event) = swarm_rx.recv().await {
+        event_counter += 1;
+
+        // Evolution — self-improvement based on realised PnL in the
+        // scoreboard. Extracts the current systematic agents' params,
+        // hands them + the scoreboard to `Evolution::advance`, and
+        // rebuilds the Swarm with the new generation.
+        if event_counter.is_multiple_of(evolution_interval) {
+            let current_params: Vec<_> = swarm
+                .agents()
+                .filter_map(|a| {
+                    a.systematic_params().map(|p| (p, a.id().to_string()))
+                })
+                .collect();
+            if !current_params.is_empty() {
+                let next_agents = evolution.advance(current_params, &scoreboard);
+                let new_ids: Vec<String> =
+                    next_agents.iter().map(|a| a.id().to_string()).collect();
+                *agent_ids.lock() = new_ids;
+                *generation_arc.lock() = evolution.generation();
+                swarm = Swarm::new(next_agents);
+                info!(
+                    generation = evolution.generation(),
+                    population_cap = n_agents,
+                    "evolution: next generation spawned"
+                );
+            }
+        }
+
         // Refresh champion so social agents + downstream routing see it.
         let champion_id = scoreboard
             .champion(cons_cfg.min_decisions_for_champion)
@@ -479,11 +530,13 @@ fn opposite(s: OrderSide) -> OrderSide {
 #[derive(Serialize)]
 struct Snapshot {
     generated_at: i64,
+    generation: u64,
     n_agents: usize,
     champion: Option<AgentStats>,
     agents: Vec<AgentStats>,
     recent_decisions: Vec<RecentDecision>,
     consensus: ConsensusStats,
+    source: &'static str,
 }
 
 #[derive(Serialize)]
@@ -502,6 +555,7 @@ fn build_snapshot(
     consensus_stats: &ConsensusStats,
     agent_ids: &[String],
     n_agents: usize,
+    generation: u64,
 ) -> Snapshot {
     let mut agents = scoreboard.all();
     agents.sort_by(|a, b| {
@@ -527,11 +581,13 @@ fn build_snapshot(
     let champion = agents.first().cloned();
     Snapshot {
         generated_at: chrono::Utc::now().timestamp(),
+        generation,
         n_agents,
         champion,
         agents,
         recent_decisions: Vec::new(),
         consensus: consensus_stats.clone(),
+        source: "live",
     }
 }
 

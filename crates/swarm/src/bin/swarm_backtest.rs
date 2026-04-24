@@ -170,6 +170,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(dir.join("swarm.md"), &md)?;
     std::fs::write(dir.join("swarm.json"), serde_json::to_string_pretty(&ranked)?)?;
     println!("\nreport: {}/swarm.md", dir.display());
+
+    // Also write data/swarm-snapshot.json so the /tournament UI shows
+    // the backtest run directly (same schema the live daemon uses).
+    let snapshot = serde_json::json!({
+        "generated_at": ts,
+        "generation": 0u64,
+        "n_agents": n_agents,
+        "champion": ranked.first(),
+        "agents": ranked,
+        "recent_decisions": [],
+        "consensus": { "fires": consensus_count, "wins": consensus_wins },
+        "source": "backtest"
+    });
+    let data_dir = PathBuf::from("data");
+    std::fs::create_dir_all(&data_dir).ok();
+    std::fs::write(
+        data_dir.join("swarm-snapshot.json"),
+        serde_json::to_vec_pretty(&snapshot)?,
+    )?;
+    println!("snapshot: data/swarm-snapshot.json → /tournament will render this run");
     Ok(())
 }
 
