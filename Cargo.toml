@@ -17,6 +17,10 @@ members = [
     "crates/api",
     "crates/exchange-hyperliquid",
     "crates/live-executor",
+    "crates/datasource",
+    "crates/regime",
+    "crates/portfolio",
+    "crates/tuner",
 ]
 
 [workspace.package]
