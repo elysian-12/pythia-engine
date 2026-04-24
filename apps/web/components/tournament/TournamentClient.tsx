@@ -4,7 +4,21 @@ import { useEffect, useMemo, useState } from "react";
 import { Arena } from "./Arena";
 import { Leaderboard } from "./Leaderboard";
 import { SettingsForm } from "./SettingsForm";
-import { fetchSwarm, FAMILY_COLORS, agentFamily, type SwarmSnapshot } from "@/lib/swarm";
+import { EventSimulator } from "./EventSimulator";
+import { CopyTradePanel } from "./CopyTradePanel";
+import { LiveTradeFeed, type FeedEntry } from "./LiveTradeFeed";
+import { KiyotakaBadge } from "./KiyotakaBadge";
+import {
+  fetchSwarm,
+  FAMILY_COLORS,
+  agentFamily,
+  type SwarmSnapshot,
+} from "@/lib/swarm";
+import type { SimEvent } from "@/lib/simulate";
+import { simulateReactions } from "@/lib/simulate";
+
+const COPY_LS_KEY = "pythia-copytrade-agent";
+const FEED_MAX = 25;
 
 function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
@@ -34,7 +48,7 @@ function SourceBadge({ source }: { source: SwarmSnapshot["source"] }) {
   };
   const { label, dot } = map[source] ?? map.empty;
   return (
-    <span className="inline-flex items-center gap-2 text-xs text-mist">
+    <span className="inline-flex items-center gap-2 text-[0.65rem] text-mist">
       <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
       {label}
     </span>
@@ -45,6 +59,9 @@ export function TournamentClient() {
   const [snap, setSnap] = useState<SwarmSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<"swarm" | "ranking" | "podium">("swarm");
+  const [copyAgent, setCopyAgent] = useState<string | null>(null);
+  const [feed, setFeed] = useState<FeedEntry[]>([]);
+  const [lastEvent, setLastEvent] = useState<SimEvent | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -67,10 +84,7 @@ export function TournamentClient() {
     };
   }, []);
 
-  // Phase badge (mirrors the Arena intro animation):
-  //   0.0–1.6 s  "SWARM"    — agents blob around the centre
-  //   1.6–4.0 s  "RANKING"  — lerp into the amphitheater
-  //   4.0 s +    "PODIUM"   — champion up, scoreboard settled
+  // Intro animation phases.
   useEffect(() => {
     const t1 = setTimeout(() => setPhase("ranking"), 1600);
     const t2 = setTimeout(() => setPhase("podium"), 4000);
@@ -80,10 +94,35 @@ export function TournamentClient() {
     };
   }, []);
 
-  const familiesActive = useMemo(() => {
-    if (!snap) return [] as string[];
-    return Array.from(new Set(snap.agents.map((a) => agentFamily(a.agent_id))));
-  }, [snap]);
+  // Restore copy-trade selection from localStorage.
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(COPY_LS_KEY);
+      if (stored) setCopyAgent(stored);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const reactions = useMemo(() => {
+    if (!snap || !lastEvent) return [];
+    return simulateReactions(lastEvent, snap.agents);
+  }, [snap, lastEvent]);
+
+  const onFire = (ev: SimEvent) => {
+    if (!snap) return;
+    const rxs = simulateReactions(ev, snap.agents);
+    const championId = snap.champion?.agent_id ?? null;
+    const entry: FeedEntry = {
+      id: ev.id,
+      ts: ev.ts,
+      event: ev,
+      reactions: rxs,
+      championId,
+    };
+    setLastEvent(ev);
+    setFeed((prev) => [entry, ...prev].slice(0, FEED_MAX));
+  };
 
   if (!snap) {
     return (
@@ -103,75 +142,61 @@ export function TournamentClient() {
           Run the backtest or the live daemon first
         </h2>
         <pre className="panel text-left text-xs md:text-sm p-4 num">
-{`# simulate the tournament on 365 d of real BTC + ETH data
-cargo run --release -p swarm --bin swarm-backtest
-
-# — or — run the live daemon (writes data/swarm-snapshot.json)
+{`cargo run --release -p swarm --bin swarm-backtest
+# or
 cargo run --release -p live-executor --bin pythia-swarm-live`}
         </pre>
-        <p className="text-xs text-mist max-w-md">
-          Either command populates <span className="num">data/swarm-snapshot.json</span>,
-          which this page reads every 5 s.
-        </p>
       </div>
     );
   }
 
   const champ = snap.champion;
-  const totalTrades = snap.agents.reduce((s, a) => s + a.wins + a.losses, 0);
-  const totalPnl = snap.agents.reduce((s, a) => s + a.total_pnl_usd, 0);
-  const totalR = snap.agents.reduce((s, a) => s + a.total_r, 0);
+  const familiesActive = Array.from(
+    new Set(snap.agents.map((a) => agentFamily(a.agent_id))),
+  );
+  const BTC_PX = 77_500;
+  const ETH_PX = 3_200;
 
   return (
     <div className="space-y-6">
-      <section className="relative rounded-2xl overflow-hidden h-[75vh] -mx-6 md:mx-0 border border-edge/60">
+      {/* HERO Arena */}
+      <section className="relative rounded-2xl overflow-hidden h-[68vh] -mx-6 md:mx-0 border border-edge/60">
         <Arena agents={snap.agents} generation={snap.generation ?? 0} />
-
-        {/* HUD — top */}
-        <div className="pointer-events-none absolute top-0 left-0 right-0 p-6 flex items-start justify-between">
+        <div className="pointer-events-none absolute top-0 left-0 right-0 p-5 flex items-start justify-between">
           <div>
             <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
-              The tournament
+              Pythia tournament
             </div>
-            <h2 className="text-3xl md:text-5xl font-semibold text-slate-100 mt-2 tracking-tight">
-              {snap.n_agents} agents. One champion.
+            <h2 className="text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight">
+              Events → Swarm → Champion → Your copy trade
             </h2>
-            <p className="text-xs text-mist mt-2 max-w-md">
-              Scoreboard picks the winner; the winner&apos;s decisions
-              drive the executor. Position lerps when ranks reshuffle.
-            </p>
           </div>
-          <div className="text-right text-xs space-y-1">
+          <div className="text-right space-y-1 pointer-events-auto">
+            <KiyotakaBadge />
             <SourceBadge source={snap.source} />
-            <div className="text-mist num">{fmt(snap.generated_at)}</div>
-            {snap.generation ? (
-              <div className="text-amber num">
-                Generation {snap.generation.toString().padStart(3, "0")}
-              </div>
-            ) : null}
-            <div className="num">
+            <div className="text-[0.65rem] text-mist num">
+              {fmt(snap.generated_at)}
+            </div>
+            <div>
               <PhaseBadge phase={phase} />
             </div>
           </div>
         </div>
 
-        {/* HUD — bottom */}
-        <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-6 flex items-end justify-between">
-          {champ ? (
-            <div className="panel px-5 py-4 pointer-events-auto backdrop-blur-sm bg-black/30">
+        {champ ? (
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-5 flex items-end justify-between">
+            <div className="panel px-4 py-3 pointer-events-auto backdrop-blur-sm bg-black/30">
               <div className="text-[0.65rem] tracking-[0.4em] text-amber uppercase">
                 Current champion
               </div>
-              <div className="mt-1 text-xl font-mono text-slate-100">
+              <div className="mt-1 text-lg font-mono text-slate-100">
                 {champ.agent_id}
               </div>
               <div className="flex gap-4 text-xs mt-2 num">
                 <span>
                   <span className="text-mist">Σ R</span>{" "}
                   <span
-                    className={
-                      champ.total_r >= 0 ? "text-green" : "text-red"
-                    }
+                    className={champ.total_r >= 0 ? "text-green" : "text-red"}
                   >
                     {champ.total_r >= 0 ? "+" : ""}
                     {champ.total_r.toFixed(2)}
@@ -185,108 +210,98 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                   <span className="text-mist">Trades</span>{" "}
                   {champ.wins + champ.losses}
                 </span>
-                <span>
-                  <span className="text-mist">PnL</span>{" "}
-                  <span
-                    className={
-                      champ.total_pnl_usd >= 0 ? "text-green" : "text-red"
-                    }
-                  >
-                    {champ.total_pnl_usd >= 0 ? "+" : ""}$
-                    {champ.total_pnl_usd.toFixed(0)}
-                  </span>
-                </span>
               </div>
             </div>
-          ) : null}
-
-          {/* Family legend */}
-          <div className="flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[360px]">
-            {Object.entries(FAMILY_COLORS)
-              .filter(([k]) => k !== "other" && familiesActive.includes(k))
-              .map(([k, v]) => (
-                <span key={k} className="flex items-center gap-1.5">
-                  <span
-                    className="inline-block w-2 h-2 rounded-full"
-                    style={{ background: v, boxShadow: `0 0 8px ${v}` }}
-                  />
-                  <span className="font-mono uppercase tracking-widest">{k}</span>
-                </span>
-              ))}
+            <div className="flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[380px]">
+              {Object.entries(FAMILY_COLORS)
+                .filter(
+                  ([k]) =>
+                    k !== "other" &&
+                    familiesActive.includes(k as (typeof familiesActive)[number]),
+                )
+                .map(([k, v]) => (
+                  <span key={k} className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block w-2 h-2 rounded-full"
+                      style={{ background: v, boxShadow: `0 0 8px ${v}` }}
+                    />
+                    <span className="font-mono uppercase tracking-widest">
+                      {k}
+                    </span>
+                  </span>
+                ))}
+            </div>
           </div>
-        </div>
+        ) : null}
       </section>
 
+      {/* 3-ZONE DECK: Simulator+Settings | Copy-trade + Explainer | Trade Feed */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Leaderboard agents={snap.agents} />
-        </div>
         <div className="space-y-6">
+          <EventSimulator onFire={onFire} lastFired={lastEvent} />
           <SettingsForm />
+        </div>
+
+        <div className="space-y-6">
+          <CopyTradePanel
+            agents={snap.agents}
+            selected={copyAgent}
+            onSelect={setCopyAgent}
+            equity_usd={1000}
+            risk_fraction={0.01}
+            btc_price={BTC_PX}
+            eth_price={ETH_PX}
+            reactions={reactions}
+            lastEvent={lastEvent}
+          />
 
           <div className="panel p-5">
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
-              Aggregate
+              How the swarm gets smart
             </div>
-            <div className="mt-4 space-y-3 num">
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Population</span>
-                <span>{snap.n_agents}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Total decisions</span>
-                <span>{totalTrades}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Aggregate Σ R</span>
-                <span className={totalR >= 0 ? "text-green" : "text-red"}>
-                  {totalR >= 0 ? "+" : ""}
-                  {totalR.toFixed(2)}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Aggregate PnL</span>
-                <span className={totalPnl >= 0 ? "text-green" : "text-red"}>
-                  {totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(0)}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Generation</span>
-                <span>{snap.generation ?? 0}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-mist">Active families</span>
-                <span>{familiesActive.length}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="panel p-5">
-            <div className="text-xs uppercase tracking-[0.3em] text-mist">
-              How it works
-            </div>
-            <ol className="mt-3 space-y-2 text-sm text-slate-300 list-decimal list-inside">
+            <ol className="mt-3 space-y-3 text-xs text-slate-300">
               <li>
-                Binance public WS streams live forced-order events.
+                <span className="text-cyan font-mono">1. Event →</span>{" "}
+                Every agent observes the same liquidation / funding / candle
+                tick simultaneously.
               </li>
               <li>
-                Every agent emits an independent opinion (or abstains).
+                <span className="text-cyan font-mono">2. Vote →</span>{" "}
+                Each agent fires (or abstains) independently using its own
+                rule family and parameters.
               </li>
               <li>
-                Scoreboard tracks per-agent Σ R and rolling Sharpe,
-                identifying the current champion.
+                <span className="text-cyan font-mono">3. PeerView →</span>{" "}
+                Social agents additionally see what peers + the current
+                champion just did → momentum / contrarian meta-behaviours.
               </li>
               <li>
-                The champion&apos;s decision → executor (Hyperliquid EIP-712
-                + risk guard).
+                <span className="text-cyan font-mono">4. Scoreboard →</span>{" "}
+                Every closed trade updates Σ R, rolling Sharpe, win rate.
+                The oracle the rest of the system reads.
               </li>
               <li>
-                Every N events, the weakest half is replaced via log-space
-                Gaussian mutation + same-family crossover — a new generation.
+                <span className="text-cyan font-mono">5. Evolution →</span>{" "}
+                Every N events, weak agents are replaced by log-space
+                Gaussian mutants + same-family crossovers of the elite.
+                Drift toward profitable parameter regions.
+              </li>
+              <li>
+                <span className="text-amber font-mono">6. Copy trade →</span>{" "}
+                Whoever leads now is the agent you mirror. When the regime
+                shifts, a different family rises → execution follows, no
+                restart.
               </li>
             </ol>
           </div>
         </div>
+
+        <LiveTradeFeed entries={feed} />
+      </section>
+
+      {/* Full leaderboard */}
+      <section>
+        <Leaderboard agents={snap.agents} />
       </section>
     </div>
   );
