@@ -47,12 +47,18 @@
 
 pub mod agent;
 pub mod consensus;
+pub mod evolution;
+pub mod llm_agent;
 pub mod population;
 pub mod scoring;
 pub mod systematic;
 
 pub use agent::{AgentDecision, AgentKind, AgentProfile, PeerView, SwarmAgent};
 pub use consensus::{consensus, ConsensusCfg, ConsensusDecision};
+pub use evolution::{Evolution, EvolutionCfg};
+pub use llm_agent::{
+    AnthropicDecider, LlmAction, LlmAgent, LlmDecider, LlmDecision, MockLlmDecider, Personality,
+};
 pub use population::{Swarm, SwarmEvent};
 pub use scoring::{AgentStats, Scoreboard};
 pub use systematic::{SystematicAgent, SystematicBuilder};

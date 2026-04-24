@@ -22,6 +22,7 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 parking_lot = { workspace = true }
+reqwest = { workspace = true }
 
 [[bin]]
 name = "swarm-backtest"

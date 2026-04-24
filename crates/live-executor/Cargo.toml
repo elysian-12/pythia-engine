@@ -11,6 +11,7 @@ domain = { path = "../domain" }
 kiyotaka-client = { path = "../kiyotaka-client" }
 exchange-hyperliquid = { path = "../exchange-hyperliquid" }
 paper-trader = { path = "../paper-trader" }
+swarm = { path = "../swarm" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -26,6 +27,10 @@ parking_lot = { workspace = true }
 [[bin]]
 name = "pythia-live"
 path = "src/bin/pythia_live.rs"
+
+[[bin]]
+name = "pythia-swarm-live"
+path = "src/bin/swarm_live.rs"
 
 [lints]
 workspace = true

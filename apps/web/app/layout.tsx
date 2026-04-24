@@ -22,6 +22,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex items-center gap-4 text-xs text-mist">
               <a
                 className="chip chip-cyan hover:opacity-80 transition-opacity"
+                href="/tournament"
+              >
+                Tournament →
+              </a>
+              <a
+                className="chip chip-cyan hover:opacity-80 transition-opacity"
                 href="/visualize"
               >
                 Visualize →
