@@ -38,7 +38,7 @@ Binance WS ──────▶ live-executor ───────────
 | Walk-forward runner | `backtest` | `run`, `run_signal_stream`, `_compound` |
 | PSR / DSR / PBO / bootstrap | `evaluation` | Quant-grade significance tests |
 | Grid search, ablations | `strategy` | Calls `backtest` + `evaluation` |
-| Agent roster, scoreboard, evolution | `swarm` | The tournament runtime |
+| Agent roster, scoreboard, evolution | `swarm` | The tournament runtime — `Evolution::advance` ranks elites by `recent_expectancy_r × √n_recent` (NOT lifetime `total_r`), so long-running seeds don't permanently lock the elite slot |
 | WS + HL execution | `live-executor`, `exchange-hyperliquid` | `swarm_live.rs` binary is canonical |
 | HTTP API for the UI | `api` (axum) | `/overview`, `/markets`, `/rate` |
 | Regime tagging | `regime` | Trending/ranging/chaotic/calm |

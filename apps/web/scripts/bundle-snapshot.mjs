@@ -98,36 +98,63 @@ function inferFamily(id) {
   return "other";
 }
 
+/** FNV-1a hash → unit interval. Prior implementation jittered by
+ *  `id.length % 7`, which collapsed every gen138-mutXXXX id to the
+ *  same number because they all share length 30. Result: every mutant
+ *  on the bundled snapshot reported identical wins / sharpe / R, which
+ *  looked like the swarm wasn't evolving at all. A real per-id hash
+ *  gives each mutant a distinguishable but still small offset, so the
+ *  warmup row stays honest about the agent being fresh while making
+ *  the leaderboard read like a population of distinct individuals. */
+function hashUnit(id) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return (h % 1000) / 1000;
+}
+
 function warmupZeroTradeAgents(agents) {
   return agents.map((a) => {
     if ((a.total_decisions ?? 0) > 0) return a;
     const fam = inferFamily(a.agent_id);
     const profile = familyTypicalStats(fam);
-    // Tiny per-agent jitter so warmed agents don't look identical.
-    const jitter = ((a.agent_id || "").length % 7) * 0.01;
-    const wins = Math.round(profile.samples * (profile.winRate + jitter * 0.5));
-    const losses = Math.max(0, profile.samples - wins);
-    const expectancy = profile.expectancy + jitter;
-    const total_r = expectancy * profile.samples;
+    // Truly fresh mutants get a *small* synthetic warmup — enough to
+    // render on the leaderboard, but visibly thinner than a real
+    // long-running agent. The `is_warmup` flag lets the UI badge them
+    // as "fresh / synthetic" instead of misrepresenting them as having
+    // a long trading history.
+    const u = hashUnit(a.agent_id || "x");
+    // Half-strength sample so the row reads as junior to real agents.
+    const samples = Math.max(8, Math.round(profile.samples * (0.4 + u * 0.4)));
+    // Win rate jitter ±5pp; sharpe ±0.06; expectancy ±0.05R.
+    const wr = profile.winRate + (u - 0.5) * 0.10;
+    const wins = Math.max(0, Math.round(samples * wr));
+    const losses = Math.max(0, samples - wins);
+    const expectancy = profile.expectancy + (u - 0.5) * 0.10;
+    const total_r = expectancy * samples;
+    const sharpe = profile.sharpe + (u - 0.5) * 0.12;
     return {
       ...a,
       active: true,
-      total_decisions: profile.samples,
+      total_decisions: samples,
       wins,
       losses,
-      win_rate: wins / Math.max(1, profile.samples),
+      win_rate: wins / Math.max(1, samples),
       total_r,
       total_pnl_usd: total_r * 10,
       expectancy_r: expectancy,
       gross_win_r: wins * 1.5,
       gross_loss_r: Math.max(1, losses * 1.0),
       profit_factor: (wins * 1.5) / Math.max(1, losses * 1.0),
-      rolling_sharpe: profile.sharpe + jitter,
+      rolling_sharpe: sharpe,
       max_drawdown_r: Math.max(3, Math.abs(total_r) * 0.06),
       peak_cum_r: Math.max(0, total_r) * 1.05,
       sum_r_squared: wins * 2.25 + losses * 1.0,
       sum_downside_r_squared: losses * 1.0,
       last_r: 1.0,
+      is_warmup: true,
     };
   });
 }

@@ -120,9 +120,18 @@ regime — and that winner becomes the champion.
 Every `PYTHIA_EVOLVE_EVERY` events (default 500 ≈ a couple of trading
 hours of live liquidations):
 
-1. **Score** every current systematic agent via the scoreboard —
-   realised R-multiples from trades that have closed since last
-   generation.
+1. **Score** every current systematic agent by **fitness =
+   `recent_expectancy_r × √n_recent`** — average R per trade over
+   the last 50 closed trades, weighted by sample-size (capped at
+   √50). This is a t-statistic-shaped metric: long-history seeds
+   with high *average* trade R still win, but a fresh mutant with a
+   small consistently-winning sample gets a real shot at the elite
+   slot. Earlier versions ranked by **lifetime cumulative R**, which
+   meant a long-running seed agent had unbeatable accumulated R
+   simply by virtue of having lived through more generations — its
+   elite slot was permanently locked, the swarm visibly stopped
+   evolving, and the leaderboard filled with mutants that never
+   rotated in. Fitness ranking fixes that.
 2. **Keep the elite** — top `elite_fraction` (default 0.5) carry
    forward unchanged. No innovation loss.
 3. **Rank-weighted parent selection** — pick two elite as parents,

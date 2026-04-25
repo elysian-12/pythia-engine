@@ -161,15 +161,40 @@ impl Evolution {
             })
             .collect();
 
-        // Elite — top N by total_R with enough decisions.
+        // Elite — top N by **fitness score**, not raw total_R. The
+        // earlier ranking sorted by lifetime cumulative R, which meant
+        // a long-running seed with hundreds of trades had unbeatable
+        // R against any fresh mutant simply by virtue of having lived
+        // through more generations. The seed's elite slot was locked
+        // for the lifetime of the run, the swarm visibly stopped
+        // evolving, and the leaderboard filled with mutants that never
+        // got rotated in.
+        //
+        // The new score is `recent_expectancy_r × √n_recent` —
+        // expectancy normalized for sample size. Conceptually a
+        // t-statistic on R-per-trade. Long-history seeds with high R
+        // still win when their *average* trade is strong; mutants with
+        // a small but consistently winning sample get a real shot at
+        // the elite slot. Falls back to `expectancy_r` (lifetime mean)
+        // when recent_expectancy is unavailable.
         scored.retain(|a| a.stats.wins + a.stats.losses >= self.cfg.min_decisions);
         if scored.is_empty() {
             return fallback;
         }
+        const RECENT_WINDOW: usize = 50;
+        let fitness = |a: &ScoredAgent| -> f64 {
+            let n = (a.stats.wins + a.stats.losses) as f64;
+            let recent = scoreboard
+                .recent_expectancy(&a.id, RECENT_WINDOW, self.cfg.min_decisions)
+                .unwrap_or(a.stats.expectancy_r);
+            // sample size weight — capped at √RECENT_WINDOW so an
+            // ageing elite doesn't accumulate unbeatable mass.
+            let weight = n.min(RECENT_WINDOW as f64).sqrt();
+            recent * weight
+        };
         scored.sort_by(|a, b| {
-            b.stats
-                .total_r
-                .partial_cmp(&a.stats.total_r)
+            fitness(b)
+                .partial_cmp(&fitness(a))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         let elite_n = ((scored.len() as f64) * self.cfg.elite_fraction).ceil() as usize;
