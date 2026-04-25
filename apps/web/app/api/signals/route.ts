@@ -28,11 +28,48 @@ type SimEvent = {
 
 type Candle = { close: number; volume: number; ts: number };
 
+/** GET wrapper with retry on transient errors (429 + 5xx + abort) and a
+ *  short fixed-jitter backoff. Kiyotaka's documented rate limit is ~10
+ *  req/sec / 600 req/min, but transient 503s do happen — surface them as
+ *  clear failures instead of silently degrading to "no signal". */
+async function fetchKiyotaka(
+  url: URL,
+  key: string,
+  attempts = 3,
+): Promise<{ ok: true; data: unknown } | { ok: false; reason: string }> {
+  let lastReason = "no attempts";
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: { "X-Kiyotaka-Key": key, "User-Agent": "pythia-web" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        return { ok: true, data: await res.json() };
+      }
+      // 4xx (other than 429) — bad request, no point retrying.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        return { ok: false, reason: `HTTP ${res.status}` };
+      }
+      lastReason = `HTTP ${res.status}`;
+    } catch (e) {
+      lastReason = (e as Error).message;
+    }
+    // Exponential backoff with jitter: 200ms, 600ms, 1.4s.
+    if (i < attempts - 1) {
+      const backoff = 200 * Math.pow(3, i) + Math.random() * 100;
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  return { ok: false, reason: lastReason };
+}
+
 async function fetchCandles(
   key: string,
   rawSymbol: string,
   hoursBack = 48,
-): Promise<Candle[] | null> {
+): Promise<{ ok: true; candles: Candle[] } | { ok: false; reason: string }> {
   const now = Math.floor(Date.now() / 1000);
   const from = now - hoursBack * 3600;
   const url = new URL("https://api.kiyotaka.ai/v1/points");
@@ -42,47 +79,39 @@ async function fetchCandles(
   url.searchParams.set("interval", "HOUR");
   url.searchParams.set("from", String(from));
   url.searchParams.set("period", String(hoursBack * 3600));
-  try {
-    const res = await fetch(url, {
-      headers: { "X-Kiyotaka-Key": key },
-      cache: "no-store",
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      series?: Array<{
-        points?: Array<{
-          Point?: {
-            close?: number;
-            volume?: number;
-            timestamp?: { s?: number };
-          };
-        }>;
+  const r = await fetchKiyotaka(url, key);
+  if (!r.ok) return r;
+  const data = r.data as {
+    series?: Array<{
+      points?: Array<{
+        Point?: {
+          close?: number;
+          volume?: number;
+          timestamp?: { s?: number };
+        };
       }>;
-    };
-    const pts = data.series?.[0]?.points ?? [];
-    const out: Candle[] = [];
-    for (const p of pts) {
-      const c = p.Point?.close;
-      const v = p.Point?.volume;
-      const t = p.Point?.timestamp?.s;
-      // Drop empty / unfilled candles — they break log returns and pull
-      // the z-score baseline toward 0, masking real signals.
-      if (
-        typeof c === "number" &&
-        typeof v === "number" &&
-        typeof t === "number" &&
-        Number.isFinite(c) &&
-        c > 0 &&
-        v >= 0
-      ) {
-        out.push({ close: c, volume: v, ts: t });
-      }
+    }>;
+  };
+  const pts = data.series?.[0]?.points ?? [];
+  const out: Candle[] = [];
+  for (const p of pts) {
+    const c = p.Point?.close;
+    const v = p.Point?.volume;
+    const t = p.Point?.timestamp?.s;
+    // Drop empty / unfilled candles — they break log returns and pull
+    // the z-score baseline toward 0, masking real signals.
+    if (
+      typeof c === "number" &&
+      typeof v === "number" &&
+      typeof t === "number" &&
+      Number.isFinite(c) &&
+      c > 0 &&
+      v >= 0
+    ) {
+      out.push({ close: c, volume: v, ts: t });
     }
-    return out;
-  } catch {
-    return null;
   }
+  return { ok: true, candles: out };
 }
 
 function zscore(x: number, arr: number[]): number {
@@ -175,20 +204,40 @@ export async function GET() {
     fetchCandles(key, "ETHUSDT"),
   ]);
 
+  // If both upstream calls failed, return a clear error so the autopilot
+  // surfaces it rather than silently looking idle.
+  if (!btc.ok && !eth.ok) {
+    return NextResponse.json({
+      ok: false,
+      ts: now,
+      reason: `BTC: ${btc.reason} · ETH: ${eth.reason}`,
+      events: [],
+      prices: { BTC: null, ETH: null },
+    });
+  }
+
+  const btcCandles = btc.ok ? btc.candles : [];
+  const ethCandles = eth.ok ? eth.candles : [];
   const events: SimEvent[] = [];
   const prices: Record<string, number | null> = {
-    BTC: btc?.[btc.length - 1]?.close ?? null,
-    ETH: eth?.[eth.length - 1]?.close ?? null,
+    BTC: btcCandles[btcCandles.length - 1]?.close ?? null,
+    ETH: ethCandles[ethCandles.length - 1]?.close ?? null,
   };
 
-  if (btc) events.push(...detectEvents("BTC", btc, now));
-  if (eth) events.push(...detectEvents("ETH", eth, now));
+  if (btc.ok) events.push(...detectEvents("BTC", btcCandles, now));
+  if (eth.ok) events.push(...detectEvents("ETH", ethCandles, now));
 
   return NextResponse.json({
     ok: true,
     ts: now,
     prices,
     events,
+    // Surface a per-asset partial-failure note so the UI can show "ETH down"
+    // distinct from "no signals". Empty when both succeeded.
+    partial:
+      !btc.ok || !eth.ok
+        ? { btc: btc.ok ? null : btc.reason, eth: eth.ok ? null : eth.reason }
+        : null,
     source: "kiyotaka:TRADE_SIDE_AGNOSTIC_AGG",
   });
 }

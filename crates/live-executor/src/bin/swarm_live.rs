@@ -47,13 +47,14 @@ use live_executor::{RiskCfg, RiskGuard};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use swarm::{
-    agent::Event as SwarmEvent,
+    agent::{Event as SwarmEvent, SwarmAgent},
     consensus::{consensus, ConsensusCfg},
     evolution::{Evolution, EvolutionCfg},
     llm_agent::{AnthropicDecider, LlmAgent, LlmDecider, MockLlmDecider, Personality},
+    persistence::{PersistedAgent, PersistedPopulation},
     population::Swarm,
     scoring::{AgentStats, Scoreboard},
-    systematic::SystematicBuilder,
+    systematic::{SystematicAgent, SystematicBuilder},
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -135,7 +136,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // LLM deciders use AnthropicDecider when ANTHROPIC_API_KEY is set,
     // otherwise MockLlmDecider (deterministic, hash-based) so the personas
     // still participate offline.
-    let mut agents = SystematicBuilder::new().house_roster().build();
+    // Resume from a persisted population if one exists. swarm-backtest
+    // writes data/swarm-population.json after each run; live runs write
+    // it periodically (every evolution cycle) so a restart picks up where
+    // the prior live session left off. Override path with PYTHIA_POPULATION.
+    let population_path = std::env::var("PYTHIA_POPULATION")
+        .unwrap_or_else(|_| "data/swarm-population.json".into());
+    let prior_population = PersistedPopulation::load(&population_path);
+    let starting_generation = prior_population.as_ref().map(|p| p.generation).unwrap_or(0);
+
+    let scoreboard = Arc::new(Scoreboard::new());
+    let mut agents: Vec<Box<dyn SwarmAgent>> = if let Some(prior) = &prior_population {
+        let mut out: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(prior.agents.len() + 5);
+        for a in &prior.agents {
+            if let Some(stats) = &a.stats {
+                scoreboard.seed(a.id.clone(), stats.clone());
+            }
+            out.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
+        }
+        info!(
+            generation = prior.generation,
+            n_agents = prior.agents.len(),
+            "loaded persisted population — resuming evolution"
+        );
+        out
+    } else {
+        SystematicBuilder::new().house_roster().build()
+    };
     let llm_decider_factory: Box<dyn Fn() -> Box<dyn LlmDecider>> =
         match std::env::var("ANTHROPIC_API_KEY").ok() {
             Some(k) if !k.is_empty() => {
@@ -156,7 +183,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agents.iter().map(|a| a.id().to_string()).collect(),
     ));
     let mut swarm = Swarm::new(agents);
-    let scoreboard = Arc::new(Scoreboard::new());
     let pending: Arc<Mutex<HashMap<String, PendingOutcome>>> = Arc::new(Mutex::new(HashMap::new()));
     let consensus_stats = Arc::new(Mutex::new(ConsensusStats::default()));
     let cons_cfg = ConsensusCfg::default();
@@ -167,11 +193,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         chrono::Utc::now().timestamp() as u64,
     );
+    evolution.set_generation(starting_generation);
     let evolution_interval: usize = std::env::var("PYTHIA_EVOLVE_EVERY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(500); // ~every few hours at typical liq cadence
-    let generation_arc: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+    let generation_arc: Arc<Mutex<u64>> = Arc::new(Mutex::new(starting_generation));
 
     info!(
         ?mode, n_agents, initial_equity, %address,
@@ -265,11 +292,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     next_agents.iter().map(|a| a.id().to_string()).collect();
                 *agent_ids.lock() = new_ids;
                 *generation_arc.lock() = evolution.generation();
+                // Persist the new generation immediately so a crash mid-run
+                // doesn't lose this evolution step. Failure to write is
+                // logged but non-fatal — the live loop must keep trading.
+                let persisted = PersistedPopulation {
+                    saved_at: chrono::Utc::now().timestamp(),
+                    generation: evolution.generation(),
+                    n_events: event_counter as u64,
+                    agents: next_agents
+                        .iter()
+                        .filter_map(|a| {
+                            a.systematic_params().map(|params| PersistedAgent {
+                                id: a.id().to_string(),
+                                params,
+                                stats: scoreboard.stats(a.id()),
+                            })
+                        })
+                        .collect(),
+                };
+                if let Err(e) = persisted.save(&population_path) {
+                    warn!(?e, "failed to persist evolved population");
+                }
                 swarm = Swarm::new(next_agents);
                 info!(
                     generation = evolution.generation(),
                     population_cap = n_agents,
-                    "evolution: next generation spawned"
+                    "evolution: next generation spawned + persisted"
                 );
             }
         }
@@ -500,9 +548,17 @@ fn mark_expired(
             Direction::Short => -1.0,
         };
         let ret = dir_mult * (exit_px - p.entry_price) / p.entry_price;
-        // Normalise: 0.5 % move ≈ 1 R on a 1.5 × ATR stop at 1 %-daily vol.
-        let r = ret / 0.005;
-        let pnl = ret * 1_000.0 * (p.risk_fraction / 0.01);
+        // 1.5×ATR stop on a ~0.5% ATR market = 0.75% stop distance — that
+        // is the denominator that makes R-multiples comparable across the
+        // backtest and live paths. The previous 0.5% denominator inflated
+        // R by 1.5× and the previous PnL formula assumed unleveraged 1×
+        // sizing instead of the executor's risk_fraction × equity /
+        // stop_pct ≈ 1.33× notional, understating wins and losses by ~25%.
+        const STOP_PCT: f64 = 0.0075;
+        let r = ret / STOP_PCT;
+        let equity = 1_000.0_f64;
+        let notional = (equity * p.risk_fraction / STOP_PCT).min(equity * 3.0);
+        let pnl = ret * notional;
         scoreboard.mark_outcome(&p.decision_id, r, pnl);
     }
 }

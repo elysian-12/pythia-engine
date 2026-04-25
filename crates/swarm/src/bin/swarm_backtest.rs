@@ -9,22 +9,26 @@ use std::{collections::HashMap, path::PathBuf, time::Instant};
 
 use domain::{
     crypto::{Asset, Candle, FundingRate, LiqSide, Liquidation, OpenInterest},
-    signal::Direction,
+    ids::ConditionId,
+    signal::Signal,
     time::EventTs,
 };
+use paper_trader::{atr, simulate, Sizing, TraderConfig};
 use store::Store;
 use swarm::{
-    agent::Event,
+    agent::{AgentDecision, Event, SwarmAgent},
     consensus::{consensus, ConsensusCfg},
     evolution::{Evolution, EvolutionCfg},
     llm_agent::{LlmAgent, MockLlmDecider, Personality},
+    persistence::{PersistedAgent, PersistedPopulation},
     population::Swarm,
     scoring::Scoreboard,
-    systematic::SystematicBuilder,
+    systematic::{SystematicAgent, SystematicBuilder},
 };
 use tracing_subscriber::EnvFilter;
 
 const STARTING_EQUITY: f64 = 1_000.0;
+const ATR_WINDOW: usize = 14;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,10 +40,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(&db_path)?;
     let wall = Instant::now();
 
-    // Build the house roster: 20 systematic agents + 5 LLM personas.
-    // In backtest mode LLM personas use MockLlmDecider so everything
-    // is deterministic — the whole replay stays reproducible.
-    let mut agents = SystematicBuilder::new().house_roster().build();
+    // Population persistence — if a prior run wrote data/swarm-population.json
+    // we boot from that evolved roster and pre-load its lifetime stats into
+    // the scoreboard, so this run's evolution starts from where the last
+    // one left off. Without this, every restart would discard genetic
+    // search progress. Override path with PYTHIA_POPULATION env var.
+    let population_path = std::env::var("PYTHIA_POPULATION")
+        .unwrap_or_else(|_| "data/swarm-population.json".into());
+    let prior_population = PersistedPopulation::load(&population_path);
+    let starting_generation = prior_population.as_ref().map(|p| p.generation).unwrap_or(0);
+
+    // Build the house roster: 20 systematic agents + 5 LLM personas. If a
+    // persisted population exists, replace the systematic half with its
+    // surviving agents (LLM personas are always re-attached; their state
+    // lives in the LLM, not in serialised params).
+    let scoreboard = Scoreboard::new();
+    let mut agents: Vec<Box<dyn SwarmAgent>> = if let Some(prior) = &prior_population {
+        let mut out: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(prior.agents.len() + 5);
+        for a in &prior.agents {
+            // Pre-populate the scoreboard so champion / evolution have
+            // signal from event 1.
+            if let Some(stats) = &a.stats {
+                scoreboard.seed(a.id.clone(), stats.clone());
+            }
+            out.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
+        }
+        tracing::info!(
+            generation = prior.generation,
+            n_agents = prior.agents.len(),
+            "loaded persisted population — continuing prior evolution"
+        );
+        out
+    } else {
+        SystematicBuilder::new().house_roster().build()
+    };
     for p in Personality::roster() {
         agents.push(Box::new(LlmAgent::new(
             p,
@@ -48,7 +82,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let n_agents = agents.len();
     let mut swarm = Swarm::new(agents);
-    let scoreboard = Scoreboard::new();
     // Evolution: same configuration the live executor uses, so the backtest
     // measures the evolved population's PnL — not just the static seed roster.
     // PYTHIA_EVOLVE_EVERY controls the cadence (default: 500 events).
@@ -64,20 +97,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         0xDEADBEEF, // deterministic seed so the backtest is reproducible
     );
+    // Resume the generation counter from the prior run so logs + the
+    // snapshot's `generation` field reflect cumulative evolution, not
+    // just this single replay's deltas.
+    evolution.set_generation(starting_generation);
 
     // Load data.
     tracing::info!("loading 365d dataset");
     let btc = load_asset(&store, Asset::Btc)?;
     let eth = load_asset(&store, Asset::Eth)?;
 
+    // Build per-asset candle + funding lookups for the simulator before we
+    // consume the histories into the event stream.
+    let market_data = MarketData::from_histories(&btc, &eth);
+
     // Merge all events chronologically.
     let events = interleave(btc, eth);
     tracing::info!(n_agents, n_events = events.len(), "starting replay");
+    let trader = TraderConfig {
+        sizing: Sizing::AtrRisk {
+            risk_fraction: 0.01,
+            max_notional_mult: 3.0,
+        },
+        equity_usd: STARTING_EQUITY,
+        ..TraderConfig::default()
+    };
 
-    // For outcome marking we need forward BTC/ETH close prices.
-    let close_lookup = build_close_lookup_from_store(&store)?;
-
-    // Track pending decisions: decision_id -> (entry_price_est, asset, direction, horizon_s).
+    // Track pending decisions: decision_id -> PendingOutcome.
     let mut pending: HashMap<String, PendingOutcome> = HashMap::new();
 
     // Consensus stats while replaying.
@@ -89,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for event in &events {
         // Before broadcasting, close any pending decision whose horizon has expired.
         let ts_now = event.ts().0;
-        close_expired(&mut pending, ts_now, &close_lookup, &scoreboard);
+        close_expired(&mut pending, ts_now, &market_data, &trader, &scoreboard);
 
         swarm.current_champion = scoreboard
             .champion(cons_cfg.min_decisions_for_champion)
@@ -125,18 +171,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let decisions = swarm.broadcast(event).await;
         for d in &decisions {
             scoreboard.record(d.clone());
-            let entry = close_at_or_before(&close_lookup, d.asset, ts_now).unwrap_or(0.0);
             pending.insert(
                 d.id.clone(),
                 PendingOutcome {
-                    decision_id: d.id.clone(),
-                    agent_id: d.agent_id.clone(),
-                    entry_ts: ts_now,
-                    entry_price: entry,
+                    decision: d.clone(),
+                    fire_ts: ts_now,
                     exit_ts: ts_now + d.horizon_s,
-                    asset: d.asset,
-                    direction: d.direction,
-                    risk_fraction: d.risk_fraction,
                 },
             );
         }
@@ -144,24 +184,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Compute consensus decision at this event (stateless, no execution).
         if let Some(c) = consensus(&decisions, &scoreboard, &cons_cfg) {
             consensus_count += 1;
-            // Score the consensus decision against a 4-hour forward
-            // close — independent of the individual agents' outcomes.
-            let exit_ts = ts_now + 4 * 3600;
-            let exit_px = close_at_or_before(&close_lookup, c.asset, exit_ts).unwrap_or(0.0);
-            let entry_px = close_at_or_before(&close_lookup, c.asset, ts_now).unwrap_or(0.0);
-            if entry_px > 0.0 && exit_px > 0.0 {
-                let directional = match c.direction {
-                    Direction::Long => exit_px - entry_px,
-                    Direction::Short => entry_px - exit_px,
-                };
-                if directional > 0.0 {
+            // Score the consensus decision through the same simulator as
+            // individual decisions so consensus-vs-individual comparisons
+            // share the fee/funding/slippage assumptions.
+            let synthetic = AgentDecision {
+                id: format!("consensus-{}-{}", ts_now, consensus_count),
+                agent_id: "consensus".into(),
+                ts: EventTs::from_secs(ts_now),
+                asset: c.asset,
+                direction: c.direction,
+                conviction: 70,
+                risk_fraction: 0.01,
+                horizon_s: 4 * 3600,
+                rationale: "consensus".into(),
+            };
+            if let Some(trade) =
+                run_simulator(&synthetic, ts_now, &market_data, &trader)
+            {
+                if trade.pnl_usd.unwrap_or(0.0) > 0.0 {
                     consensus_wins += 1;
                 }
             }
         }
     }
     // Close any still-pending at the end of data.
-    close_expired(&mut pending, i64::MAX, &close_lookup, &scoreboard);
+    close_expired(&mut pending, i64::MAX, &market_data, &trader, &scoreboard);
 
     // Build a leaderboard for the *currently active* population only —
     // evolved generations accumulate retired agent IDs in the scoreboard,
@@ -278,24 +325,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_vec_pretty(&snapshot)?,
     )?;
     println!("snapshot: data/swarm-snapshot.json → /tournament will render this run");
+
+    // Persist the live systematic population + their lifetime stats so
+    // the next `swarm-backtest` (or `pythia-swarm-live`) run continues
+    // evolving from here instead of reseeding `house_roster()`. LLM
+    // personas are stateless and re-attached on boot — only systematic
+    // params + scores need to round-trip.
+    let persisted = PersistedPopulation {
+        saved_at: ts,
+        generation: evolution.generation(),
+        n_events: events.len() as u64,
+        agents: swarm
+            .agents()
+            .filter_map(|a| {
+                a.systematic_params().map(|params| PersistedAgent {
+                    id: a.id().to_string(),
+                    params,
+                    stats: scoreboard.stats(a.id()),
+                })
+            })
+            .collect(),
+    };
+    let pop_path = data_dir.join("swarm-population.json");
+    if let Err(e) = persisted.save(&pop_path) {
+        tracing::warn!(?e, "failed to persist population — next run will reseed");
+    } else {
+        println!(
+            "population: {} (gen {}, {} agents) → next run resumes evolution",
+            pop_path.display(),
+            persisted.generation,
+            persisted.agents.len(),
+        );
+    }
     Ok(())
 }
 
 struct PendingOutcome {
-    decision_id: String,
-    agent_id: String,
-    entry_ts: i64,
-    entry_price: f64,
+    decision: AgentDecision,
+    fire_ts: i64,
     exit_ts: i64,
-    asset: Asset,
-    direction: Direction,
-    risk_fraction: f64,
+}
+
+/// Run a single decision through paper_trader::simulate using the asset's
+/// chronological forward candles + funding. Returns None if there isn't
+/// enough lookback to compute ATR or no forward data exists.
+fn run_simulator(
+    d: &AgentDecision,
+    fire_ts: i64,
+    market: &MarketData,
+    trader: &TraderConfig,
+) -> Option<domain::signal::Trade> {
+    let candles = market.candles.get(&d.asset)?;
+    let funding = market.funding.get(&d.asset)?;
+
+    // ATR uses the candles strictly before the fire timestamp — no peek.
+    let pre: Vec<Candle> = candles
+        .iter()
+        .filter(|c| c.ts.0 < fire_ts)
+        .cloned()
+        .collect();
+    let entry_atr = atr(&pre, ATR_WINDOW)?;
+
+    // Forward window: candles + funding from fire_ts through fire_ts+horizon.
+    let horizon_end = fire_ts + d.horizon_s;
+    let fwd_candles: Vec<Candle> = candles
+        .iter()
+        .filter(|c| c.ts.0 >= fire_ts && c.ts.0 <= horizon_end)
+        .cloned()
+        .collect();
+    if fwd_candles.is_empty() {
+        return None;
+    }
+    let fwd_funding: Vec<FundingRate> = funding
+        .iter()
+        .filter(|f| f.ts.0 >= fire_ts && f.ts.0 <= horizon_end)
+        .cloned()
+        .collect();
+
+    // Build a Signal with the structural fields the simulator reads. The
+    // PolyEdge-specific fields (swp/edge/granger_f/etc) are not used by
+    // simulate(); we fill them with neutral values.
+    let signal = Signal {
+        id: d.id.clone(),
+        ts: EventTs::from_secs(fire_ts),
+        condition_id: ConditionId("swarm".into()),
+        market_name: format!("{:?}-{}", d.asset, d.agent_id),
+        asset: d.asset,
+        direction: d.direction,
+        swp: 0.5,
+        mid: 0.5,
+        edge: 0.0,
+        is_pm: 0.0,
+        granger_f: 0.0,
+        gini: 0.0,
+        conviction: d.conviction,
+        horizon_s: d.horizon_s,
+    };
+    simulate(&signal, &fwd_candles, &fwd_funding, entry_atr, trader)
 }
 
 fn close_expired(
     pending: &mut HashMap<String, PendingOutcome>,
     now: i64,
-    lookup: &CloseLookup,
+    market: &MarketData,
+    trader: &TraderConfig,
     scoreboard: &Scoreboard,
 ) {
     let expired: Vec<String> = pending
@@ -307,44 +440,37 @@ fn close_expired(
         let Some(p) = pending.remove(&id) else {
             continue;
         };
-        let exit_px = close_at_or_before(lookup, p.asset, p.exit_ts).unwrap_or(0.0);
-        if p.entry_price <= 0.0 || exit_px <= 0.0 {
+        let Some(trade) = run_simulator(&p.decision, p.fire_ts, market, trader) else {
             continue;
-        }
-        let dir_mult = if matches!(p.direction, Direction::Long) { 1.0 } else { -1.0 };
-        let ret = dir_mult * (exit_px - p.entry_price) / p.entry_price;
-        // 0.5 % move ≈ 1 R on a 1.5 × ATR stop in a 1 % daily-vol market.
-        let r = ret / 0.005;
-        let pnl = ret * STARTING_EQUITY * (p.risk_fraction / 0.01);
-        scoreboard.mark_outcome(&p.decision_id, r, pnl);
-        let _ = p.agent_id;
-        let _ = p.entry_ts;
+        };
+        let r = trade.r_multiple.unwrap_or(0.0);
+        let pnl = trade.pnl_usd.unwrap_or(0.0);
+        scoreboard.mark_outcome(&p.decision.id, r, pnl);
     }
 }
 
-type CloseLookup = HashMap<(Asset, i64), f64>;
-
-fn build_close_lookup_from_store(store: &Store) -> Result<CloseLookup, Box<dyn std::error::Error>> {
-    let mut out = HashMap::new();
-    for asset in [Asset::Btc, Asset::Eth] {
-        let candles = store.candles_asc(asset, 9000)?;
-        for c in candles {
-            out.insert((asset, c.ts.0), c.close);
-        }
-    }
-    Ok(out)
+/// Per-asset chronological candles + funding, indexed by Asset for cheap
+/// forward-window slicing. Cloned out of the AssetHistory bundles loaded at
+/// startup so the simulator can run on any decision without re-querying.
+struct MarketData {
+    candles: HashMap<Asset, Vec<Candle>>,
+    funding: HashMap<Asset, Vec<FundingRate>>,
 }
 
-fn close_at_or_before(lookup: &CloseLookup, asset: Asset, ts: i64) -> Option<f64> {
-    // Snap `ts` to the 1 h bucket floor and walk backwards up to 48 h.
-    let mut t = (ts / 3600) * 3600;
-    for _ in 0..48 {
-        if let Some(v) = lookup.get(&(asset, t)) {
-            return Some(*v);
+impl MarketData {
+    fn from_histories(btc: &AssetHistory, eth: &AssetHistory) -> Self {
+        let mut candles: HashMap<Asset, Vec<Candle>> = HashMap::new();
+        let mut funding: HashMap<Asset, Vec<FundingRate>> = HashMap::new();
+        for (asset, h) in [(Asset::Btc, btc), (Asset::Eth, eth)] {
+            let mut cs = h.candles.clone();
+            cs.sort_by_key(|c| c.ts.0);
+            candles.insert(asset, cs);
+            let mut fs = h.funding.clone();
+            fs.sort_by_key(|f| f.ts.0);
+            funding.insert(asset, fs);
         }
-        t -= 3600;
+        Self { candles, funding }
     }
-    None
 }
 
 fn interleave(btc: AssetHistory, eth: AssetHistory) -> Vec<Event> {

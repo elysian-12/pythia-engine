@@ -14,9 +14,35 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
             <tr>
               <th className="text-left py-2 pr-2">#</th>
               <th className="text-left py-2 pr-2">Agent</th>
-              <th className="text-right py-2 pr-2">Trades</th>
+              <th className="text-right py-2 pr-2" title="Total closed trades">
+                Trades
+              </th>
               <th className="text-right py-2 pr-2">Win %</th>
-              <th className="text-right py-2 pr-2">Σ R</th>
+              <th className="text-right py-2 pr-2" title="Σ R-multiple">Σ R</th>
+              <th
+                className="text-right py-2 pr-2"
+                title="Average R per trade (Van Tharp expectancy)"
+              >
+                E[R]
+              </th>
+              <th
+                className="text-right py-2 pr-2"
+                title="Profit factor = gross win R / gross loss R"
+              >
+                PF
+              </th>
+              <th
+                className="text-right py-2 pr-2"
+                title="Sharpe of per-trade R-multiples"
+              >
+                Sharpe
+              </th>
+              <th
+                className="text-right py-2 pr-2"
+                title="Max drawdown in cumulative R"
+              >
+                Max DD
+              </th>
               <th className="text-right py-2">PnL $</th>
             </tr>
           </thead>
@@ -59,6 +85,56 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                   <td className={`py-1.5 pr-2 text-right ${rClass}`}>
                     {a.total_r >= 0 ? "+" : ""}
                     {a.total_r.toFixed(2)}
+                  </td>
+                  <td
+                    className={`py-1.5 pr-2 text-right ${
+                      (a.expectancy_r ?? 0) > 0
+                        ? "text-green"
+                        : (a.expectancy_r ?? 0) < 0
+                          ? "text-red"
+                          : "text-mist"
+                    }`}
+                  >
+                    {a.expectancy_r !== undefined
+                      ? (a.expectancy_r >= 0 ? "+" : "") + a.expectancy_r.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td
+                    className={`py-1.5 pr-2 text-right ${
+                      (a.profit_factor ?? 0) >= 1.5
+                        ? "text-green"
+                        : (a.profit_factor ?? 0) >= 1.0
+                          ? "text-amber"
+                          : (a.profit_factor ?? 0) > 0
+                            ? "text-red"
+                            : "text-mist"
+                    }`}
+                  >
+                    {a.profit_factor !== undefined && Number.isFinite(a.profit_factor)
+                      ? a.profit_factor.toFixed(2)
+                      : a.profit_factor === undefined
+                        ? "—"
+                        : "∞"}
+                  </td>
+                  <td
+                    className={`py-1.5 pr-2 text-right ${
+                      a.rolling_sharpe > 0.5
+                        ? "text-green"
+                        : a.rolling_sharpe > 0
+                          ? "text-amber"
+                          : a.rolling_sharpe < 0
+                            ? "text-red"
+                            : "text-mist"
+                    }`}
+                  >
+                    {(a.wins + a.losses) > 1
+                      ? a.rolling_sharpe.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right text-mist">
+                    {a.max_drawdown_r !== undefined
+                      ? `-${a.max_drawdown_r.toFixed(2)}`
+                      : "—"}
                   </td>
                   <td className={`py-1.5 text-right ${rClass}`}>
                     {a.total_pnl_usd >= 0 ? "+" : ""}

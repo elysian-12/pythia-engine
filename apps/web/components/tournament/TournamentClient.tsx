@@ -448,7 +448,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               <div className="mt-1 text-lg font-mono text-slate-100">
                 {champ.agent_id}
               </div>
-              <div className="flex gap-4 text-xs mt-2 num">
+              <div className="grid grid-cols-3 gap-x-5 gap-y-1 text-xs mt-2 num">
                 <span>
                   <span className="text-mist">Σ R</span>{" "}
                   <span
@@ -465,6 +465,48 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 <span>
                   <span className="text-mist">Trades</span>{" "}
                   {champ.wins + champ.losses}
+                </span>
+                <span title="Average R per trade">
+                  <span className="text-mist">E[R]</span>{" "}
+                  <span
+                    className={
+                      (champ.expectancy_r ?? 0) >= 0 ? "text-green" : "text-red"
+                    }
+                  >
+                    {champ.expectancy_r !== undefined
+                      ? (champ.expectancy_r >= 0 ? "+" : "") + champ.expectancy_r.toFixed(2)
+                      : "—"}
+                  </span>
+                </span>
+                <span title="Profit factor — gross win R / gross loss R">
+                  <span className="text-mist">PF</span>{" "}
+                  <span
+                    className={
+                      (champ.profit_factor ?? 0) >= 1.5
+                        ? "text-green"
+                        : (champ.profit_factor ?? 0) >= 1
+                          ? "text-amber"
+                          : "text-red"
+                    }
+                  >
+                    {champ.profit_factor !== undefined && Number.isFinite(champ.profit_factor)
+                      ? champ.profit_factor.toFixed(2)
+                      : "—"}
+                  </span>
+                </span>
+                <span title="Sharpe of per-trade R">
+                  <span className="text-mist">Sharpe</span>{" "}
+                  <span
+                    className={
+                      champ.rolling_sharpe > 0.5
+                        ? "text-green"
+                        : champ.rolling_sharpe > 0
+                          ? "text-amber"
+                          : "text-red"
+                    }
+                  >
+                    {champ.rolling_sharpe.toFixed(2)}
+                  </span>
                 </span>
               </div>
             </div>

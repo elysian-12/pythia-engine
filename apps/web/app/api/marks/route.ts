@@ -17,27 +17,41 @@ async function lastClose(key: string, rawSymbol: string): Promise<number | null>
   url.searchParams.set("interval", "HOUR");
   url.searchParams.set("from", String(from));
   url.searchParams.set("period", "7200");
-  try {
-    const res = await fetch(url, {
-      headers: { "X-Kiyotaka-Key": key },
-      cache: "no-store",
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      series?: Array<{ points?: Array<{ Point?: { close?: number } }> }>;
-    };
-    const pts = data.series?.[0]?.points ?? [];
-    const last = pts[pts.length - 1]?.Point?.close;
-    // Treat 0 / negative / non-finite as missing — empty in-progress hours
-    // can return 0, and sizing math (notional = risk * px / stop) divides
-    // by stop_dist which is proportional to price; a zero would NaN out.
-    return typeof last === "number" && Number.isFinite(last) && last > 0
-      ? last
-      : null;
-  } catch {
-    return null;
+
+  // Retry up to twice on 429 / 5xx / abort. Marks are polled every ~6s so
+  // a transient 503 should not zero out the displayed PnL.
+  const attempts = 3;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: { "X-Kiyotaka-Key": key, "User-Agent": "pythia-web" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          series?: Array<{ points?: Array<{ Point?: { close?: number } }> }>;
+        };
+        const pts = data.series?.[0]?.points ?? [];
+        const last = pts[pts.length - 1]?.Point?.close;
+        // Treat 0 / negative / non-finite as missing — empty in-progress
+        // hours can return 0 and sizing math would NaN out.
+        return typeof last === "number" && Number.isFinite(last) && last > 0
+          ? last
+          : null;
+      }
+      // Non-retryable client errors → give up immediately.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        return null;
+      }
+    } catch {
+      // network/timeout — fall through to backoff
+    }
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, 200 * Math.pow(3, i)));
+    }
   }
+  return null;
 }
 
 export async function GET() {

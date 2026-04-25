@@ -74,6 +74,12 @@ impl Evolution {
         self.generation
     }
 
+    /// Resume the generation counter from a persisted run so logs and the
+    /// UI's `Gen N` indicator reflect cumulative evolution across restarts.
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
     /// Produce the next generation from `current` agents + the `scoreboard`.
     /// Returns a fresh Vec of agents, sized at `population_cap`.
     ///

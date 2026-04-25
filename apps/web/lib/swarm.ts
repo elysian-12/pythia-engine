@@ -9,6 +9,13 @@ export type AgentStats = {
   win_rate: number;
   last_r: number;
   active: boolean;
+  // Quant-grade per-trade metrics — populated by the Rust scoreboard.
+  // All are optional because older bundled snapshots lacked them.
+  gross_win_r?: number;
+  gross_loss_r?: number;
+  expectancy_r?: number;
+  profit_factor?: number;
+  max_drawdown_r?: number;
 };
 
 export type RegimeInfo = {

@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::agent::AgentDecision;
 
 /// Metrics per agent, rolled up since swarm start.
+///
+/// All risk-adjusted metrics are computed from the agent's per-trade R
+/// stream. We store running moments (sum, sum-of-squares, gross win/loss,
+/// peak-to-trough drawdown) instead of the full history so memory stays
+/// O(1) per agent across hundreds of generations.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AgentStats {
     pub agent_id: String,
@@ -20,10 +25,36 @@ pub struct AgentStats {
     pub losses: usize,
     pub total_r: f64,
     pub total_pnl_usd: f64,
+    /// Sharpe ratio of per-trade R, sample-stdev based.
     pub rolling_sharpe: f64,
     pub win_rate: f64,
     pub last_r: f64,
     pub active: bool,
+    /// Σ R for winning trades only — numerator of profit factor.
+    #[serde(default)]
+    pub gross_win_r: f64,
+    /// Σ |R| for losing trades only — denominator of profit factor.
+    #[serde(default)]
+    pub gross_loss_r: f64,
+    /// Average R per trade (total_r / total_closed). Van Tharp's expectancy.
+    #[serde(default)]
+    pub expectancy_r: f64,
+    /// Profit factor = gross_win_r / gross_loss_r. >1 means net profitable.
+    #[serde(default)]
+    pub profit_factor: f64,
+    /// Worst peak-to-trough drawdown of cumulative R, in R units.
+    #[serde(default)]
+    pub max_drawdown_r: f64,
+    /// Cumulative-R high-water mark seen so far. Internal — used to
+    /// compute the running drawdown without iterating history.
+    #[serde(default)]
+    pub peak_cum_r: f64,
+    /// Sum of per-trade R^2 — the second moment used for the Sharpe stdev.
+    #[serde(default)]
+    pub sum_r_squared: f64,
+    /// Sortino-style downside deviation accumulator (Σ min(R,0)^2).
+    #[serde(default)]
+    pub sum_downside_r_squared: f64,
 }
 
 #[derive(Debug)]
@@ -64,6 +95,7 @@ impl Scoreboard {
     }
 
     /// Mark a decision as closed with a realised R-multiple + PnL.
+    /// Updates all running risk metrics in O(1) — no per-trade history kept.
     pub fn mark_outcome(&self, decision_id: &str, r_multiple: f64, pnl_usd: f64) {
         let mut g = self.inner.lock();
         let Some((d, _returns)) = g.pending.remove(decision_id) else {
@@ -76,32 +108,67 @@ impl Scoreboard {
         s.last_r = r_multiple;
         s.total_r += r_multiple;
         s.total_pnl_usd += pnl_usd;
+        s.sum_r_squared += r_multiple * r_multiple;
         if r_multiple > 0.0 {
             s.wins += 1;
+            s.gross_win_r += r_multiple;
         } else if r_multiple < 0.0 {
             s.losses += 1;
+            s.gross_loss_r += -r_multiple;
+            s.sum_downside_r_squared += r_multiple * r_multiple;
         }
+
         let decided = s.wins + s.losses;
         s.win_rate = if decided > 0 {
             s.wins as f64 / decided as f64
         } else {
             0.0
         };
-        // Rolling Sharpe is the sample-ratio on realised R-multiples.
-        let decisions = s.wins + s.losses;
-        if decisions > 1 {
-            s.rolling_sharpe = {
-                // We don't store the full distribution; approximate via the
-                // expectancy / sqrt(variance-proxy). Good enough for ranking.
-                let mean = s.total_r / decisions as f64;
-                let proxy_sd = (1.0 + mean.abs()).max(0.5);
-                mean / proxy_sd
-            };
+        s.expectancy_r = if decided > 0 {
+            s.total_r / decided as f64
+        } else {
+            0.0
+        };
+        s.profit_factor = if s.gross_loss_r > 1e-9 {
+            s.gross_win_r / s.gross_loss_r
+        } else if s.gross_win_r > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+
+        // Cumulative-R drawdown: track running peak, take max of (peak - current).
+        if s.total_r > s.peak_cum_r {
+            s.peak_cum_r = s.total_r;
+        }
+        let dd = s.peak_cum_r - s.total_r;
+        if dd > s.max_drawdown_r {
+            s.max_drawdown_r = dd;
+        }
+
+        // Sharpe over per-trade R: mean / sample-stdev. Proper formula.
+        if decided > 1 {
+            let n = decided as f64;
+            let mean = s.total_r / n;
+            let var = (s.sum_r_squared - n * mean * mean).max(0.0) / (n - 1.0);
+            let sd = var.sqrt().max(1e-9);
+            s.rolling_sharpe = mean / sd;
         }
     }
 
     pub fn stats(&self, agent_id: &str) -> Option<AgentStats> {
         self.inner.lock().stats.get(agent_id).cloned()
+    }
+
+    /// Pre-populate the scoreboard with a prior run's stats. Used when
+    /// resuming from a persisted population so the new run does not start
+    /// every agent at zero — evolution gets selection signal immediately
+    /// instead of having to re-discover the elite from scratch.
+    pub fn seed(&self, agent_id: String, mut stats: AgentStats) {
+        let mut g = self.inner.lock();
+        stats.agent_id = agent_id.clone();
+        stats.active = true;
+        g.stats.insert(agent_id, stats);
     }
 
     pub fn all(&self) -> Vec<AgentStats> {

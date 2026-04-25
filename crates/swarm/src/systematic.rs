@@ -17,12 +17,13 @@ use domain::{
     signal::Direction,
     time::EventTs,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentDecision, AgentKind, AgentProfile, Event, PeerView, SwarmAgent};
 
 /// The family of rule each systematic agent belongs to. Determines
 /// which inputs it consumes.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleFamily {
     /// Fires on rolling-z of hourly net liquidation.
     LiqZScore { trend_follow: bool },
@@ -32,7 +33,7 @@ pub enum RuleFamily {
     VolBreakout,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SystematicParams {
     pub family: RuleFamily,
     pub z_threshold: f64,

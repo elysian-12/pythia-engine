@@ -9,6 +9,7 @@ type SignalsResponse = {
   prices?: { BTC?: number | null; ETH?: number | null };
   events: SimEvent[];
   reason?: string;
+  partial?: { btc: string | null; eth: string | null } | null;
 };
 
 type Status = "idle" | "running" | "error";
@@ -64,7 +65,16 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         setStatus("error");
         return;
       }
-      setErr(null);
+      // Partial outage on one asset is degraded but not broken — show
+      // the warning, keep running on the asset that is still up.
+      if (data.partial) {
+        const parts: string[] = [];
+        if (data.partial.btc) parts.push(`BTC ${data.partial.btc}`);
+        if (data.partial.eth) parts.push(`ETH ${data.partial.eth}`);
+        setErr(parts.length ? `partial: ${parts.join(", ")}` : null);
+      } else {
+        setErr(null);
+      }
       setStatus("running");
       if (data.prices && onPricesRef.current) {
         onPricesRef.current({
