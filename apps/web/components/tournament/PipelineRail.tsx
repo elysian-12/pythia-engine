@@ -123,16 +123,17 @@ export function PipelineRail({
       </div>
 
       <p className="mt-3 text-[0.65rem] text-mist leading-relaxed">
-        <span className="text-slate-200">How to read this rail:</span> a
-        market shock arrives from Kiyotaka on the left — a forced
-        liquidation, a funding-rate spike, a Donchian breakout, or a
-        Polymarket prediction price that moves before spot does — and
-        sweeps right through every stage of the loop. The 27 agents vote,
-        the leaderboard picks the specialist, Hyperliquid opens a paper
-        position, and when that trade closes its realized R flows back
-        into the scoreboard. Every N events the weakest agents are
-        replaced by mutated copies of the best — so the next tick lands
-        on a slightly smarter swarm than the last one.
+        <span className="text-slate-200">How to read this:</span>{" "}
+        something interesting happens in the market — someone gets
+        liquidated, funding rates spike, price breaks its recent range,
+        or a Polymarket prediction moves before spot does. Kiyotaka
+        delivers the tick, the 27 agents each vote on it, the
+        leaderboard picks the specialist for this kind of event, a
+        paper position opens on Hyperliquid, and when that trade closes
+        its win or loss is added back to the scoreboard. Every batch of
+        events the worst-performing agents are replaced by tweaked
+        copies of the best — so the next tick lands on a slightly
+        smarter swarm than the last one.
       </p>
     </div>
   );
