@@ -41,7 +41,7 @@ use domain::{
 use exchange_hyperliquid::{
     HyperliquidClient, OrderRequest, OrderSide, PrivateKeySigner, Signer, Tif,
 };
-use kiyotaka_client::binance_ws::spawn_binance_liq;
+use kiyotaka_client::binance_ws::{spawn_binance_klines, spawn_binance_liq};
 use kiyotaka_client::ws::LiveEvent;
 use live_executor::{RiskCfg, RiskGuard};
 use parking_lot::Mutex;
@@ -152,6 +152,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(stats) = &a.stats {
                 scoreboard.seed(a.id.clone(), stats.clone());
             }
+            if !a.r_history.is_empty() {
+                scoreboard.seed_r_history(a.id.clone(), a.r_history.clone());
+            }
             out.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
         }
         info!(
@@ -205,35 +208,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "pythia-swarm-live starting"
     );
 
-    // Spawn Binance WS → unified event stream.
+    // Spawn Binance WS streams: liquidations + hourly klines. The kline
+    // stream is essential for vol-breakout agents (no candles → no fires)
+    // and for the regime classifier (no candles → no regime).
     let symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
-    let mut rx = spawn_binance_liq(symbols);
+    let mut rx_liq = spawn_binance_liq(symbols.clone());
+    let mut rx_klines = spawn_binance_klines(symbols, "1h");
+
+    // Rolling BTC candle buffer used for live regime classification.
+    let regime_btc_candles: Arc<Mutex<Vec<domain::crypto::Candle>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(256)));
+    let regime_snap: Arc<Mutex<Option<regime::RegimeSnapshot>>> = Arc::new(Mutex::new(None));
 
     // Internal channel between ingest and swarm handler — keeps the WS
     // receiver responsive even if the swarm briefly blocks on outbound
     // HL REST calls.
     let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmEvent>(1024);
 
-    // Ingest task.
-    tokio::spawn(async move {
-        let mut last_hour: i64 = 0;
-        while let Some(ev) = rx.recv().await {
-            if let Some(e) = into_swarm_event(ev) {
-                // Emit HourClose whenever the hour rolls over — lets
-                // agents finalise their local aggregators.
-                let h = e.ts().0 / 3600;
-                if last_hour != 0 && h > last_hour {
-                    let _ = swarm_tx
-                        .send(SwarmEvent::HourClose {
-                            ts: EventTs::from_secs(h * 3600),
-                        })
-                        .await;
+    // Liquidation ingest task.
+    {
+        let swarm_tx = swarm_tx.clone();
+        tokio::spawn(async move {
+            let mut last_hour: i64 = 0;
+            while let Some(ev) = rx_liq.recv().await {
+                if let Some(e) = into_swarm_event(ev) {
+                    // Emit HourClose whenever the hour rolls over — lets
+                    // agents finalise their local aggregators.
+                    let h = e.ts().0 / 3600;
+                    if last_hour != 0 && h > last_hour {
+                        let _ = swarm_tx
+                            .send(SwarmEvent::HourClose {
+                                ts: EventTs::from_secs(h * 3600),
+                            })
+                            .await;
+                    }
+                    last_hour = h;
+                    let _ = swarm_tx.send(e).await;
                 }
-                last_hour = h;
-                let _ = swarm_tx.send(e).await;
             }
-        }
-    });
+        });
+    }
+
+    // Kline ingest task — also feeds the regime buffer.
+    {
+        let swarm_tx = swarm_tx.clone();
+        let buf = regime_btc_candles.clone();
+        let snap = regime_snap.clone();
+        let regime_cfg = regime::RegimeCfg::default();
+        tokio::spawn(async move {
+            while let Some(ev) = rx_klines.recv().await {
+                // Push BTC candles into the regime buffer + reclassify
+                // each new bar. Capped at window+128 so memory stays flat.
+                if let LiveEvent::Candle {
+                    ts,
+                    ref symbol,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                } = ev
+                {
+                    if symbol == "BTCUSDT" {
+                        let c = domain::crypto::Candle {
+                            ts,
+                            open,
+                            high,
+                            low,
+                            close,
+                            volume,
+                        };
+                        let mut g = buf.lock();
+                        g.push(c);
+                        let cap = regime_cfg.window + 128;
+                        if g.len() > cap {
+                            let drop_n = g.len() - cap;
+                            g.drain(..drop_n);
+                        }
+                        if let Some(s) = regime::classify(&g, &regime_cfg) {
+                            *snap.lock() = Some(s);
+                        }
+                    }
+                }
+                if let Some(e) = into_swarm_event(ev) {
+                    let _ = swarm_tx.send(e).await;
+                }
+            }
+        });
+    }
 
     // Periodic ticker that resolves expired pending decisions + writes
     // the snapshot JSON for the UI. Does not need the `Swarm` — only the
@@ -306,6 +368,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 id: a.id().to_string(),
                                 params,
                                 stats: scoreboard.stats(a.id()),
+                                r_history: scoreboard.r_history(a.id()),
                             })
                         })
                         .collect(),
@@ -327,6 +390,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .champion(cons_cfg.min_decisions_for_champion)
             .map(|c| c.agent_id);
         swarm.current_champion = champion_id.clone();
+        // Forward the latest regime so SystematicAgent.regime_fitness can
+        // gate + scale risk (parity with swarm-backtest).
+        swarm.current_regime = *regime_snap.lock();
 
         let decisions = swarm.broadcast(&event).await;
 
@@ -504,7 +570,37 @@ fn into_swarm_event(ev: LiveEvent) -> Option<SwarmEvent> {
                 usd_value,
             })
         }
-        LiveEvent::Funding { .. } | LiveEvent::Candle { .. } => None,
+        LiveEvent::Candle {
+            ts,
+            symbol,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        } => {
+            let asset = match symbol.as_str() {
+                "BTCUSDT" => Asset::Btc,
+                "ETHUSDT" => Asset::Eth,
+                _ => return None,
+            };
+            Some(SwarmEvent::Candle {
+                ts,
+                asset,
+                candle: domain::crypto::Candle {
+                    ts,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                },
+            })
+        }
+        // Funding rates are not on the public WS — they require REST polling
+        // every ~5 min. Out of scope for this binary; funding-arb / funding-
+        // trend agents will run zero-fired in live until that loop is added.
+        LiveEvent::Funding { .. } => None,
     }
 }
 

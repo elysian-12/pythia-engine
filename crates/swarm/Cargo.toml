@@ -8,17 +8,12 @@ publish.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
-strategy = { path = "../strategy" }
 paper-trader = { path = "../paper-trader" }
-backtest = { path = "../backtest" }
-reports = { path = "../reports" }
 store = { path = "../store" }
 regime = { path = "../regime" }
 evaluation = { path = "../evaluation" }
-econometrics = { path = "../econometrics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
@@ -30,6 +25,9 @@ reqwest = { workspace = true }
 [[bin]]
 name = "swarm-backtest"
 path = "src/bin/swarm_backtest.rs"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

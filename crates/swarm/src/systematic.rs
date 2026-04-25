@@ -625,4 +625,99 @@ mod tests {
 
     #[allow(dead_code)]
     fn _kinds_compile(_: FundingRate) {}
+
+    fn snap(label: regime::Regime, dir: f64, vol: f64) -> regime::RegimeSnapshot {
+        regime::RegimeSnapshot {
+            regime: label,
+            directional: dir,
+            vol_ratio: vol,
+        }
+    }
+
+    #[test]
+    fn regime_fitness_table_matches_doctrine() {
+        // Trend-followers thrive in trends and breakouts, die in chop.
+        let liq_trend = SystematicAgent::new("liq-t", SystematicParams::liq_trend());
+        assert_eq!(liq_trend.regime_fitness(Some(snap(regime::Regime::Trending, 0.8, 1.0))), 1.0);
+        assert_eq!(liq_trend.regime_fitness(Some(snap(regime::Regime::Ranging, 0.1, 1.0))), 0.3);
+        assert_eq!(liq_trend.regime_fitness(Some(snap(regime::Regime::Chaotic, 0.4, 2.0))), 0.5);
+
+        // Mean-reverters mirror.
+        let liq_fade = SystematicAgent::new("liq-f", SystematicParams::liq_fade());
+        assert_eq!(liq_fade.regime_fitness(Some(snap(regime::Regime::Trending, 0.8, 1.0))), 0.3);
+        assert_eq!(liq_fade.regime_fitness(Some(snap(regime::Regime::Ranging, 0.1, 1.0))), 1.0);
+
+        // Null regime → full size (no signal yet).
+        assert_eq!(liq_trend.regime_fitness(None), 1.0);
+    }
+
+    #[tokio::test]
+    async fn regime_gate_skips_hostile_regime_trades() {
+        // A liq-fade agent sees a clean fade signal, but the regime is
+        // strongly trending — fitness=0.3, which is the gate boundary.
+        // Decision should still go through (>= 0.3) but at scaled risk.
+        let mut a = SystematicAgent::new(
+            "fade",
+            SystematicParams {
+                z_threshold: 2.0,
+                z_window: 24,
+                cooldown_bars: 1,
+                ..SystematicParams::liq_fade()
+            },
+        );
+        let peers_trending = PeerView {
+            regime: Some(snap(regime::Regime::Trending, 0.85, 1.0)),
+            ..PeerView::default()
+        };
+
+        // Drive a spike pattern.
+        let mut ts = 0i64;
+        for _ in 0..30 {
+            let _ = a
+                .observe(
+                    &Event::Liquidation {
+                        ts: EventTs::from_secs(ts),
+                        asset: Asset::Btc,
+                        side: LiqSide::Buy,
+                        usd_value: 1_000.0,
+                    },
+                    &peers_trending,
+                )
+                .await;
+            ts += 3600;
+        }
+        let d = a
+            .observe(
+                &Event::Liquidation {
+                    ts: EventTs::from_secs(ts),
+                    asset: Asset::Btc,
+                    side: LiqSide::Buy,
+                    usd_value: 80_000.0,
+                },
+                &peers_trending,
+            )
+            .await;
+        ts += 3600;
+        let d2 = a
+            .observe(
+                &Event::Liquidation {
+                    ts: EventTs::from_secs(ts),
+                    asset: Asset::Btc,
+                    side: LiqSide::Buy,
+                    usd_value: 100.0,
+                },
+                &peers_trending,
+            )
+            .await;
+        let fired = d.or(d2);
+        // fitness=0.3 for fade in trending; we fire but at 30% risk.
+        if let Some(decision) = fired {
+            assert!(
+                (decision.risk_fraction - 0.003).abs() < 1e-6,
+                "expected scaled risk_fraction ~0.003, got {}",
+                decision.risk_fraction,
+            );
+            assert!(decision.rationale.contains("trending"));
+        }
+    }
 }

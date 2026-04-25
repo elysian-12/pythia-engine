@@ -316,7 +316,7 @@ export function TournamentClient() {
 
   const reactions = useMemo(() => {
     if (!snap || !lastEvent) return [];
-    return simulateReactions(lastEvent, snap.agents);
+    return simulateReactions(lastEvent, snap.agents, snap.regime);
   }, [snap, lastEvent]);
 
   const handleClosePosition = useCallback((id: string) => {
@@ -350,7 +350,7 @@ export function TournamentClient() {
   const onFire = useCallback((ev: SimEvent) => {
     const currentSnap = snapRef.current;
     if (!currentSnap) return;
-    const rxs = simulateReactions(ev, currentSnap.agents);
+    const rxs = simulateReactions(ev, currentSnap.agents, currentSnap.regime);
     const championId = currentSnap.champion?.agent_id ?? null;
     const entry: FeedEntry = {
       id: ev.id,

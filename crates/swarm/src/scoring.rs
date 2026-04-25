@@ -197,6 +197,15 @@ impl Scoreboard {
         g.stats.insert(agent_id, stats);
     }
 
+    /// Seed an agent's per-trade R history from a persisted run so the
+    /// evaluation crate's significance tests have a sample population
+    /// from event 1 (otherwise PSR/DSR see only the new run's trades).
+    pub fn seed_r_history(&self, agent_id: String, history: Vec<f64>) {
+        let mut g = self.inner.lock();
+        let buf: std::collections::VecDeque<f64> = history.into_iter().collect();
+        g.r_history.insert(agent_id, buf);
+    }
+
     pub fn all(&self) -> Vec<AgentStats> {
         self.inner.lock().stats.values().cloned().collect()
     }

@@ -121,6 +121,137 @@ pub enum BinanceWsError {
     Recv(tokio_tungstenite::tungstenite::Error),
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Hourly kline stream
+//
+// The Binance Futures `<symbol>@kline_1h` stream emits per-second updates of
+// the in-progress candle, with `k.x = true` exactly once when the candle
+// finalises. Live agents consume only the closed candles (vol-breakout,
+// regime classifier) — partial candles would create look-ahead noise and
+// would inflate firing-rates artificially since the close keeps drifting.
+//
+// One spawn per asset, multiplexed onto the same LiveEvent::Candle channel
+// the rest of the system already understands.
+// ─────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct KlineMsg {
+    #[serde(rename = "E")]
+    _event_time: i64,
+    #[serde(rename = "s")]
+    symbol: String,
+    #[serde(rename = "k")]
+    kline: Kline,
+}
+
+#[derive(Debug, Deserialize)]
+struct Kline {
+    #[serde(rename = "t")]
+    open_ts_ms: i64,
+    #[serde(rename = "o")]
+    open: String,
+    #[serde(rename = "h")]
+    high: String,
+    #[serde(rename = "l")]
+    low: String,
+    #[serde(rename = "c")]
+    close: String,
+    #[serde(rename = "v")]
+    volume: String,
+    /// `true` only on the candle's final tick.
+    #[serde(rename = "x")]
+    is_closed: bool,
+}
+
+/// Spawn a background task consuming Binance Futures hourly kline streams
+/// for the given symbols. Emits one `LiveEvent::Candle` per closed hour
+/// (i.e. exactly once per symbol per hour, not once per WS frame). Auto-
+/// reconnects with exponential backoff on transport errors.
+pub fn spawn_binance_klines(
+    symbols: Vec<String>,
+    interval: &'static str,
+) -> mpsc::Receiver<LiveEvent> {
+    let (tx, rx) = mpsc::channel(1024);
+    tokio::spawn(run_klines(symbols, interval, tx));
+    rx
+}
+
+async fn run_klines(
+    symbols: Vec<String>,
+    interval: &'static str,
+    tx: mpsc::Sender<LiveEvent>,
+) {
+    let mut backoff = Duration::from_secs(2);
+    loop {
+        match one_klines(symbols.as_slice(), interval, &tx).await {
+            Ok(()) => backoff = Duration::from_secs(2),
+            Err(e) => warn!(error=%e, backoff_s=backoff.as_secs(), "binance kline ws error"),
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(60));
+    }
+}
+
+async fn one_klines(
+    symbols: &[String],
+    interval: &str,
+    tx: &mpsc::Sender<LiveEvent>,
+) -> Result<(), BinanceWsError> {
+    // /stream?streams=btcusdt@kline_1h/ethusdt@kline_1h
+    let streams: Vec<String> = symbols
+        .iter()
+        .map(|s| format!("{}@kline_{}", s.to_ascii_lowercase(), interval))
+        .collect();
+    let url = format!("wss://fstream.binance.com/stream?streams={}", streams.join("/"));
+    let (mut ws, _) = connect_async(&url).await.map_err(BinanceWsError::Connect)?;
+    info!(url, "binance kline ws connected");
+    while let Some(msg) = ws.next().await {
+        let msg = msg.map_err(BinanceWsError::Recv)?;
+        if let Message::Text(text) = msg {
+            handle_kline_text(&text, tx).await;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_kline_text(text: &str, tx: &mpsc::Sender<LiveEvent>) {
+    // Combined-stream wrapper: {"stream": "...", "data": {<KlineMsg>}}.
+    #[derive(Deserialize)]
+    struct Wrap {
+        data: KlineMsg,
+    }
+    let Ok(Wrap { data }) = serde_json::from_str::<Wrap>(text) else {
+        debug!(%text, "binance kline: unparseable frame");
+        return;
+    };
+    if !data.kline.is_closed {
+        return; // skip in-progress candles
+    }
+    let parse = |s: &str| s.parse::<f64>().ok();
+    let (Some(open), Some(high), Some(low), Some(close), Some(volume)) = (
+        parse(&data.kline.open),
+        parse(&data.kline.high),
+        parse(&data.kline.low),
+        parse(&data.kline.close),
+        parse(&data.kline.volume),
+    ) else {
+        debug!("binance kline: non-numeric OHLCV");
+        return;
+    };
+    let event = LiveEvent::Candle {
+        ts: EventTs::from_secs(data.kline.open_ts_ms / 1000),
+        symbol: data.symbol,
+        open,
+        high,
+        low,
+        close,
+        volume,
+    };
+    if tx.send(event).await.is_err() {
+        // receiver gone
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +264,34 @@ mod tests {
         assert_eq!(m.order.side, "SELL");
         let qty: f64 = m.order.qty.parse().unwrap();
         assert!((qty - 0.050).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_combined_kline_payload() {
+        // Binance Futures combined-stream wrapper around a kline frame.
+        let raw = r#"{"stream":"btcusdt@kline_1h","data":{"e":"kline","E":1700000000000,"s":"BTCUSDT","k":{"t":1700000000000,"T":1700003599999,"s":"BTCUSDT","i":"1h","f":1,"L":2,"o":"60000.00","c":"60500.00","h":"60800.00","l":"59800.00","v":"123.456","n":4500,"x":true,"q":"7400000.0","V":"60.0","Q":"3600000.0","B":"0"}}}"#;
+        #[derive(Deserialize)]
+        struct Wrap {
+            data: KlineMsg,
+        }
+        let w: Wrap = serde_json::from_str(raw).unwrap();
+        assert_eq!(w.data.symbol, "BTCUSDT");
+        assert!(w.data.kline.is_closed);
+        assert_eq!(w.data.kline.close, "60500.00");
+        let close: f64 = w.data.kline.close.parse().unwrap();
+        assert!((close - 60500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn skips_in_progress_kline() {
+        // Same shape but x=false — should serialise/deserialise fine
+        // and our handler ignores it.
+        let raw = r#"{"stream":"btcusdt@kline_1h","data":{"e":"kline","E":1,"s":"BTCUSDT","k":{"t":1,"T":1,"s":"BTCUSDT","i":"1h","f":1,"L":1,"o":"60000","c":"60010","h":"60020","l":"59990","v":"1.0","n":1,"x":false,"q":"60000","V":"0.5","Q":"30000","B":"0"}}}"#;
+        #[derive(Deserialize)]
+        struct Wrap {
+            data: KlineMsg,
+        }
+        let w: Wrap = serde_json::from_str(raw).unwrap();
+        assert!(!w.data.kline.is_closed);
     }
 }

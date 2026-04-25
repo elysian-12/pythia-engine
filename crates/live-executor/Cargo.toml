@@ -12,6 +12,7 @@ kiyotaka-client = { path = "../kiyotaka-client" }
 exchange-hyperliquid = { path = "../exchange-hyperliquid" }
 paper-trader = { path = "../paper-trader" }
 swarm = { path = "../swarm" }
+regime = { path = "../regime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

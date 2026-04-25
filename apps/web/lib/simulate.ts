@@ -1,5 +1,27 @@
-import type { AgentStats } from "@/lib/swarm";
+import type { AgentStats, RegimeInfo } from "@/lib/swarm";
 import { agentFamily } from "@/lib/swarm";
+
+/** Family-vs-regime fitness multiplier — mirrors the Rust
+ *  `SystematicAgent::regime_fitness` table so the UI preview matches
+ *  what the live agents would actually do. Numerator of the conviction
+ *  scale + the gate (return null if < MIN_FITNESS). */
+const MIN_FITNESS = 0.3;
+function regimeFitness(
+  family: ReturnType<typeof agentFamily>,
+  regime: RegimeInfo | null | undefined,
+): number {
+  if (!regime) return 1.0;
+  const trendish =
+    family === "liq-trend" || family === "funding-trend" || family === "vol-breakout";
+  const meanRevert = family === "liq-fade" || family === "funding-arb";
+  if (trendish) {
+    return { trending: 1.0, ranging: 0.3, chaotic: 0.5, calm: 0.6 }[regime.label] ?? 1.0;
+  }
+  if (meanRevert) {
+    return { trending: 0.3, ranging: 1.0, chaotic: 0.5, calm: 0.7 }[regime.label] ?? 1.0;
+  }
+  return 1.0; // LLM + other families pass through unchanged
+}
 
 export type SimAsset = "BTC" | "ETH";
 export type SimEventKind = "liq-spike" | "funding-spike" | "vol-breakout";
@@ -24,6 +46,10 @@ export type SimReaction = {
   direction: SimDirection;
   rationale: string;
   family: ReturnType<typeof agentFamily>;
+  /** Effective risk fraction after regime fitness scaling — used by
+   *  simulateCopyTrade to size the paper position the same way the
+   *  real Rust agents would. */
+  fitness: number;
 };
 
 /** Maps an input event to the reaction of each agent in the snapshot.
@@ -45,12 +71,14 @@ const TRIGGER_Z = 2.0;
 export function simulateReactions(
   ev: SimEvent,
   agents: AgentStats[],
+  regime?: RegimeInfo | null,
 ): SimReaction[] {
   return agents.map((a) => {
     const family = agentFamily(a.agent_id);
     let reacted = false;
     let dir: SimDirection = ev.direction;
     let rationale = "no match";
+    const fitness = regimeFitness(family, regime);
 
     switch (family) {
       case "liq-trend":
@@ -99,7 +127,23 @@ export function simulateReactions(
         break;
     }
 
-    return { agent_id: a.agent_id, reacted, direction: dir, rationale, family };
+    // Regime gate: if the regime is too hostile, skip even though the
+    // base rule matched. This mirrors the Rust SystematicAgent.
+    if (reacted && fitness < MIN_FITNESS && family !== "llm") {
+      reacted = false;
+      rationale = `${rationale} · skipped (regime ${regime?.label}, fit ${fitness.toFixed(2)})`;
+    } else if (reacted && regime) {
+      rationale = `${rationale} · ${regime.label} fit ${fitness.toFixed(2)}`;
+    }
+
+    return {
+      agent_id: a.agent_id,
+      reacted,
+      direction: dir,
+      rationale,
+      family,
+      fitness,
+    };
   });
 }
 
@@ -134,7 +178,9 @@ export function simulateCopyTrade(
   if (!Number.isFinite(risk_fraction) || risk_fraction <= 0) return null;
   const atr_est = price * 0.005; // rough ATR proxy, matches Rust executor
   const stop_dist = 1.5 * atr_est;
-  const risk_usd = equity_usd * risk_fraction;
+  // Scale risk by regime fitness so the paper notional matches what the
+  // real Rust agent would size at — keeps the UI's what-if honest.
+  const risk_usd = equity_usd * risk_fraction * react.fitness;
   const notional = Math.min((risk_usd * price) / stop_dist, equity_usd * 3);
   const size_contracts = notional / price;
   const entry = price;

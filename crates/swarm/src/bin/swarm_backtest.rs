@@ -64,6 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(stats) = &a.stats {
                 scoreboard.seed(a.id.clone(), stats.clone());
             }
+            if !a.r_history.is_empty() {
+                scoreboard.seed_r_history(a.id.clone(), a.r_history.clone());
+            }
             out.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
         }
         tracing::info!(
@@ -415,6 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id: a.id().to_string(),
                     params,
                     stats: scoreboard.stats(a.id()),
+                    r_history: scoreboard.r_history(a.id()),
                 })
             })
             .collect(),

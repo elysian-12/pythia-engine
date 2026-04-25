@@ -16,3 +16,4 @@ out
 .vercel
 *.log
 
+/.claude/
