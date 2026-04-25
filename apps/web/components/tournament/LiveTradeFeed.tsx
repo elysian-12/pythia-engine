@@ -9,6 +9,10 @@ export type FeedEntry = {
   event: SimEvent;
   reactions: SimReaction[];
   championId: string | null;
+  /** Wall-clock latency from event-arrival → trade-sent, in ms. The
+   *  parent component stamps this when it processes the event so we can
+   *  show the same end-to-end timing the live executor would log. */
+  latencyMs?: number;
 };
 
 function fmtTime(ts: number): string {
@@ -53,35 +57,44 @@ function EventRow({ entry }: { entry: FeedEntry }) {
   const longs = firing.filter((r) => r.direction === "long").length;
   const shorts = firing.length - longs;
   const champion = firing.find((r) => r.agent_id === entry.championId);
+  const eventLabel = entry.event.kind.replace("-", " ");
 
   return (
     <div className="border border-edge/60 rounded-sm bg-black/20">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-edge/50">
-        <div className="flex items-center gap-3 text-[0.7rem]">
-          <span className="num text-mist">{fmtTime(entry.ts)}</span>
-          <span className="font-mono text-slate-100 uppercase">
-            {entry.event.kind}
-          </span>
-          <span className="text-mist">·</span>
-          <span className="font-mono text-cyan">{entry.event.asset}</span>
-          <span className="text-mist num">
-            |z|={entry.event.magnitude_z.toFixed(2)}
-          </span>
-          <span
-            className={
-              entry.event.direction === "long" ? "text-green" : "text-red"
-            }
-          >
-            {entry.event.direction.toUpperCase()}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 text-[0.65rem] num">
+      {/* Top line: event meta — wraps cleanly when the panel is narrow. */}
+      <div className="px-3 py-2 border-b border-edge/50 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[0.7rem]">
+        <span className="num text-mist shrink-0">{fmtTime(entry.ts)}</span>
+        <span className="font-mono text-slate-100 uppercase tracking-wider shrink-0">
+          {eventLabel}
+        </span>
+        <span className="font-mono text-cyan shrink-0">{entry.event.asset}</span>
+        <span className="text-mist num shrink-0">
+          |z|={entry.event.magnitude_z.toFixed(2)}
+        </span>
+        <span
+          className={`shrink-0 ${
+            entry.event.direction === "long" ? "text-green" : "text-red"
+          }`}
+        >
+          {entry.event.direction === "long" ? "↑" : "↓"}
+          {entry.event.direction.toUpperCase()}
+        </span>
+        <span className="grow" />
+        <span className="text-[0.65rem] num shrink-0 flex items-center gap-2">
           <span className="text-green">{longs}L</span>
           <span className="text-red">{shorts}S</span>
           <span className="text-mist">
             {firing.length}/{entry.reactions.length} fired
           </span>
-        </div>
+          {entry.latencyMs != null ? (
+            <span
+              className="text-cyan"
+              title="Latency from event arrival to trade-sent"
+            >
+              {entry.latencyMs}ms
+            </span>
+          ) : null}
+        </span>
       </div>
       <div className="px-3 py-2 flex flex-wrap gap-1.5">
         {firing.length === 0 ? (
@@ -125,8 +138,14 @@ function EventRow({ entry }: { entry: FeedEntry }) {
         )}
       </div>
       {champion ? (
-        <div className="px-3 py-1.5 border-t border-amber/20 bg-amber/5 text-[0.65rem] text-amber">
-          Copy-trader would {champion.direction === "long" ? "GO LONG" : "GO SHORT"} (champion fired).
+        <div className="px-3 py-1.5 border-t border-amber/20 bg-amber/5 text-[0.65rem] text-amber flex items-center justify-between gap-2">
+          <span>
+            Copy-trader would {champion.direction === "long" ? "GO LONG" : "GO SHORT"} —
+            champion fired.
+          </span>
+          {entry.latencyMs != null ? (
+            <span className="num text-cyan/80">{entry.latencyMs}ms event→sent</span>
+          ) : null}
         </div>
       ) : firing.length > 0 ? (
         <div className="px-3 py-1.5 border-t border-edge/50 text-[0.65rem] text-mist">

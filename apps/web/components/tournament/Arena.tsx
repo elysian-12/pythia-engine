@@ -93,6 +93,8 @@ function AgentOrb({
   maxAbsR,
   introProgress,
   orbsRef,
+  isActive,
+  activeKey,
 }: {
   agent: AgentStats;
   rank: number;
@@ -100,6 +102,12 @@ function AgentOrb({
   maxAbsR: number;
   introProgress: number; // 0 = pure blob · 1 = pure podium
   orbsRef: React.MutableRefObject<OrbMap>;
+  /** True when this agent fired on the most recent event. The orb
+   *  flashes its size + emissive intensity for ~600ms when this flips on. */
+  isActive: boolean;
+  /** Increments any time `isActive` flips so the pulse re-triggers even
+   *  if the agent fires twice in a row. */
+  activeKey: number;
 }) {
   const group = useRef<THREE.Group>(null!);
   const satellite = useRef<THREE.Mesh>(null!);
@@ -136,11 +144,23 @@ function AgentOrb({
     };
   }, [agent.agent_id, seedIdx, size, orbsRef]);
 
+  // Activity pulse: every time `activeKey` changes while `isActive`, we
+  // restart a 0.8s flash. The mesh's emissive intensity + scale boost
+  // is computed every frame from this start time.
+  const flashStartRef = useRef<number>(-Infinity);
+  useEffect(() => {
+    if (isActive) flashStartRef.current = performance.now();
+  }, [activeKey, isActive]);
+
   useFrame(({ clock }, delta) => {
     if (!group.current) return;
     const t = clock.elapsedTime + phase;
     const k = introProgress;
     const ease = k * k * (3 - 2 * k); // smoothstep — 0 blob · 1 podium
+
+    // Compute current flash factor. 0 = idle, 1 = peak. Decays linearly.
+    const sinceFlash = (performance.now() - flashStartRef.current) / 800;
+    const flash = sinceFlash < 1 ? Math.max(0, 1 - sinceFlash) : 0;
 
     // Blob phase: integrate position with velocity + a soft pull toward
     // the swarm centre, then resolve collisions against every other orb.
@@ -193,9 +213,23 @@ function AgentOrb({
     }
   });
 
+  // Live-mutated emissive + scale react to flash. We keep the mesh
+  // refs and write into them rather than re-rendering React state.
+  const meshRef = useRef<THREE.Mesh>(null!);
+  useFrame(() => {
+    const sinceFlash = (performance.now() - flashStartRef.current) / 800;
+    const f = sinceFlash < 1 ? Math.max(0, 1 - sinceFlash) : 0;
+    if (meshRef.current) {
+      const mat = meshRef.current.material as THREE.MeshStandardMaterial;
+      mat.emissiveIntensity = intensity + f * 4;
+      const s = 1 + f * 0.45;
+      meshRef.current.scale.setScalar(s);
+    }
+  });
+
   return (
     <group ref={group} position={target}>
-      <mesh castShadow>
+      <mesh ref={meshRef} castShadow>
         <icosahedronGeometry args={[size, 2]} />
         <meshStandardMaterial
           color={color}
@@ -367,66 +401,196 @@ function ChampionPedestal({
 }
 
 function EliteLinks({ ranked }: { ranked: AgentStats[] }) {
-  // Faint filaments from the champion to each of ranks 1..4 — the
-  // elite cluster the executor is drawing from.
+  // Filaments from the champion to ranks 1..4 — visualises the elite
+  // cluster the executor is drawing from. Each filament has a traveling
+  // spark that ferries score updates from the rival back to the champion,
+  // so the scene reads as an active scoreboard rather than a still life.
   const lines = useMemo(() => {
     if (ranked.length < 2) return [];
     const champ = amphitheaterPosition(0);
     const top = ranked.slice(1, Math.min(5, ranked.length));
-    return top.map((_, i) => {
+    return top.map((agent, i) => {
       const rank = i + 1;
-      return { from: champ, to: amphitheaterPosition(rank), key: `c-${rank}` };
+      const family = agentFamily(agent.agent_id);
+      return {
+        from: amphitheaterPosition(rank),
+        to: champ,
+        color: FAMILY_COLORS[family] ?? "#94a3b8",
+        rank,
+        phase: i * 0.6,
+        key: `c-${agent.agent_id}-${rank}`,
+      };
     });
   }, [ranked]);
   return (
     <group>
-      {lines.map((l) => (
-        <Line
-          key={l.key}
-          points={[l.from.toArray(), l.to.toArray()]}
-          color="#38bdf8"
-          lineWidth={1.0}
-          transparent
-          opacity={0.22}
-          dashed
-          dashScale={2.5}
-        />
-      ))}
+      {lines.map((l) => {
+        // `key` is React-only — not passed into the component itself.
+        const { key, ...beamProps } = l;
+        return <BeamWithSpark key={key} {...beamProps} />;
+      })}
+    </group>
+  );
+}
+
+/** A single filament with a moving spark traveling from the rank toward
+ *  the champion every ~3s — the visual heartbeat of the scoreboard. */
+function BeamWithSpark({
+  from,
+  to,
+  color,
+  phase,
+}: {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  color: string;
+  rank: number;
+  phase: number;
+}) {
+  const sparkRef = useRef<THREE.Mesh>(null!);
+  useFrame(({ clock }) => {
+    if (!sparkRef.current) return;
+    const t = (clock.elapsedTime * 0.4 + phase) % 1;
+    sparkRef.current.position.lerpVectors(from, to, t);
+    const mat = sparkRef.current.material as THREE.MeshBasicMaterial;
+    // Brighter near the champion (t→1) so the eye follows it inward.
+    mat.opacity = 0.4 + t * 0.6;
+  });
+  return (
+    <group>
+      <Line
+        points={[from.toArray(), to.toArray()]}
+        color={color}
+        lineWidth={1.1}
+        transparent
+        opacity={0.32}
+        dashed
+        dashScale={3}
+      />
+      <mesh ref={sparkRef}>
+        <sphereGeometry args={[0.18, 14, 14]} />
+        <meshBasicMaterial color={color} toneMapped={false} transparent opacity={0.8} />
+      </mesh>
     </group>
   );
 }
 
 function Floor() {
-  // Marble disc + radial ridges — the Pythian sanctuary at Delphi.
+  // Sand-coloured marble arena floor — Roman Colosseum palette.
   return (
     <group position={[0, -1.5, 3]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <circleGeometry args={[50, 128]} />
         <meshStandardMaterial
-          color="#0b0e16"
-          emissive="#1a233a"
-          emissiveIntensity={0.45}
-          roughness={0.3}
-          metalness={0.55}
+          color="#1a1714"
+          emissive="#3b2a1a"
+          emissiveIntensity={0.55}
+          roughness={0.55}
+          metalness={0.25}
         />
       </mesh>
-      {/* Concentric faint rings — sanctuary terraces. */}
-      {[8, 14, 20, 28].map((r, i) => (
+      {/* Sand inner court — the harena. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
+        <circleGeometry args={[18, 96]} />
+        <meshStandardMaterial
+          color="#705038"
+          emissive="#8b6a4a"
+          emissiveIntensity={0.4}
+          roughness={0.85}
+        />
+      </mesh>
+      {/* Concentric tier rings — bronze-gold. */}
+      {[10, 16, 22, 30].map((r, i) => (
         <mesh key={r} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-          <ringGeometry args={[r - 0.03, r, 128]} />
+          <ringGeometry args={[r - 0.06, r, 128]} />
           <meshBasicMaterial
-            color="#fde68a"
+            color="#fbbf24"
             transparent
-            opacity={0.18 - i * 0.035}
+            opacity={0.32 - i * 0.06}
             toneMapped={false}
           />
         </mesh>
       ))}
-      {/* Compass rose at the centre — the omphalos, navel of the world. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
-        <ringGeometry args={[2.4, 2.55, 64]} />
-        <meshBasicMaterial color="#fde68a" transparent opacity={0.55} toneMapped={false} />
+      {/* Imperial compass — laurel-circled center. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 8]}>
+        <ringGeometry args={[2.4, 2.6, 64]} />
+        <meshBasicMaterial color="#fde68a" transparent opacity={0.7} toneMapped={false} />
       </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 8]}>
+        <ringGeometry args={[3.3, 3.45, 64]} />
+        <meshBasicMaterial color="#a78bfa" transparent opacity={0.45} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * Roman Colosseum cavea — three tiers of arched seating wrapping the back
+ * 270° of the arena. Implemented as a stack of toroid segments + arched
+ * doorways at regular intervals so the silhouette reads as architecture
+ * even at low DPR.
+ */
+function Cavea() {
+  const tiers = useMemo(
+    () => [
+      { y: 4, radius: 38, height: 4.5, color: "#d6c9a8" },
+      { y: 9, radius: 41, height: 4.5, color: "#c2a878" },
+      { y: 14, radius: 44, height: 4.0, color: "#9c805d" },
+    ],
+    [],
+  );
+  return (
+    <group position={[0, -1.5, 3]}>
+      {tiers.map((t, idx) => (
+        <group key={t.y}>
+          {/* Outer wall ring */}
+          <mesh position={[0, t.y, 0]}>
+            <torusGeometry args={[t.radius, t.height / 2, 16, 96, Math.PI * 1.35]} />
+            <meshStandardMaterial
+              color={t.color}
+              emissive="#1a120a"
+              emissiveIntensity={0.4}
+              roughness={0.65}
+              metalness={0.25}
+            />
+          </mesh>
+          {/* Arched doorway recesses — black voids that read as openings */}
+          {Array.from({ length: 12 }, (_, i) => {
+            const t2 = i / 11;
+            const angle = -Math.PI * 0.65 + t2 * Math.PI * 1.3;
+            return (
+              <mesh
+                key={i}
+                position={[
+                  Math.sin(angle) * (t.radius - 0.5),
+                  t.y - 0.6,
+                  Math.cos(angle) * -(t.radius - 0.5),
+                ]}
+                rotation={[0, -angle + Math.PI, 0]}
+              >
+                <boxGeometry args={[2.2, 2.6, 0.8]} />
+                <meshStandardMaterial
+                  color="#0c0907"
+                  emissive="#1a120a"
+                  emissiveIntensity={0.2}
+                />
+              </mesh>
+            );
+          })}
+          {/* Tier glow strip on the outside edge */}
+          {idx === 0 ? (
+            <mesh position={[0, t.y - 1.8, 0]} rotation={[Math.PI / 2, 0, 0]}>
+              <ringGeometry args={[t.radius - 0.2, t.radius, 96]} />
+              <meshBasicMaterial
+                color="#fbbf24"
+                transparent
+                opacity={0.18}
+                toneMapped={false}
+              />
+            </mesh>
+          ) : null}
+        </group>
+      ))}
     </group>
   );
 }
@@ -676,14 +840,13 @@ function Constellations() {
 }
 
 function Rig() {
+  // Subtle idle-only camera breath — keeps the scene from feeling
+  // completely frozen while still letting the user drag-orbit. The
+  // user's cursor / OrbitControls take precedence; this is just a
+  // gentle inhale/exhale of the boom arm.
   useFrame(({ camera, clock }) => {
-    // Slow drifting boom shot — long focal length, low angle.
-    const t = clock.elapsedTime * 0.05;
-    const r = 32;
-    camera.position.x = Math.sin(t) * r;
-    camera.position.z = 18 + Math.cos(t) * 6;
-    camera.position.y = 7 + Math.sin(t * 0.7) * 1.2;
-    camera.lookAt(0, 2.5, 4);
+    const t = clock.elapsedTime * 0.18;
+    camera.position.y += (7 + Math.sin(t) * 0.4 - camera.position.y) * 0.005;
   });
   return null;
 }
@@ -708,9 +871,17 @@ function useIntro(duration = 4.5) {
 export function Arena({
   agents,
   generation = 0,
+  activeIds = new Set<string>(),
+  activeKey = 0,
 }: {
   agents: AgentStats[];
   generation?: number;
+  /** IDs of agents that fired on the most recent event. Each one's orb
+   *  flashes when this set is updated. Lets the Tournament page hand
+   *  liveness data into the Arena without coupling the components. */
+  activeIds?: Set<string>;
+  /** Bumped whenever `activeIds` changes so flash timers re-trigger. */
+  activeKey?: number;
 }) {
   const ranked = agents;
   const maxAbsR = Math.max(1, ...ranked.map((a) => Math.abs(a.total_r)));
@@ -760,6 +931,7 @@ export function Arena({
         <EmberField />
         <Constellations />
         <Floor />
+        <Cavea />
         <TempleColonnade />
         <BackWall generation={generation} />
         {/* Only show filaments + champion pedestal once the podium has
@@ -777,6 +949,8 @@ export function Arena({
               maxAbsR={maxAbsR}
               introProgress={introProgress}
               orbsRef={orbsRef}
+              isActive={activeIds.has(a.agent_id)}
+              activeKey={activeKey}
             />
           ),
         )}

@@ -63,7 +63,12 @@ export function TradeReplay({
   }, [progress, playing]);
 
   const visibleN = Math.max(2, Math.floor(equity.length * progress));
-  const equityNow = equity[visibleN - 1]?.equity ?? 1000;
+  // Starting equity from the prop, not a hardcoded $1k. When the user
+  // bumps their settings on the home page, VisualizeClient rebuilds the
+  // equity series from `equity_usd × risk_fraction` and the curve starts
+  // at the new floor — the header has to follow.
+  const startingEquity = equity[0]?.equity ?? 1000;
+  const equityNow = equity[visibleN - 1]?.equity ?? startingEquity;
   const visibleTrades = useMemo(() => {
     const lastTs = equity[visibleN - 1]?.ts ?? 0;
     return trades.filter((t) => t.ts <= lastTs);
@@ -84,7 +89,9 @@ export function TradeReplay({
             Trade replay · 365 days
           </div>
           <h3 className="text-xl font-semibold text-slate-100 mt-1">
-            $1,000 → ${equityNow.toFixed(0)}
+            ${startingEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            <span className="text-mist mx-2">→</span>
+            ${equityNow.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             <span className="text-mist text-sm ml-2">
               {tsNow > 0 ? fmt(tsNow) : ""}
             </span>
@@ -132,13 +139,13 @@ export function TradeReplay({
         />
         <Counter
           label="Equity"
-          value={`$${equityNow.toFixed(0)}`}
+          value={`$${equityNow.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
           tone="cyan"
         />
         <Counter
           label="Return"
-          value={`${(((equityNow - 1000) / 1000) * 100).toFixed(0)}%`}
-          tone={equityNow >= 1000 ? "pos" : "neg"}
+          value={`${(((equityNow - startingEquity) / Math.max(1, startingEquity)) * 100).toFixed(0)}%`}
+          tone={equityNow >= startingEquity ? "pos" : "neg"}
         />
       </div>
 

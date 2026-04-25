@@ -6,19 +6,22 @@ every `N` events via evolution.
 ```
  ┌───────────────────────────────────────────────────────────────────────┐
  │ 1. DATA                                                                │
- │    Binance public WS  ─┐                                               │
- │    Kiyotaka REST      ─┼──▶ unified Event ──▶ broadcast Bus            │
- │    DuckDB replay      ─┘                                               │
+ │    Kiyotaka WS+REST   ─▶ unified Event ──▶ broadcast Bus               │
+ │      ├─ liquidations                                                   │
+ │      ├─ funding · OI · hourly candles · volume                         │
+ │      └─ Polymarket SWP-mid leadership                                  │
  ├───────────────────────────────────────────────────────────────────────┤
  │ 2. REGIME          Trending / Ranging / Chaotic / Calm classifier      │
  ├───────────────────────────────────────────────────────────────────────┤
- │ 3. SWARM           20+ heterogeneous agents observe every event        │
- │                      · SystematicAgent (rule families + params)        │
+ │ 3. SWARM           27 heterogeneous agents observe every event         │
+ │                      · SystematicAgent (7 rule families + params)      │
  │                      · LlmAgent (5 personality presets, throttled)     │
  │                      · MomentumFollower / Contrarian meta-agents       │
- │                      PeerView lets agents read recent peer decisions.  │
+ │                      PeerView surfaces peer decisions + the receiving  │
+ │                      agent's own recent expectancy (self-backtest gate)│
  ├───────────────────────────────────────────────────────────────────────┤
- │ 4. SCOREBOARD      per-agent rolling Sharpe + total-R; picks champion │
+ │ 4. SCOREBOARD      per-agent rolling Sharpe · PSR · DSR · expectancy   │
+ │                    over last N closed trades; picks champion           │
  ├───────────────────────────────────────────────────────────────────────┤
  │ 5. EXECUTOR        champion's decision → Hyperliquid EIP-712 +        │
  │                      per-trade risk guard                              │
@@ -50,10 +53,11 @@ impl DataSource for DeribitSkew {
 The `Bus` fan-outs to every subscriber (swarm, regime, tuner). Zero
 coupling.
 
-Production uses **Binance public `!forceOrder@arr` WS** for the
-liquidation stream — no auth, same fidelity as the paid Kiyotaka WS feed
-(which proved tier-gated in practice) — plus **Kiyotaka REST** for
-funding / OI / candles.
+Production uses **Kiyotaka** as the sole data path — REST endpoints
+for hourly candles, funding, OI, and liquidation buckets, plus the
+Kiyotaka WS feed for live ticks and Polymarket leadership signals
+(skill-weighted-probability vs. mid). One vendor, one auth header
+(`X-Kiyotaka-Key`), one provenance trail.
 
 ### 2. Regime — the meta-context agents consume
 
@@ -65,11 +69,15 @@ champion is most likely to come from.
 
 ### 3. Swarm — the discovery engine
 
-See [SWARM.md](SWARM.md) for full agent taxonomy. In one sentence: 20+
-agents with different parameters, rule families, risk fractions,
-horizons, and personas all see every event; each emits a decision or
-abstains; the population is the unit of intelligence, not any single
-agent.
+See [SWARM.md](SWARM.md) for full agent taxonomy. In one sentence: 27
+agents across 7 rule families (`liq-trend`, `liq-fade`, `vol-breakout`,
+`funding-trend`, `funding-arb`, `polyedge`, `polyfusion`) plus 5 LLM
+personas all see every event; each emits a decision or abstains; the
+population is the unit of intelligence, not any single agent. Each
+`SystematicAgent.decide_for_asset()` is gated by its own
+`Scoreboard::recent_expectancy(...)` — if the agent's recent E[R]
+turns negative it abstains until it recovers, turning the post-hoc
+scoreboard into a live filter.
 
 ### 4. Scoreboard
 
@@ -113,10 +121,12 @@ winning right now; these are its live trades."
 - `pythia-live` — legacy single-strategy executor (hourly liquidation
   z-score > 2.5 σ → direct HL order). Still useful as a minimal
   reference.
-- `pythia-swarm-live` — swarm-driven. Converts Binance WS events into
-  `swarm::Event`, broadcasts to the 20-agent population, routes the
-  champion's decisions to the executor. Writes
-  `data/swarm-snapshot.json` every 10 s for the `/tournament` UI.
+- `pythia-swarm-live` — swarm-driven. Converts Kiyotaka events (incl.
+  Polymarket leadership) into `swarm::Event`, broadcasts to the 27-agent
+  population with `Swarm::with_scoreboard(...)` so each agent's
+  self-backtest gate is live, routes the champion's decisions to the
+  executor, and writes `data/swarm-snapshot.json` every 10 s for the
+  `/tournament` UI.
 
 ### Evolution — the loop close
 
@@ -136,7 +146,7 @@ population collapse.
 
 ### UI — `/tournament` (apps/web)
 
-A Three.js arena that renders the 20-agent scoreboard in 3D:
+A Three.js arena (Roman Colosseum theme) that renders the 27-agent scoreboard in 3D:
 
 - each agent is an icosahedron floating in an elliptical band; size
   scales with `total_r`, colour with rule family

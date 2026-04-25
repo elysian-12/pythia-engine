@@ -212,12 +212,20 @@ export function LandingDashboard() {
   return (
     <div className="space-y-8">
       {/* HERO */}
-      <section className="panel relative overflow-hidden p-6 md:p-8">
+      <section className="panel relative overflow-hidden p-6 md:p-8 ring-1 ring-royal/20">
         <div
-          className="pointer-events-none absolute inset-0 opacity-50"
+          className="pointer-events-none absolute inset-0 opacity-60"
           style={{
             background:
-              "radial-gradient(circle at 15% 20%, rgba(34,211,238,0.12), transparent 50%), radial-gradient(circle at 85% 80%, rgba(52,211,153,0.10), transparent 55%)",
+              "radial-gradient(circle at 15% 20%, rgba(126,34,206,0.18), transparent 55%), radial-gradient(circle at 85% 80%, rgba(34,211,238,0.10), transparent 55%), radial-gradient(circle at 60% 100%, rgba(245,158,11,0.08), transparent 50%)",
+          }}
+        />
+        {/* Top gilded rule */}
+        <div
+          className="pointer-events-none absolute top-0 left-0 right-0 h-px"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, rgba(245,158,11,0.6), rgba(126,34,206,0.6), rgba(34,211,238,0.6), transparent)",
           }}
         />
         <div className="relative">
@@ -225,14 +233,20 @@ export function LandingDashboard() {
             <div className="flex items-start gap-5 max-w-3xl">
               <PythiaLogo size={72} className="hidden md:block mt-1" />
               <div>
-                <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
-                  Pythia · oracle of the swarm
+                <div className="flex items-center gap-3 text-[0.6rem] tracking-[0.4em] uppercase">
+                  <span className="text-amber-300">Pythia</span>
+                  <span className="text-mist/60">·</span>
+                  <span className="text-purple-300">Oracle of the Swarm</span>
                 </div>
-                <h2 className="mt-2 text-4xl md:text-5xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
+                <h2 className="mt-3 text-4xl md:text-5xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
                   25 agents.{" "}
-                  <span className="text-cyan">One champion.</span>
+                  <span
+                    className="bg-gradient-to-r from-amber-300 via-purple-400 to-cyan bg-clip-text text-transparent"
+                  >
+                    One champion.
+                  </span>
                   <br />
-                  <span className="bg-gradient-to-r from-cyan via-emerald-300 to-amber-300 bg-clip-text text-transparent">
+                  <span className="text-cyan">
                     Every Kiyotaka event becomes a trade.
                   </span>
                 </h2>
@@ -241,7 +255,7 @@ export function LandingDashboard() {
                   leadership all stream from Kiyotaka into the swarm. Each
                   agent votes; the scoreboard picks the champion; the champion
                   drives a paper Hyperliquid position — sized by Kelly, gated
-                  by regime, certified by Probabilistic & Deflated Sharpe.
+                  by regime, certified by Probabilistic &amp; Deflated Sharpe.
                 </p>
               </div>
             </div>

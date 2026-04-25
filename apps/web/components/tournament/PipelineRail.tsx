@@ -16,9 +16,17 @@ type Props = {
 };
 
 const STAGES: Array<{ id: Stage; label: string; caption: string }> = [
-  { id: "kiyotaka", label: "Kiyotaka", caption: "live candles + funding + liquidations" },
-  { id: "event", label: "Signal", caption: "z-score spike detection" },
-  { id: "swarm", label: "Swarm", caption: "25 agents vote independently" },
+  {
+    id: "kiyotaka",
+    label: "Kiyotaka",
+    caption: "candles · funding · liquidations · volume · Polymarket",
+  },
+  {
+    id: "event",
+    label: "Signal",
+    caption: "z-score spike + Polymarket SWP-mid gap",
+  },
+  { id: "swarm", label: "Swarm", caption: "27 agents vote independently" },
   { id: "champion", label: "Champion", caption: "leaderboard selects the trader" },
   { id: "hl", label: "Hyperliquid", caption: "paper position placed" },
   { id: "feedback", label: "Feedback", caption: "realized R → evolution" },
@@ -92,7 +100,9 @@ export function PipelineRail({
       </div>
 
       <p className="mt-3 text-[0.65rem] text-mist leading-relaxed">
-        Each Kiyotaka tick that breaks the z-threshold pulses left → right
+        Every Kiyotaka tick that breaks a z-threshold — perp liquidation
+        cascade, funding spike, Donchian breakout, or a Polymarket
+        skill-weighted-probability gap that leads spot — pulses left → right
         through the rail. Closed trades feed realized R into the scoreboard
         and, every N events, the evolver replaces weak agents — closing the
         loop on the next event.

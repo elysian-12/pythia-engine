@@ -19,3 +19,5 @@ html, body {
 .chip-red { background: rgba(239, 68, 68, 0.15); color: #f87171; }
 .chip-cyan { background: rgba(6, 182, 212, 0.18); color: #22d3ee; }
 .chip-mist { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
+.chip-royal { background: rgba(126, 34, 206, 0.18); color: #d8b4fe; }
+.chip-amber { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }

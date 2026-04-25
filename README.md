@@ -4,40 +4,44 @@ An **agent-swarm** for crypto derivatives trade discovery.
 
 Pythia stands up a heterogeneous population of simulated traders — each with
 its own rule family, risk appetite, horizon, and (optionally) LLM persona —
-feeds them the same real-time event stream (liquidations, funding, OI,
-candles), and ranks them by realised PnL. The scoreboard picks the
-**champion**; the champion's strategy is then applied via the live
-**executor** that signs + sends orders to Hyperliquid.
+feeds them the same Kiyotaka event stream (liquidations, funding, OI,
+hourly candles, volume, **Polymarket leadership**), and ranks them by
+realised PnL. The scoreboard picks the **champion**; the champion's
+strategy is then applied via the live **executor** that signs + sends
+orders to Hyperliquid.
 
 One monolithic strategy is fragile; a tournament of disagreeing agents
 surfaces the rule that is actually paying out under the current regime.
 
 ### The feedback loop in one sentence
 
-> **Kiyotaka events → 25 quant personas compete → scoreboard picks the
-> champion → executor copy-trades the champion → realised PnL feeds
-> back into the scoreboard → every N events, `Evolution` replaces the
-> weakest half of the population with mutated + crossed elite.**
+> **Kiyotaka events (incl. Polymarket SWP-vs-mid leads) → 27 quant
+> personas compete → scoreboard picks the champion → executor copy-trades
+> the champion → realised PnL feeds back into the scoreboard → each agent
+> gates its next decision on its own recent expectancy → every N events,
+> `Evolution` replaces the weakest half with mutated + crossed elite.**
 
 - **PeerView** = what agents see *of each other* within one event
-  (momentum / contrarian meta-behaviour).
+  (momentum / contrarian meta-behaviour) plus their *own* recent
+  expectancy from the scoreboard (live self-backtest gate).
 - **Evolution** = how the population *improves* across events
   (log-space mutation + same-family crossover on the elite).
-- **DuckDB replay** = Kiyotaka REST data warehouse that seeds the
-  scoreboard via `swarm-backtest` before live trading starts.
+- **Self-backtest gate** = `Scoreboard::recent_expectancy(agent_id, N,
+  min_sample)` is layered into PeerView so a `SystematicAgent` whose
+  recent E[R] turns negative abstains until it recovers — turning the
+  post-hoc scoreboard into a live filter.
 
 Full details in [SWARM.md](SWARM.md).
 
 ```
-  Binance public WS ──┐
-  Kiyotaka REST ──────┼──▶ Swarm (25 agents) ──▶ Scoreboard ──▶ Champion ──▶ Executor ──▶ Hyperliquid
-  DuckDB replay ──────┘        │                      ▲                            │
-                                │                      │                            └─ EIP-712 + risk guard
-                                │                      │
-                                │                      └── realised PnL feedback
-                                │
-                                ├──▶ Evolution (every N events) — mutate + crossover
-                                └──▶ PeerView (social influence during one event)
+  Kiyotaka REST + WS ──▶ Swarm (27 agents) ──▶ Scoreboard ──▶ Champion ──▶ Executor ──▶ Hyperliquid
+   ├ liquidations            │                      ▲                            │
+   ├ funding                 │                      │                            └─ EIP-712 + risk guard
+   ├ hourly candles          │                      │
+   ├ volume                  │                      └── realised PnL · self-backtest gate
+   └ Polymarket SWP/mid      │
+                             ├──▶ Evolution (every N events) — mutate + crossover
+                             └──▶ PeerView (social + own recent expectancy)
 ```
 
 ## Quick start
@@ -86,10 +90,12 @@ Six layers — see [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ 1. DATA          Binance WS · Kiyotaka REST · DuckDB replay             │
+│ 1. DATA          Kiyotaka REST + WS — liqs · funding · candles · vol    │
+│                  · Polymarket SWP-mid gap (skill-weighted probability)  │
 │ 2. REGIME        trending / ranging / chaotic / calm classifier         │
-│ 3. SWARM         20+ agents — systematic, LLM-driven, social            │
-│ 4. SCOREBOARD    rolling Sharpe + total-R ranking; picks the champion   │
+│ 3. SWARM         27 agents — 7 rule families incl. polyedge + polyfusion│
+│                  · self-backtest gate per decide() · LLM personas       │
+│ 4. SCOREBOARD    rolling Sharpe · PSR · DSR · expectancy_for_recent_N   │
 │ 5. EXECUTOR      champion's decision → Hyperliquid EIP-712 + risk guard │
 │    EVOLUTION     every N events: elite preserve + mutate + crossover    │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -100,10 +106,11 @@ Six layers — see [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 ```
 crates/
 ├── domain/                  pure types — Asset, Candle, Signal, Trade
-├── kiyotaka-client/         REST + WS (Kiyotaka, Binance public forceOrder)
-├── store/                   embedded DuckDB (event + asof timestamps)
+├── kiyotaka-client/         the only data path — REST + WS for candles,
+│                            funding, OI, liquidations, Polymarket SWP/mid
+├── store/                   embedded warehouse (event + asof timestamps)
 ├── econometrics/            cointegration, Granger, Hasbrouck IS, Gini
-├── signal-engine/           SWP + gate evaluator (legacy, for PM research)
+├── signal-engine/           SWP + gate evaluator (Polymarket research)
 ├── paper-trader/            deterministic ATR-based simulator
 ├── evaluation/              Deflated Sharpe, PSR, PBO, bootstrap CI
 ├── strategy/                7 crypto-native rule families + ablation bins
@@ -113,27 +120,34 @@ crates/
 ├── portfolio/               vol-targeted allocator + regime weights
 ├── tuner/                   bounded-autonomy AI tuner (LLM tool-use)
 ├── exchange-hyperliquid/    EIP-712 signing + typed REST client
-├── live-executor/           pythia-live binary (24/7 daemon)
-└── swarm/ ★                 the tournament — agents, scoring, champion
-                             selection, genetic evolution, LLM personas
-apps/web/                    Next.js 15 · three.js
-├── /visualize               cinematic equity-curve + strategy grid
-└── /tournament ★            live 3D arena: 20 agents, champion pedestal,
-                             elite-cluster filaments, auto-reshuffling ranks
+├── live-executor/           pythia-swarm-live binary (24/7 daemon)
+└── swarm/ ★                 the tournament — 7 rule families (incl.
+                             polyedge + polyfusion), Scoreboard with
+                             recent_expectancy gate, evolution, LLM
+                             personas, regime-aware fitness
+apps/web/                    Next.js 15 · three.js · Vercel-deployed
+├── /                        landing — equity curve, champion HUD, auto-
+│                            replay loop, trade-settings panel
+├── /visualize               trade replay rescaled to user equity + risk
+└── /tournament ★            live arena (Roman Colosseum theme): 27
+                             agent orbs, elite filaments with traveling
+                             sparks, activity-driven flash, latency meter
 ```
 
 ★ = the hero crate. Everything else feeds it or is fed by it.
 
 ## What's validated
 
-- **365 days · Binance BTC + ETH perps · 69,026 events** replayed through 20
-  agents in 0.7 s wall. Ranking + champion report at
+- **365 days · BTC + ETH perps via Kiyotaka · ~69k events** replayed through
+  the swarm in <1 s wall. Ranking + champion report at
   `reports/swarm/<ts>/swarm.md`.
 - Underlying systematic rules (grid-searched independently of the swarm) —
   `liq-trend` at 1 % risk compound: $1k → $64k over the same year with
   3 % max-DD, Sharpe 0.43, 75 % win rate across 578 trades.
 - The swarm currently **discovers** this champion autonomously without
-  being told which rule to run.
+  being told which rule to run, then **gates each agent's next decision**
+  on its own recent expectancy so a once-good rule shuts itself off when
+  the regime stops paying.
 
 ## Docs
 

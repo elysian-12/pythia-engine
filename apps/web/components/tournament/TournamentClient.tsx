@@ -348,16 +348,23 @@ export function TournamentClient() {
   // Stable across renders — reads dynamic state from refs. AutoPilot stores
   // this in onFireRef once and keeps polling without rebuilding its timer.
   const onFire = useCallback((ev: SimEvent) => {
+    const t0 = performance.now();
     const currentSnap = snapRef.current;
     if (!currentSnap) return;
     const rxs = simulateReactions(ev, currentSnap.agents, currentSnap.regime);
     const championId = currentSnap.champion?.agent_id ?? null;
+    // Stamp the wall-clock latency of the synchronous portion of the
+    // pipeline (simulate reactions + size the trade). The Rust live
+    // executor logs the same number for its async path; surfacing it
+    // here lets the visitor see the same end-to-end timing.
+    const latencyMs = Math.max(1, Math.round(performance.now() - t0));
     const entry: FeedEntry = {
       id: ev.id,
       ts: ev.ts,
       event: ev,
       reactions: rxs,
       championId,
+      latencyMs,
     };
     setLastEvent(ev);
     setFeed((prev) => [entry, ...prev].slice(0, FEED_MAX));

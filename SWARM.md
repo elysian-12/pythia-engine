@@ -110,7 +110,7 @@ peers/champion just did so they can account for it. Cost is one
 VecDeque push per broadcast — negligible.
 
 **What PeerView changes in practice:** when a liquidation cascade
-fires and 12 of 20 agents go long, a momentum-follower amplifies
+fires and 12 of 27 agents go long, a momentum-follower amplifies
 long exposure; a contrarian-fader inverts it. Over time the
 scoreboard sorts out which peer-reading behaviour was right in this
 regime — and that winner becomes the champion.
@@ -146,11 +146,11 @@ cycle repeats. No LLM judge in this loop — PnL *is* the judge.
 ## How the whole feedback loop closes
 
 ```
-  Kiyotaka REST ── candles / funding / OI ──┐
-                                             │
-  Binance WS ──── liquidations ─────────────┤──▶ swarm::Event
-                                             │
-  DuckDB replay ─ historical events ────────┘
+  Kiyotaka REST + WS ─ candles / funding / OI ─┐
+                       liquidations              │
+                       Polymarket SWP-mid lead   │
+                                                 ├──▶ swarm::Event
+  Local replay (warehouse, dev only) ────────────┘
                                  │
                                  ▼
                     Swarm::broadcast(event)
@@ -182,10 +182,11 @@ Separately, every N events the population mutates toward
 parameter regions the scoreboard says are paying out. Over time, the
 swarm *becomes* the strategy the current regime rewards.
 
-## DuckDB replay — the time machine
+## Local replay — the time machine
 
-`store::Store` is an embedded DuckDB file at `data/pythia.duckdb`
-(24 MB scraped) with four tables per asset:
+`store::Store` is an embedded warehouse at `data/pythia.duckdb` populated
+exclusively from Kiyotaka REST endpoints (24 MB scraped) with four
+tables per asset:
 
 | Table | Source | Granularity |
 |-------|--------|-------------|
@@ -215,7 +216,7 @@ walk-forward tests.
    instead of firing blind.
 
 The same `swarm::Event` type is produced whether the source is
-Binance WS (live), Kiyotaka REST (historical scrape), or DuckDB
+Kiyotaka WS (live) and Kiyotaka REST (historical scrape) — both stored in the local
 (replay). Agents can't tell the difference — which is exactly what
 makes the backtest honest.
 
@@ -320,7 +321,7 @@ preserved verbatim and mutation sigmas are conservative by default.
 
 ## Backtest result (reference)
 
-365 days of Binance BTC + ETH perps (69,026 events) replayed through 20
+365 days of Kiyotaka BTC + ETH perp data (69,026 events) replayed through 27
 agents in **0.7 s wall** on an M-series Mac.
 
 Top 5 by total R:
@@ -387,7 +388,7 @@ detect.
 # 1. full swarm backtest on scraped data → reports/swarm/<ts>/swarm.md
 cargo run --release -p swarm --bin swarm-backtest
 
-# 2. live daemon — Binance WS → swarm → champion → executor → HL REST
+# 2. live daemon — Kiyotaka WS+REST → swarm → champion → executor → HL REST
 #    writes data/swarm-snapshot.json every 10 s for the UI
 cargo run --release -p live-executor --bin pythia-swarm-live
 
@@ -402,7 +403,7 @@ cd apps/web && npm install && npm run dev
 # open http://localhost:3000/tournament
 ```
 
-A 3D arena renders all 20 agents simultaneously:
+A 3D arena renders all 27 agents simultaneously:
 
 - size ∝ `|total_r|`, colour by rule family (liq-trend green,
   liq-fade red, vol-breakout amber, funding-trend blue,
