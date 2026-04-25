@@ -13,6 +13,7 @@
 //! funding-arb), and the elite is always preserved verbatim. The goal is
 //! a slow, monotone improvement rather than population collapse.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::agent::SwarmAgent;
@@ -33,6 +34,40 @@ pub struct EvolutionCfg {
     pub crossover_prob: f64,
     /// Hard cap on population size — evolution preserves this.
     pub population_cap: usize,
+    /// Minimum seats reserved per `RuleFamily`. Without this, evolution
+    /// converges hard onto whichever family had the highest Σ R during
+    /// the seed era (e.g. vol-breakout) and the population collapses to
+    /// one family — the "specialist for event kind X" router then has
+    /// no candidates for kinds X owned by the extinct families. The
+    /// router falls back to global champion, defeating the routing.
+    /// Each family listed here is guaranteed at least `min_per_family`
+    /// agents in every generation; if the elite alone doesn't supply
+    /// enough, surviving agents are imported from the prior population
+    /// (mutated) before generic mutants fill the rest.
+    pub family_quotas: Vec<(RuleFamilyKind, usize)>,
+}
+
+/// Discriminant-only tag for `RuleFamily` (since the variants carry data).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RuleFamilyKind {
+    LiqTrend,
+    LiqFade,
+    FundingTrend,
+    FundingArb,
+    VolBreakout,
+}
+
+impl RuleFamilyKind {
+    fn matches(self, family: RuleFamily) -> bool {
+        match (self, family) {
+            (Self::LiqTrend, RuleFamily::LiqZScore { trend_follow: true }) => true,
+            (Self::LiqFade, RuleFamily::LiqZScore { trend_follow: false }) => true,
+            (Self::FundingTrend, RuleFamily::FundingZScore { trend_follow: true }) => true,
+            (Self::FundingArb, RuleFamily::FundingZScore { trend_follow: false }) => true,
+            (Self::VolBreakout, RuleFamily::VolBreakout) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Default for EvolutionCfg {
@@ -43,6 +78,16 @@ impl Default for EvolutionCfg {
             min_decisions: 5,
             crossover_prob: 0.3,
             population_cap: 20,
+            // Two seats per family by default → 5 families × 2 = 10 seats
+            // reserved, leaving 10 free for free-range competition. Tune
+            // per-deployment via the live config.
+            family_quotas: vec![
+                (RuleFamilyKind::LiqTrend, 2),
+                (RuleFamilyKind::LiqFade, 2),
+                (RuleFamilyKind::FundingTrend, 2),
+                (RuleFamilyKind::FundingArb, 2),
+                (RuleFamilyKind::VolBreakout, 2),
+            ],
         }
     }
 }
@@ -129,16 +174,55 @@ impl Evolution {
         });
         let elite_n = ((scored.len() as f64) * self.cfg.elite_fraction).ceil() as usize;
         let elite_n = elite_n.max(1).min(scored.len());
-        let elite: Vec<ScoredAgent> = scored.into_iter().take(elite_n).collect();
+        let elite: Vec<ScoredAgent> = scored.iter().take(elite_n).cloned().collect();
+        // Full ranked list (elite + non-elite) — we draw from this when
+        // a family quota isn't met by the elite alone, so the family
+        // doesn't go extinct before getting a fair sample.
+        let ranked_all: Vec<ScoredAgent> = scored;
 
         let mut next: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(self.cfg.population_cap);
+        let mut family_counts: HashMap<RuleFamilyKind, usize> = HashMap::new();
 
         // 1. Preserve elite unchanged.
         for a in &elite {
             next.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
+            increment_family(&mut family_counts, a.params.family);
         }
 
-        // 2. Fill remainder with mutants / crossovers.
+        // 2. Enforce per-family quotas BEFORE generic mutant fill. For
+        //    each family that's underfilled, draw the best-ranked
+        //    representative from `ranked_all` that isn't already in
+        //    `next`; if none exists, spawn a fresh seed agent for the
+        //    family. This stops single-family lock-in across many gens.
+        for (kind, quota) in self.cfg.family_quotas.clone() {
+            while *family_counts.get(&kind).unwrap_or(&0) < quota
+                && next.len() < self.cfg.population_cap
+            {
+                let already: std::collections::HashSet<&str> =
+                    next.iter().map(|a| a.id()).collect();
+                // Try to pull a survivor of this family from the
+                // full ranked list first.
+                let import = ranked_all.iter().find(|a| {
+                    kind.matches(a.params.family) && !already.contains(a.id.as_str())
+                });
+                if let Some(survivor) = import {
+                    let mutated = self.mutate(&survivor.params);
+                    let new_id = self.new_id(&survivor.id);
+                    next.push(Box::new(SystematicAgent::new(new_id, mutated)));
+                    increment_family(&mut family_counts, kind_to_family(kind));
+                    continue;
+                }
+                // Family went extinct — re-seed from the canonical params.
+                let seed = seed_params_for(kind);
+                let new_id =
+                    format!("gen{}-revive-{}", self.generation, family_label(kind));
+                next.push(Box::new(SystematicAgent::new(new_id, seed)));
+                increment_family(&mut family_counts, kind_to_family(kind));
+            }
+        }
+
+        // 3. Fill remainder with rank-weighted mutants / crossovers
+        //    drawn from the elite. Free-for-all subject to the cap.
         while next.len() < self.cfg.population_cap && !elite.is_empty() {
             let parent_a = self.pick_parent(&elite);
             let new_id = self.new_id(&parent_a.id);
@@ -277,6 +361,55 @@ fn same_family(a: RuleFamily, b: RuleFamily) -> bool {
     std::mem::discriminant(&a) == std::mem::discriminant(&b)
 }
 
+fn family_kind(f: RuleFamily) -> RuleFamilyKind {
+    match f {
+        RuleFamily::LiqZScore { trend_follow: true } => RuleFamilyKind::LiqTrend,
+        RuleFamily::LiqZScore { trend_follow: false } => RuleFamilyKind::LiqFade,
+        RuleFamily::FundingZScore { trend_follow: true } => RuleFamilyKind::FundingTrend,
+        RuleFamily::FundingZScore { trend_follow: false } => RuleFamilyKind::FundingArb,
+        RuleFamily::VolBreakout => RuleFamilyKind::VolBreakout,
+    }
+}
+
+fn increment_family(counts: &mut HashMap<RuleFamilyKind, usize>, family: RuleFamily) {
+    let kind = family_kind(family);
+    *counts.entry(kind).or_insert(0) += 1;
+}
+
+fn kind_to_family(kind: RuleFamilyKind) -> RuleFamily {
+    match kind {
+        RuleFamilyKind::LiqTrend => RuleFamily::LiqZScore { trend_follow: true },
+        RuleFamilyKind::LiqFade => RuleFamily::LiqZScore { trend_follow: false },
+        RuleFamilyKind::FundingTrend => RuleFamily::FundingZScore { trend_follow: true },
+        RuleFamilyKind::FundingArb => RuleFamily::FundingZScore { trend_follow: false },
+        RuleFamilyKind::VolBreakout => RuleFamily::VolBreakout,
+    }
+}
+
+fn family_label(kind: RuleFamilyKind) -> &'static str {
+    match kind {
+        RuleFamilyKind::LiqTrend => "liq-trend",
+        RuleFamilyKind::LiqFade => "liq-fade",
+        RuleFamilyKind::FundingTrend => "funding-trend",
+        RuleFamilyKind::FundingArb => "funding-arb",
+        RuleFamilyKind::VolBreakout => "vol-breakout",
+    }
+}
+
+/// Canonical seed parameters for a family — used when evolution needs to
+/// re-spawn an extinct family to honour the quota. Mirrors what
+/// `SystematicParams::*` constructors return so a revived agent starts
+/// from a sensible baseline rather than a random param vector.
+fn seed_params_for(kind: RuleFamilyKind) -> SystematicParams {
+    match kind {
+        RuleFamilyKind::LiqTrend => SystematicParams::liq_trend(),
+        RuleFamilyKind::LiqFade => SystematicParams::liq_fade(),
+        RuleFamilyKind::FundingTrend => SystematicParams::funding_trend(),
+        RuleFamilyKind::FundingArb => SystematicParams::funding_arb(),
+        RuleFamilyKind::VolBreakout => SystematicParams::vol_breakout(),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ScoredAgent {
     id: String,
@@ -358,6 +491,83 @@ mod tests {
         let next = e.advance(make_current(), &sb);
         assert_eq!(next.len(), 5, "fallback returns the original population");
         assert_eq!(e.generation(), 1, "generation counter still bumps");
+    }
+
+    #[test]
+    fn quotas_keep_every_family_alive_across_many_gens() {
+        // Drive a run where vol-breakout has the only decisive edge, so
+        // greedy elite selection would normally evict every other family
+        // within a generation. Family quotas should keep at least 2
+        // representatives of each kind alive even after many generations.
+        let sb = Scoreboard::new();
+        // 30 closed +1R trades on vol-breakout → it dominates Σ R.
+        for i in 0..30 {
+            let d = crate::agent::AgentDecision {
+                id: format!("vb-{i}"),
+                agent_id: "vol-breakout-v0".into(),
+                ts: domain::time::EventTs::from_secs(0),
+                asset: domain::crypto::Asset::Btc,
+                direction: domain::signal::Direction::Long,
+                conviction: 80,
+                risk_fraction: 0.01,
+                horizon_s: 3600,
+                rationale: "t".into(),
+            };
+            sb.record(d);
+            sb.mark_outcome(&format!("vb-{i}"), 1.0, 50.0);
+        }
+        // 10 closed +0.1R trades on liq-trend so it's eligible but boring.
+        for i in 0..10 {
+            let d = crate::agent::AgentDecision {
+                id: format!("lt-{i}"),
+                agent_id: "liq-trend-v0".into(),
+                ts: domain::time::EventTs::from_secs(0),
+                asset: domain::crypto::Asset::Btc,
+                direction: domain::signal::Direction::Long,
+                conviction: 60,
+                risk_fraction: 0.01,
+                horizon_s: 3600,
+                rationale: "t".into(),
+            };
+            sb.record(d);
+            sb.mark_outcome(&format!("lt-{i}"), 0.1, 1.0);
+        }
+        let cfg = EvolutionCfg {
+            population_cap: 12,
+            min_decisions: 5,
+            ..Default::default()
+        };
+        let mut e = Evolution::new(cfg, 99);
+        let mut current = make_current();
+        // Run 5 generations.
+        for _ in 0..5 {
+            let next = e.advance(current.clone(), &sb);
+            // Map next back to (params, id) pairs for the next round.
+            current = next
+                .iter()
+                .filter_map(|a| a.systematic_params().map(|p| (p, a.id().to_string())))
+                .collect();
+        }
+        // Tally families in the final population.
+        let mut by_kind: HashMap<RuleFamilyKind, usize> = HashMap::new();
+        for (params, _id) in &current {
+            *by_kind.entry(family_kind(params.family)).or_insert(0) += 1;
+        }
+        for kind in [
+            RuleFamilyKind::LiqTrend,
+            RuleFamilyKind::LiqFade,
+            RuleFamilyKind::FundingTrend,
+            RuleFamilyKind::FundingArb,
+            RuleFamilyKind::VolBreakout,
+        ] {
+            let count = by_kind.get(&kind).copied().unwrap_or(0);
+            assert!(
+                count >= 2,
+                "family {} fell below quota after 5 gens: {} agents",
+                family_label(kind),
+                count
+            );
+        }
     }
 
     #[test]

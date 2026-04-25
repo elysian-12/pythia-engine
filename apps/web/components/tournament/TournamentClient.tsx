@@ -797,54 +797,59 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
               How the swarm gets smart
             </div>
-            <ol className="mt-3 space-y-2 text-xs text-slate-300">
+            <ol className="mt-3 space-y-2 text-xs text-slate-300 leading-relaxed">
               <li>
                 <span className="text-purple-300 font-mono">1. Event →</span>{" "}
-                Every agent observes the same Kiyotaka tick — liquidation
-                cascade, funding spike, vol breakout, Polymarket
-                leadership, or a fusion of two or more.
+                A market tick arrives from Kiyotaka — a forced
+                liquidation, a funding spike, a price breakout, a
+                Polymarket lead, or two of those at once.
               </li>
               <li>
                 <span className="text-purple-300 font-mono">2. Vote →</span>{" "}
-                Each agent fires (or abstains) independently using its
-                own rule family — 7 systematic + 5 LLM personas.
+                All 27 agents see it at the same time. Each one decides
+                independently: trade or sit out. 7 are rule-based, 5 are
+                LLM personas reasoning in plain English.
               </li>
               <li>
-                <span className="text-purple-300 font-mono">3. PeerView →</span>{" "}
-                Social agents see peer + champion directions; every agent
-                also sees its own recent expectancy and abstains when its
-                E[R] turns negative (self-backtest gate).
+                <span className="text-purple-300 font-mono">3. Self-check →</span>{" "}
+                Before voting, every agent looks at its own recent
+                results. If it's been losing money lately, it benches
+                itself until it recovers (the self-backtest gate).
               </li>
               <li>
                 <span className="text-purple-300 font-mono">4. Scoreboard →</span>{" "}
-                Realized R updates Σ R, rolling Sharpe, profit-factor,
-                PSR, DSR — the oracle the router reads.
+                After a trade closes, the realised win or loss feeds
+                back. Each agent's running profit, win rate, and
+                statistical confidence (Sharpe / PSR / DSR) update.
               </li>
               <li>
                 <span className="text-purple-300 font-mono">5. Specialist →</span>{" "}
-                Per-event-kind specialist routing: Polymarket leads go
-                to <span className="font-mono">polyedge</span>, liquidation
-                cascades to <span className="font-mono">liq-trend</span>,
+                For this kind of event, who has the best track record?
+                Polymarket leads go to <span className="font-mono">polyedge</span>,
+                liquidation cascades to <span className="font-mono">liq-trend</span>,
                 funding spikes to <span className="font-mono">funding-trend</span>,
-                etc. No more global oracle missing the specialist's edge.
+                and so on. Specialists, not generalists.
               </li>
               <li>
                 <span className="text-purple-300 font-mono">6. Ensemble →</span>{" "}
-                Sharpe-weighted vote across all fired agents. Trade only
-                fires when conviction crosses 0.25; size scales with
-                quarter-Kelly on the specialist's profit factor.
+                Among the agents that did fire, sum their votes weighted
+                by track record. If they agree strongly enough, trade in
+                that direction; if they're split, sit out. Size the
+                trade by how confident the specialist usually is when
+                right (quarter-Kelly).
               </li>
               <li>
                 <span className="text-amber-300 font-mono">7. Evolution →</span>{" "}
-                Every N events, weak agents replaced by log-space
-                Gaussian mutants + elite crossovers. The specialist roster
-                itself evolves to fit the regime, not just the params.
+                Every N events, the worst agents get replaced by tweaked
+                copies of the best — small random parameter shifts plus
+                some swaps between top performers in the same family.
+                Bad agents die out; good ones spawn lookalikes.
               </li>
               <li>
                 <span className="text-amber-300 font-mono">8. Copy trade →</span>{" "}
-                Specialist + direction + size → paper Hyperliquid.
-                Closed-trade R feeds back into the scoreboard, closing
-                the loop on the next event.
+                The chosen direction + size opens a paper position on
+                Hyperliquid. When that trade closes, its result flows
+                straight back to step 4 — the loop closes.
               </li>
             </ol>
           </div>

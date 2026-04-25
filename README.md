@@ -26,27 +26,31 @@ surfaces the rule that is actually paying out under the current regime.
 
 ### The eight steps in plain English
 
-1. **Event** — every agent sees the same Kiyotaka tick at the same time.
-2. **Vote** — each one fires or abstains independently using its own
-   rule family (7 systematic + 5 LLM personas).
-3. **PeerView** — social agents read peer + champion directions; every
-   agent also sees its own recent expectancy and abstains when its E[R]
-   turns negative (self-backtest gate).
-4. **Scoreboard** — closed trades update Σ R, rolling Sharpe, profit
-   factor, PSR, DSR — the oracle the router reads.
-5. **Specialist** — per-event-kind routing. Polymarket leads → polyedge;
-   liquidation cascades → liq-trend; funding spikes → funding-trend;
-   confluence events → polyfusion. No global oracle missing the
-   specialist's edge.
-6. **Ensemble** — Sharpe-weighted vote across the agents that *did*
-   fire. Trade only when conviction > 0.25; size scales with quarter-
-   Kelly on the specialist's profit factor.
-7. **Evolution** — every N events, weak agents replaced by log-space
-   Gaussian mutants + elite crossovers (same family). The specialist
-   roster itself evolves to fit the regime, not just the params.
-8. **Copy trade** — specialist + ensemble direction + Kelly-scaled size
-   → paper Hyperliquid (live signing wired in next pass). Closed-trade
-   R feeds back into the scoreboard, closing the loop on the next event.
+1. **Event** — A market tick from Kiyotaka: forced liquidation, funding
+   spike, price breakout, Polymarket lead, or two of those at once.
+2. **Vote** — All 27 agents see it at the same time. Each one decides
+   independently: trade or sit out. 7 follow rules, 5 reason as LLM
+   personas in plain English.
+3. **Self-check** — Before voting, every agent reads its own recent
+   results. Losing money lately? It benches itself until it recovers.
+4. **Scoreboard** — When trades close, the realised win or loss flows
+   back. Each agent's running profit, win rate, and statistical
+   confidence (Sharpe / PSR / DSR) update.
+5. **Specialist** — For *this* event kind, who has the best track
+   record? Polymarket leads → polyedge; liquidation cascades →
+   liq-trend; funding spikes → funding-trend. Specialists, not
+   generalists.
+6. **Ensemble** — Among the agents that did fire, sum the votes
+   weighted by track record. Strong agreement → trade in that
+   direction; split → sit out. Size by how confident the specialist
+   usually is when right (quarter-Kelly).
+7. **Evolution** — Every N events, the worst agents get replaced by
+   tweaked copies of the best (small parameter shifts + swaps within
+   the same family). Each family keeps at least 2 seats so good
+   competition doesn't accidentally kill diversity.
+8. **Copy trade** — Direction + size opens a paper position on
+   Hyperliquid. When it closes, the result flows back to step 4 — the
+   loop closes.
 
 - **PeerView** = what agents see *of each other* within one event
   (momentum / contrarian meta-behaviour) plus their *own* recent
