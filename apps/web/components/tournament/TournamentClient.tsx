@@ -29,6 +29,12 @@ const EQUITY_USD = 1000;
 const DEFAULT_RISK_FRACTION = 0.01;
 const DEFAULT_BTC = 77_500;
 const DEFAULT_ETH = 3_200;
+// Hard ceiling on simultaneously-open paper positions. Above this the
+// trader skips new opens regardless of agent signals — without a cap,
+// autopilot-driven sessions accumulate dozens of correlated entries
+// (one per event) and the panel becomes a wall of stale longs that
+// can't realistically be exited together.
+const MAX_OPEN_POSITIONS = 8;
 
 function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
@@ -363,7 +369,10 @@ export function TournamentClient() {
     const route = routeTrade(ev, rxs, currentSnap.agents);
     const userOverride = copyAgentRef.current; // explicit pin from CopyTradePanel
 
-    const latencyMs = Math.max(1, Math.round(performance.now() - t0));
+    // Keep float precision — performance.now() reports sub-ms (clamped
+    // to ~5µs in Chrome). Rounding to integer ms collapsed every cycle
+    // to "1ms"; the formatter downstream picks ms / µs / ns adaptively.
+    const latencyMs = performance.now() - t0;
     const entry: FeedEntry = {
       id: ev.id,
       ts: ev.ts,
@@ -414,21 +423,24 @@ export function TournamentClient() {
         ethPx,
       );
       if (!sim) return;
-      setOpenPositions((prev) => [
-        ...prev,
-        {
-          id: `pos-${ev.id}`,
-          agent_id: sim.agent_id,
-          asset: ev.asset,
-          side: sim.direction,
-          size_contracts: sim.size_contracts,
-          notional_usd: sim.size_usd,
-          entry: sim.entry,
-          stop: sim.stop,
-          take_profit: sim.take_profit,
-          opened_at: ev.ts,
-        },
-      ]);
+      setOpenPositions((prev) => {
+        if (prev.length >= MAX_OPEN_POSITIONS) return prev;
+        return [
+          ...prev,
+          {
+            id: `pos-${ev.id}`,
+            agent_id: sim.agent_id,
+            asset: ev.asset,
+            side: sim.direction,
+            size_contracts: sim.size_contracts,
+            notional_usd: sim.size_usd,
+            entry: sim.entry,
+            stop: sim.stop,
+            take_profit: sim.take_profit,
+            opened_at: ev.ts,
+          },
+        ];
+      });
       return;
     }
 
@@ -445,21 +457,24 @@ export function TournamentClient() {
     const dir = route.decision.direction;
     const stop = dir === "long" ? price - stopDist : price + stopDist;
     const take = dir === "long" ? price + 3 * atr : price - 3 * atr;
-    setOpenPositions((prev) => [
-      ...prev,
-      {
-        id: `pos-${ev.id}`,
-        agent_id: route.specialist!.agent_id,
-        asset: ev.asset,
-        side: dir,
-        size_contracts: notional / price,
-        notional_usd: notional,
-        entry: price,
-        stop,
-        take_profit: take,
-        opened_at: ev.ts,
-      },
-    ]);
+    setOpenPositions((prev) => {
+      if (prev.length >= MAX_OPEN_POSITIONS) return prev;
+      return [
+        ...prev,
+        {
+          id: `pos-${ev.id}`,
+          agent_id: route.specialist!.agent_id,
+          asset: ev.asset,
+          side: dir,
+          size_contracts: notional / price,
+          notional_usd: notional,
+          entry: price,
+          stop,
+          take_profit: take,
+          opened_at: ev.ts,
+        },
+      ];
+    });
   }, []);
 
   const onPrices = useCallback(
@@ -520,7 +535,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               </span>
             </div>
             <h2 className="text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight">
-              Events → Swarm → Champion → Your copy trade
+              Events → Swarm → Champion → Your trade
             </h2>
             <p className="mt-2 text-[0.7rem] text-mist max-w-xl">
               Live decision loop on real Kiyotaka events. The leaderboard
@@ -849,7 +864,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 Bad agents die out; good ones spawn lookalikes.
               </li>
               <li>
-                <span className="text-amber-300 font-mono">8. Copy trade →</span>{" "}
+                <span className="text-amber-300 font-mono">8. Trade →</span>{" "}
                 The chosen direction + size opens a paper position on
                 Hyperliquid. When that trade closes, its result flows
                 straight back to step 4 — the loop closes.

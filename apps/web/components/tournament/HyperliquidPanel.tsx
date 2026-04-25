@@ -72,8 +72,13 @@ export function HyperliquidPanel({
         />
       </div>
 
-      <div className="text-[0.7rem] uppercase tracking-wider text-mist mb-2">
-        Open positions · {open.length}
+      <div className="text-[0.7rem] uppercase tracking-wider text-mist mb-2 flex items-center justify-between">
+        <span>Open positions · {open.length}</span>
+        {open.length > 0 ? (
+          <span className="text-mist/70 normal-case tracking-normal">
+            newest on top · scroll to see more
+          </span>
+        ) : null}
       </div>
       {open.length === 0 ? (
         <div className="rounded-sm border border-edge/60 bg-black/20 px-3 py-4 text-center text-[0.75rem] text-mist">
@@ -81,8 +86,8 @@ export function HyperliquidPanel({
           position opens here with stop + TP wired up.
         </div>
       ) : (
-        <div className="space-y-2">
-          {open.map((p) => {
+        <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1">
+          {[...open].reverse().map((p) => {
             const m = p.asset === "BTC" ? marks.BTC : marks.ETH;
             const pnl = m != null ? unrealizedPnl(p, m) : 0;
             return (

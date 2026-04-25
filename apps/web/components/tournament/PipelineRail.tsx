@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatDuration } from "@/lib/format";
 
 type Stage = "kiyotaka" | "event" | "swarm" | "champion" | "hl" | "feedback";
 
@@ -93,10 +94,7 @@ export function PipelineRail({
               title="Wall-clock latency from event arrival to paper-trade-sent"
             >
               <span className="w-1 h-1 rounded-full bg-current" />
-              last cycle{" "}
-              {lastLatencyMs >= 1000
-                ? `${(lastLatencyMs / 1000).toFixed(2)}s`
-                : `${lastLatencyMs}ms`}
+              last cycle {formatDuration(lastLatencyMs)}
             </span>
           ) : null}
         </div>

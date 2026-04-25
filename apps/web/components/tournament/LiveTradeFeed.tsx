@@ -2,6 +2,7 @@
 
 import type { SimEvent, SimReaction } from "@/lib/simulate";
 import { FAMILY_COLORS } from "@/lib/swarm";
+import { formatDuration } from "@/lib/format";
 
 export type FeedEntry = {
   id: string;
@@ -105,7 +106,7 @@ function EventRow({ entry }: { entry: FeedEntry }) {
               className="text-cyan"
               title="Latency from event arrival to trade-sent"
             >
-              {entry.latencyMs}ms
+              {formatDuration(entry.latencyMs)}
             </span>
           ) : null}
         </span>
@@ -160,11 +161,11 @@ function EventRow({ entry }: { entry: FeedEntry }) {
       ) : champion ? (
         <div className="px-3 py-1.5 border-t border-amber/20 bg-amber/5 text-[0.65rem] text-amber flex items-center justify-between gap-2">
           <span>
-            Copy-trader would {champion.direction === "long" ? "GO LONG" : "GO SHORT"} —
+            Trader would {champion.direction === "long" ? "GO LONG" : "GO SHORT"} —
             champion fired.
           </span>
           {entry.latencyMs != null ? (
-            <span className="num text-cyan/80">{entry.latencyMs}ms event→sent</span>
+            <span className="num text-cyan/80">{formatDuration(entry.latencyMs)} event→sent</span>
           ) : null}
         </div>
       ) : null}
@@ -215,7 +216,7 @@ function RouterFooter({
       ) : null}
       <span className="grow" />
       {latencyMs != null ? (
-        <span className="num text-cyan/80">{latencyMs}ms</span>
+        <span className="num text-cyan/80">{formatDuration(latencyMs)}</span>
       ) : null}
     </div>
   );

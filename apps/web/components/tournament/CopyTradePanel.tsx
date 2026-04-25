@@ -64,7 +64,7 @@ export function CopyTradePanel({
     <div className="panel p-5">
       <div className="flex items-center justify-between mb-3">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
-          Copy trade
+          Trade
         </div>
         {mirrored ? (
           <span
@@ -186,7 +186,7 @@ export function CopyTradePanel({
           <p className="text-xs text-mist">
             Your mirrored agent didn&apos;t react to that event — it&apos;s
             watching different signals or the magnitude was below its
-            trigger. Copy-trader stays flat.
+            trigger. Trader stays flat.
           </p>
         ) : (
           <p className="text-xs text-mist">
