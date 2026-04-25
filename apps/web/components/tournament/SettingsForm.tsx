@@ -7,6 +7,12 @@ export type SwarmConfig = {
   position_cap_mult: number;
   kelly_enabled: boolean;
   uncertainty_filter: number;
+  // Portfolio meta-agent — exit + aggregation rules.
+  max_open_positions: number;
+  min_conviction: number;
+  time_stop_hours: number;
+  trail_after_r: number;
+  swarm_flip_conviction: number;
   updated_at: number;
 };
 
@@ -15,6 +21,11 @@ const DEFAULT_CONFIG: SwarmConfig = {
   position_cap_mult: 3,
   kelly_enabled: false,
   uncertainty_filter: 0.4,
+  max_open_positions: 8,
+  min_conviction: 0.30,
+  time_stop_hours: 12,
+  trail_after_r: 1.0,
+  swarm_flip_conviction: 0.40,
   updated_at: 0,
 };
 
@@ -142,6 +153,70 @@ export function SettingsForm() {
             </div>
           </div>
         </label>
+
+        {/* Portfolio meta-agent — exit + aggregation rules. The router
+            decides which specialist to follow on entry; these knobs
+            decide when to flatten and how much exposure to carry. */}
+        <div className="pt-3 border-t border-edge/40">
+          <div className="text-[0.6rem] uppercase tracking-[0.3em] text-purple-300 mb-3">
+            Exit rules · meta-agent
+          </div>
+
+          <Slider
+            label="Max open positions"
+            sublabel="hard cap on simultaneous paper positions across BTC + ETH"
+            value={cfg.max_open_positions}
+            min={1}
+            max={16}
+            step={1}
+            fmt={(v) => `${v.toFixed(0)}`}
+            onChange={(v) => onChange("max_open_positions", v)}
+          />
+
+          <Slider
+            label="Min conviction to enter"
+            sublabel="skip new entries below this ensemble conviction"
+            value={cfg.min_conviction}
+            min={0}
+            max={1}
+            step={0.05}
+            fmt={(v) => `${(v * 100).toFixed(0)} %`}
+            onChange={(v) => onChange("min_conviction", v)}
+          />
+
+          <Slider
+            label="Time stop"
+            sublabel="force-exit positions older than this — 0 disables"
+            value={cfg.time_stop_hours}
+            min={0}
+            max={48}
+            step={1}
+            fmt={(v) => (v === 0 ? "off" : `${v.toFixed(0)} h`)}
+            onChange={(v) => onChange("time_stop_hours", v)}
+          />
+
+          <Slider
+            label="Trail after"
+            sublabel="lock breakeven once unrealized R clears this — 0 disables"
+            value={cfg.trail_after_r}
+            min={0}
+            max={3}
+            step={0.25}
+            fmt={(v) => (v === 0 ? "off" : `${v.toFixed(2)} R`)}
+            onChange={(v) => onChange("trail_after_r", v)}
+          />
+
+          <Slider
+            label="Swarm-flip exit"
+            sublabel="close when fresh ensemble votes opposite at ≥ this conviction"
+            value={cfg.swarm_flip_conviction}
+            min={0}
+            max={1}
+            step={0.05}
+            fmt={(v) => (v >= 1 ? "off" : `${(v * 100).toFixed(0)} %`)}
+            onChange={(v) => onChange("swarm_flip_conviction", v)}
+          />
+        </div>
       </div>
 
       <div className="mt-5 flex items-center justify-between">

@@ -22,6 +22,13 @@ import type { SimEvent } from "@/lib/simulate";
 import { simulateReactions, simulateCopyTrade } from "@/lib/simulate";
 import { checkTriggers, sumRealized, type PaperPosition } from "@/lib/paper";
 import { routeTrade } from "@/lib/router";
+import {
+  DEFAULT_PORTFOLIO_CONFIG,
+  decideEntry,
+  manageOnEvent,
+  manageOnMark,
+  type PortfolioConfig,
+} from "@/lib/portfolio";
 
 const COPY_LS_KEY = "pythia-copytrade-agent";
 const FEED_MAX = 25;
@@ -29,15 +36,17 @@ const EQUITY_USD = 1000;
 const DEFAULT_RISK_FRACTION = 0.01;
 const DEFAULT_BTC = 77_500;
 const DEFAULT_ETH = 3_200;
-// Hard ceiling on simultaneously-open paper positions. Above this the
-// trader skips new opens regardless of agent signals — without a cap,
-// autopilot-driven sessions accumulate dozens of correlated entries
-// (one per event) and the panel becomes a wall of stale longs that
-// can't realistically be exited together.
-const MAX_OPEN_POSITIONS = 8;
 
 function fmt(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
+}
+
+/** Coerce an incoming config value into a sane numeric range; falls
+ *  back to `prev` when missing or invalid. Keeps the portfolio rules
+ *  resilient to partial /api/config responses (older clients, etc). */
+function clampNum(v: unknown, prev: number, lo: number, hi: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return prev;
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function RegimeBadge({
@@ -138,6 +147,11 @@ export function TournamentClient() {
     { BTC: null, ETH: null },
   );
   const [riskFraction, setRiskFraction] = useState<number>(DEFAULT_RISK_FRACTION);
+  // Portfolio meta-agent settings — open caps, exit rules. Loaded from
+  // /api/config + same broadcast plumbing as risk_fraction.
+  const [portfolioCfg, setPortfolioCfg] = useState<PortfolioConfig>(
+    DEFAULT_PORTFOLIO_CONFIG,
+  );
 
   // Refs mirror state so callbacks passed to AutoPilot stay referentially
   // stable. Without this, `onFire` recreates each time `marks` updates and
@@ -149,6 +163,8 @@ export function TournamentClient() {
     ETH: null,
   });
   const riskFractionRef = useRef<number>(DEFAULT_RISK_FRACTION);
+  const portfolioCfgRef = useRef<PortfolioConfig>(DEFAULT_PORTFOLIO_CONFIG);
+  const openPositionsRef = useRef<PaperPosition[]>([]);
   useEffect(() => {
     snapRef.current = snap;
   }, [snap]);
@@ -161,21 +177,41 @@ export function TournamentClient() {
   useEffect(() => {
     riskFractionRef.current = riskFraction;
   }, [riskFraction]);
+  useEffect(() => {
+    portfolioCfgRef.current = portfolioCfg;
+  }, [portfolioCfg]);
+  useEffect(() => {
+    openPositionsRef.current = openPositions;
+  }, [openPositions]);
 
-  // Read user-configured risk fraction once on mount + whenever the
-  // SettingsForm broadcasts a save (CustomEvent for same-tab + storage
-  // event for cross-tab). Keeps the paper sizing in sync with the slider.
+  // Read user-configured risk fraction + portfolio rules once on mount
+  // and whenever the SettingsForm broadcasts a save (CustomEvent for
+  // same-tab + storage event for cross-tab).
   useEffect(() => {
     let alive = true;
+    const apply = (c: Partial<PortfolioConfig & { risk_fraction: number }>) => {
+      if (!alive) return;
+      if (typeof c.risk_fraction === "number" && c.risk_fraction > 0) {
+        setRiskFraction(c.risk_fraction);
+      }
+      setPortfolioCfg((prev) => ({
+        max_open_positions: clampNum(c.max_open_positions, prev.max_open_positions, 1, 32),
+        min_conviction: clampNum(c.min_conviction, prev.min_conviction, 0, 1),
+        time_stop_hours: clampNum(c.time_stop_hours, prev.time_stop_hours, 0, 168),
+        trail_after_r: clampNum(c.trail_after_r, prev.trail_after_r, 0, 5),
+        swarm_flip_conviction: clampNum(
+          c.swarm_flip_conviction,
+          prev.swarm_flip_conviction,
+          0,
+          1,
+        ),
+      }));
+    };
     const refresh = async () => {
       try {
         const r = await fetch("/api/config", { cache: "no-store" });
         if (!r.ok) return;
-        const c = (await r.json()) as { risk_fraction?: number };
-        if (!alive) return;
-        if (typeof c.risk_fraction === "number" && c.risk_fraction > 0) {
-          setRiskFraction(c.risk_fraction);
-        }
+        apply((await r.json()) as Partial<PortfolioConfig & { risk_fraction: number }>);
       } catch {
         // ignore
       }
@@ -185,10 +221,8 @@ export function TournamentClient() {
       if (e.key === "pythia-swarm-config") refresh();
     };
     const onCustom = (e: Event) => {
-      const detail = (e as CustomEvent<{ risk_fraction?: number }>).detail;
-      if (detail && typeof detail.risk_fraction === "number" && detail.risk_fraction > 0) {
-        setRiskFraction(detail.risk_fraction);
-      }
+      const detail = (e as CustomEvent<Partial<PortfolioConfig & { risk_fraction: number }>>).detail;
+      if (detail) apply(detail);
     };
     window.addEventListener("storage", onStorage);
     window.addEventListener("pythia-config-updated", onCustom);
@@ -293,12 +327,38 @@ export function TournamentClient() {
     };
   }, [autopilotOn, openPositions.length]);
 
-  // Stop/TP sweep: when marks change, auto-close positions whose triggers hit.
+  // Mark-tick policy sweep: stop / TP / trail / time stop. Runs on
+  // every mark refresh. The portfolio meta-agent holds the trail-stop
+  // and time-stop logic; checkTriggers() still owns the original stop
+  // and TP since those are price-driven and the meta-agent's trail
+  // adjustment writes through to the same `stop` field.
   useEffect(() => {
     if (openPositions.length === 0) return;
+    const cfg = portfolioCfgRef.current;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const { updated, closes } = manageOnMark(openPositions, marks, cfg, nowSec);
+    const closeIds = new Set(closes.map((c) => c.id));
+    const closesByAge: Record<string, { reason: PaperPosition["close_reason"]; mark: number }> = {};
+    for (const c of closes) closesByAge[c.id] = { reason: c.reason, mark: c.mark };
+
+    // After meta-agent applies trails, re-check stop / TP triggers — a
+    // ratcheted stop may now be in the money.
     const hits: PaperPosition[] = [];
     const survivors: PaperPosition[] = [];
-    for (const p of openPositions) {
+    for (const p of updated) {
+      if (closeIds.has(p.id)) {
+        const c = closesByAge[p.id];
+        const px = c.mark;
+        const diff = p.side === "long" ? px - p.entry : p.entry - px;
+        hits.push({
+          ...p,
+          closed_at: nowSec,
+          close_px: px,
+          close_reason: c.reason,
+          pnl_usd: diff * p.size_contracts,
+        });
+        continue;
+      }
       const m = p.asset === "BTC" ? marks.BTC : marks.ETH;
       if (m == null) {
         survivors.push(p);
@@ -309,18 +369,31 @@ export function TournamentClient() {
         survivors.push(p);
         continue;
       }
+      // If the trail rule pulled the stop above entry, surface the
+      // close as `trail` rather than `stop` — semantically distinct
+      // (locked-in profit vs. losing trade hitting initial stop).
+      const initial = p.initial_stop ?? p.stop;
+      const trailed = p.side === "long" ? p.stop > initial : p.stop < initial;
+      const reason: PaperPosition["close_reason"] =
+        trig === "stop" && trailed ? "trail" : trig;
       const diff = p.side === "long" ? m - p.entry : p.entry - m;
       hits.push({
         ...p,
-        closed_at: Math.floor(Date.now() / 1000),
+        closed_at: nowSec,
         close_px: m,
-        close_reason: trig,
+        close_reason: reason,
         pnl_usd: diff * p.size_contracts,
       });
     }
-    if (hits.length === 0) return;
+    // Bail if nothing actually changed — avoids re-renders when the
+    // only diff is a transient peak-watermark update.
+    const noTrailChange = updated.every((u, i) => {
+      const o = openPositions[i];
+      return o && u.id === o.id && u.stop === o.stop && u.peak === o.peak;
+    });
+    if (hits.length === 0 && noTrailChange) return;
     setOpenPositions(survivors);
-    setClosedPositions((prev) => [...prev, ...hits]);
+    if (hits.length > 0) setClosedPositions((prev) => [...prev, ...hits]);
   }, [marks, openPositions]);
 
   const reactions = useMemo(() => {
@@ -405,10 +478,59 @@ export function TournamentClient() {
     // Paper-HL placement. If the user pinned a specific agent in the
     // CopyTradePanel we honour that (manual override); otherwise we
     // follow the router's chosen specialist + ensemble direction +
-    // ensemble-conviction-scaled size.
+    // ensemble-conviction-scaled size. Both paths run through the
+    // portfolio meta-agent (decideEntry) which holds the cap, the
+    // conviction floor, and the reversal logic.
     const liveMarks = marksRef.current;
     const btcPx = liveMarks.BTC ?? DEFAULT_BTC;
     const ethPx = liveMarks.ETH ?? DEFAULT_ETH;
+
+    // Step 1: act on swarm flips first — close any open positions on
+    // this asset whose direction is now opposite the high-conviction
+    // ensemble vote. "Follow the swarm out" rule.
+    const flipIds = manageOnEvent({
+      asset: ev.asset,
+      vote_direction: route.vote.direction,
+      conviction: route.vote.conviction,
+      positions: openPositionsRef.current,
+      config: portfolioCfgRef.current,
+    });
+    if (flipIds.length > 0) {
+      const px = ev.asset === "BTC" ? btcPx : ethPx;
+      setOpenPositions((prev) => {
+        const remain: PaperPosition[] = [];
+        const closed: PaperPosition[] = [];
+        for (const p of prev) {
+          if (flipIds.includes(p.id)) {
+            const m = p.asset === "BTC" ? marksRef.current.BTC : marksRef.current.ETH;
+            const cpx = m ?? px;
+            const diff = p.side === "long" ? cpx - p.entry : p.entry - cpx;
+            closed.push({
+              ...p,
+              closed_at: Math.floor(Date.now() / 1000),
+              close_px: cpx,
+              close_reason: "swarm-flip",
+              pnl_usd: diff * p.size_contracts,
+            });
+          } else {
+            remain.push(p);
+          }
+        }
+        if (closed.length > 0) {
+          setClosedPositions((c) => [...c, ...closed]);
+        }
+        return remain;
+      });
+    }
+
+    // Step 2: figure out the new direction + size. User override wins
+    // over router; otherwise router decides.
+    let direction: "long" | "short" | null = null;
+    let agentId: string | null = null;
+    let entryPx = 0;
+    let stop = 0;
+    let take = 0;
+    let notional = 0;
 
     if (userOverride) {
       const mirrored = currentSnap.agents.find((a) => a.agent_id === userOverride);
@@ -423,52 +545,78 @@ export function TournamentClient() {
         ethPx,
       );
       if (!sim) return;
-      setOpenPositions((prev) => {
-        if (prev.length >= MAX_OPEN_POSITIONS) return prev;
-        return [
-          ...prev,
-          {
-            id: `pos-${ev.id}`,
-            agent_id: sim.agent_id,
-            asset: ev.asset,
-            side: sim.direction,
-            size_contracts: sim.size_contracts,
-            notional_usd: sim.size_usd,
-            entry: sim.entry,
-            stop: sim.stop,
-            take_profit: sim.take_profit,
-            opened_at: ev.ts,
-          },
-        ];
-      });
-      return;
+      direction = sim.direction;
+      agentId = sim.agent_id;
+      entryPx = sim.entry;
+      stop = sim.stop;
+      take = sim.take_profit;
+      notional = sim.size_usd;
+    } else {
+      if (!route.decision.direction || !route.specialist) return;
+      const price = ev.asset === "BTC" ? btcPx : ethPx;
+      if (!Number.isFinite(price) || price <= 0) return;
+      const atr = price * 0.005;
+      const stopDist = 1.5 * atr;
+      const riskUsd =
+        EQUITY_USD * riskFractionRef.current * route.decision.size_factor;
+      const n = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 3);
+      if (n <= 0) return;
+      direction = route.decision.direction;
+      agentId = route.specialist.agent_id;
+      entryPx = price;
+      stop = direction === "long" ? price - stopDist : price + stopDist;
+      take = direction === "long" ? price + 3 * atr : price - 3 * atr;
+      notional = n;
     }
 
-    // Router path — only trade if the ensemble landed on a direction.
-    if (!route.decision.direction || !route.specialist) return;
-    const price = ev.asset === "BTC" ? btcPx : ethPx;
-    if (!Number.isFinite(price) || price <= 0) return;
-    const atr = price * 0.005;
-    const stopDist = 1.5 * atr;
-    const riskUsd =
-      EQUITY_USD * riskFractionRef.current * route.decision.size_factor;
-    const notional = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 3);
-    if (notional <= 0) return;
-    const dir = route.decision.direction;
-    const stop = dir === "long" ? price - stopDist : price + stopDist;
-    const take = dir === "long" ? price + 3 * atr : price - 3 * atr;
+    // Step 3: ask the portfolio meta-agent what to do with this fresh
+    // signal, given current exposure. "skip" / "open" / "reverse".
+    const action = decideEntry({
+      asset: ev.asset,
+      direction,
+      conviction: route.vote.conviction,
+      open: openPositionsRef.current,
+      config: portfolioCfgRef.current,
+    });
+    if (action.kind === "skip") return;
+
     setOpenPositions((prev) => {
-      if (prev.length >= MAX_OPEN_POSITIONS) return prev;
+      let next = prev;
+      // Reversal: close the opposite position before opening the new one.
+      if (action.kind === "reverse") {
+        const opp = prev.find((p) => p.id === action.close_id);
+        if (opp) {
+          const m = opp.asset === "BTC" ? marksRef.current.BTC : marksRef.current.ETH;
+          const cpx = m ?? opp.entry;
+          const diff = opp.side === "long" ? cpx - opp.entry : opp.entry - cpx;
+          setClosedPositions((c) => [
+            ...c,
+            {
+              ...opp,
+              closed_at: Math.floor(Date.now() / 1000),
+              close_px: cpx,
+              close_reason: "reverse",
+              pnl_usd: diff * opp.size_contracts,
+            },
+          ]);
+          next = prev.filter((p) => p.id !== opp.id);
+        }
+      }
+      // Defensive cap recheck — meta-agent already enforced this, but
+      // a concurrent setState burst could push the array past the cap
+      // before the meta-agent runs against fresh state.
+      if (next.length >= portfolioCfgRef.current.max_open_positions) return next;
       return [
-        ...prev,
+        ...next,
         {
           id: `pos-${ev.id}`,
-          agent_id: route.specialist!.agent_id,
+          agent_id: agentId!,
           asset: ev.asset,
-          side: dir,
-          size_contracts: notional / price,
+          side: direction!,
+          size_contracts: notional / entryPx,
           notional_usd: notional,
-          entry: price,
+          entry: entryPx,
+          initial_stop: stop,
           stop,
           take_profit: take,
           opened_at: ev.ts,

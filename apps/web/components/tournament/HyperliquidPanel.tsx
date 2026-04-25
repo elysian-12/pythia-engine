@@ -248,11 +248,28 @@ function PositionRow({
 function ClosedRow({ p }: { p: PaperPosition }) {
   const pnl = realizedPnl(p);
   const pnlColor = pnl >= 0 ? "text-green" : "text-red";
-  const reasonChip = {
+  // Color hint by category — wins (green), stop-outs (red), risk-management
+  // exits (amber). Lets the user scan a session log and immediately see
+  // whether the loop is closing in profit or being walked out by stops.
+  const reasonChip: Record<NonNullable<PaperPosition["close_reason"]>, string> = {
     stop: "text-red",
     tp: "text-green",
     manual: "text-mist",
-  }[p.close_reason ?? "manual"];
+    trail: "text-green",
+    time: "text-amber",
+    reverse: "text-amber",
+    "swarm-flip": "text-amber",
+  };
+  const reasonLabel: Record<NonNullable<PaperPosition["close_reason"]>, string> = {
+    stop: "stop",
+    tp: "take profit",
+    manual: "manual",
+    trail: "trail",
+    time: "time stop",
+    reverse: "reverse",
+    "swarm-flip": "swarm flip",
+  };
+  const reason = p.close_reason ?? "manual";
   return (
     <div className="flex items-center justify-between text-[0.7rem] num px-2 py-1 rounded-sm bg-black/20">
       <div className="flex items-center gap-2">
@@ -263,8 +280,8 @@ function ClosedRow({ p }: { p: PaperPosition }) {
         <span className="text-mist">{p.agent_id}</span>
       </div>
       <div className="flex items-center gap-3">
-        <span className={`text-[0.6rem] uppercase ${reasonChip}`}>
-          {p.close_reason}
+        <span className={`text-[0.6rem] uppercase ${reasonChip[reason]}`}>
+          {reasonLabel[reason]}
         </span>
         <span className={pnlColor}>
           {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}

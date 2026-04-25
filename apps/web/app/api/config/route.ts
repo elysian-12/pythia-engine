@@ -13,6 +13,13 @@ export type SwarmConfig = {
   equity_usd: number; // 100 .. 1_000_000 — sizing base for the paper ledger
   mode: "paper" | "live"; // paper = simulated; live = preview only (no real signing yet)
   wallet_address: string; // EVM address for the live preview only — never used to sign
+  // Portfolio meta-agent rules — exit / aggregation / size guardrails
+  // applied on top of the router's per-event decisions.
+  max_open_positions: number;       // 1..32 — global cap on simultaneously open paper positions
+  min_conviction: number;           // 0..1  — refuse new entries below this ensemble conviction
+  time_stop_hours: number;          // 0..168 — force-exit positions older than this (0 disables)
+  trail_after_r: number;            // 0..5  — ratchet stop to breakeven once unrealized R crosses this
+  swarm_flip_conviction: number;    // 0..1  — close a position when fresh ensemble votes opposite at ≥ this
   updated_at: number;
 };
 
@@ -24,6 +31,11 @@ const DEFAULT_CONFIG: SwarmConfig = {
   equity_usd: 1000,
   mode: "paper",
   wallet_address: "",
+  max_open_positions: 8,
+  min_conviction: 0.30,
+  time_stop_hours: 12,
+  trail_after_r: 1.0,
+  swarm_flip_conviction: 0.40,
   updated_at: Math.floor(Date.now() / 1000),
 };
 
@@ -56,6 +68,29 @@ function sanitize(raw: Partial<SwarmConfig>): SwarmConfig {
     equity_usd: clamp(Number(raw.equity_usd ?? DEFAULT_CONFIG.equity_usd), 100, 1_000_000),
     mode: raw.mode === "live" ? "live" : "paper",
     wallet_address: wallet.length === 0 ? "" : EVM_ADDR_RE.test(wallet) ? wallet : "",
+    max_open_positions: Math.round(
+      clamp(Number(raw.max_open_positions ?? DEFAULT_CONFIG.max_open_positions), 1, 32),
+    ),
+    min_conviction: clamp(
+      Number(raw.min_conviction ?? DEFAULT_CONFIG.min_conviction),
+      0,
+      1,
+    ),
+    time_stop_hours: clamp(
+      Number(raw.time_stop_hours ?? DEFAULT_CONFIG.time_stop_hours),
+      0,
+      168,
+    ),
+    trail_after_r: clamp(
+      Number(raw.trail_after_r ?? DEFAULT_CONFIG.trail_after_r),
+      0,
+      5,
+    ),
+    swarm_flip_conviction: clamp(
+      Number(raw.swarm_flip_conviction ?? DEFAULT_CONFIG.swarm_flip_conviction),
+      0,
+      1,
+    ),
     updated_at: Math.floor(Date.now() / 1000),
   };
 }

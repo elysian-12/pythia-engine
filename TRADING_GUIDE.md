@@ -125,12 +125,42 @@ and up in calm ones.
 | Per-trade | 1.5 × ATR stop | `paper-trader` ✅ |
 | Per-trade | 1 % equity risk | `Sizing::AtrRisk` ✅ |
 | Per-trade | Time stop at horizon | `paper-trader` ✅ |
-| Per-asset | Max 1 concurrent position | swarm orchestrator ✅ |
+| Per-asset | Max 1 concurrent position per side | `lib/portfolio.ts::decideEntry` ✅ |
+| Per-portfolio | `max_open_positions` cap (default 8) | `lib/portfolio.ts::decideEntry` ✅ |
+| Per-trade | Trail to break-even at +1 R | `lib/portfolio.ts::manageOnMark` ✅ |
+| Per-trade | Force-exit at `time_stop_hours` | `lib/portfolio.ts::manageOnMark` ✅ |
+| Per-trade | Reverse-close on opposite signal | `lib/portfolio.ts::decideEntry` ✅ |
+| Per-trade | Swarm-flip exit at ≥ 40 % opposite conviction | `lib/portfolio.ts::manageOnEvent` ✅ |
 | Per-strategy | Pause if rolling Sharpe < 0 for N trades | `scoring::Scoreboard` ✅ |
 | Per-day | −3 % equity kill-switch | `live-executor::risk_guard` ✅ |
 | Per-portfolio | Halve size < 85 % of peak | `portfolio::Allocator` ✅ |
 | Correlation | Size down when BTC + ETH both open | ⏳ v2 |
 | Catastrophic | Manual halt at 20 % drawdown | operator |
+
+### Portfolio meta-agent — the smart copy-trader on top
+
+The router decides *who to follow* on a fresh event; the **meta-agent**
+decides *how to manage* exposure. Five rules, all configurable in the
+Settings panel and persisted via `/api/config`:
+
+1. **One position per `(asset, side)`.** Same-direction signals on an
+   asset that already has exposure are skipped, never pyramided.
+2. **Reverse-close.** Opposite-direction signal on an asset with open
+   exposure flattens the existing position before opening the new one.
+3. **Conviction floor.** New entries below `min_conviction` (default
+   30 %) are skipped — split votes are noise.
+4. **Trailing stop.** Once unrealized R clears `trail_after_r`
+   (default 1 R), stop ratchets to break-even; at 2× the threshold it
+   trails the high-water mark by 1 R.
+5. **Time stop + swarm-flip exit.** Positions older than
+   `time_stop_hours` force-exit at mark; on every event, an opposite
+   ensemble vote at ≥ `swarm_flip_conviction` closes the position.
+
+Closes carry distinct chips in the panel — `stop` / `take profit` /
+`trail` / `time` / `reverse` / `swarm flip` / `manual` — so a session
+log shows whether the loop is closing in profit (green) or being
+walked out by risk-management exits (amber). Implementation lives in
+[`apps/web/lib/portfolio.ts`](apps/web/lib/portfolio.ts).
 
 ### Drawdown playbook
 

@@ -48,9 +48,12 @@ surfaces the rule that is actually paying out under the current regime.
    tweaked copies of the best (small parameter shifts + swaps within
    the same family). Each family keeps at least 2 seats so good
    competition doesn't accidentally kill diversity.
-8. **Copy trade** — Direction + size opens a paper position on
-   Hyperliquid. When it closes, the result flows back to step 4 — the
-   loop closes.
+8. **Trade** — Direction + size opens a paper position on Hyperliquid.
+   The portfolio meta-agent then manages it: trails the stop to
+   break-even at +1 R, force-exits stale entries at the time stop, and
+   closes the position when the swarm flips opposite at high
+   conviction (no orphan positions). When it closes, the result flows
+   back to step 4 — the loop closes.
 
 - **PeerView** = what agents see *of each other* within one event
   (momentum / contrarian meta-behaviour) plus their *own* recent
@@ -210,6 +213,22 @@ conviction, and size factor. The Rust `Scoreboard` exposes a
 self-backtest gate; threading the same per-kind expectancy table into
 `Scoreboard::champion_for_kind()` is the next-pass migration so the
 live executor can use the same policy without TS-side mirroring.
+
+### Portfolio meta-agent — knowing when to sell
+
+The router decides which specialist to follow on entry. The portfolio
+meta-agent in [`apps/web/lib/portfolio.ts`](apps/web/lib/portfolio.ts)
+manages everything else: caps simultaneous positions
+(`max_open_positions`), refuses entries below `min_conviction`, closes
+opposite positions on reversal signals, trails the stop to break-even
+once unrealized R clears `trail_after_r`, force-exits stale positions
+at `time_stop_hours`, and closes existing exposure when the swarm
+votes opposite at ≥ `swarm_flip_conviction`. Closes carry distinct
+chips (`stop` / `take profit` / `trail` / `time` / `reverse` / `swarm
+flip` / `manual`) so a session log shows whether the loop is closing
+in profit or being walked out by risk-management exits. All five
+thresholds are user-configurable in the Settings panel and persist
+through `/api/config`. Detailed rules in [SWARM.md](SWARM.md#portfolio-meta-agent--exits--position-management).
 
 ### Verification — the steps in the UI actually do what they say
 

@@ -287,6 +287,67 @@ drive execution. The next-pass migration is to expose
 `Scoreboard::champion_for_kind()` + `weighted_vote()` from Rust so the
 live executor uses the same router.
 
+## Portfolio meta-agent — exits + position management
+
+The router decides *who to follow* on a fresh event; the **portfolio
+meta-agent** decides *how to manage* what gets opened. Without it, an
+autopilot session piles up correlated entries (one per event), every
+position uses the same fixed stop/TP, and the swarm changing its mind
+on an asset never closes existing exposure. The meta-agent is the
+"smart copy-trader on top of the copy-trader" the user actually sees
+on the Hyperliquid panel.
+
+It lives in [`apps/web/lib/portfolio.ts`](apps/web/lib/portfolio.ts)
+and exposes three pure functions, orchestrated by `TournamentClient`:
+
+| Step | Function | When it runs | What it returns |
+|---|---|---|---|
+| Entry | `decideEntry` | on each fresh router decision | `skip` / `open` / `reverse` (with the id to close first) |
+| Mark sweep | `manageOnMark` | on every Kiyotaka mark refresh (~6 s) | per-position `peak` + trail-stop adjustments + `time` closes |
+| Event sweep | `manageOnEvent` | on each fresh event, *before* `decideEntry` | ids of open positions to close because the swarm just voted opposite at high conviction |
+
+### Rules implemented
+
+- **One position per (asset, side).** If a long-BTC is already open,
+  a fresh long-BTC signal is skipped. Pyramiding is intentionally not
+  enabled — preference is to size correctly on entry, not double down.
+- **Reversal close.** A fresh signal opposite an existing position on
+  the same asset closes the existing position first, then opens the
+  new one with full size. The closed position carries the
+  `close_reason: "reverse"` chip in the panel.
+- **Conviction floor on entry.** New entries below `min_conviction`
+  (default 30 %) are skipped entirely — split votes are noise.
+- **Global cap.** `max_open_positions` (default 8) hard-limits open
+  exposure regardless of agent activity.
+- **Trailing stop.** Once unrealized R clears `trail_after_r`
+  (default 1 R), the stop ratchets to break-even. At 2× the threshold
+  it trails the high-water mark by 1 R. Closes the position with the
+  `trail` chip when hit. Set `trail_after_r = 0` to disable.
+- **Time stop.** Positions older than `time_stop_hours` (default 12 h)
+  force-exit at the current mark with the `time` chip. Stops paper
+  sessions from carrying stale entries forever. Set to 0 to disable.
+- **Swarm-flip exit.** On every fresh event, if the ensemble votes
+  *opposite* an existing position with conviction ≥
+  `swarm_flip_conviction` (default 40 %), close immediately with the
+  `swarm-flip` chip. This is the "follow the swarm out as well as in"
+  rule — the trader is a meta-agent over the swarm, not a one-shot
+  signal-follower.
+
+All five thresholds are user-configurable in the
+[Settings panel → Exit rules · meta-agent](apps/web/components/tournament/SettingsForm.tsx)
+and persist via `/api/config` (or fall back to `localStorage` on
+read-only Vercel).
+
+### Why this lives in TS, not Rust
+
+The meta-agent is *paper-side state*: it manages the user's session
+ledger in the browser, separate from the Rust scoreboard which manages
+agent stats. Once `pythia-swarm-live` is wired to a real Hyperliquid
+key, the same five rules ship to the live executor as
+`crates/portfolio/src/meta.rs` — the contracts are identical. Until
+then the TS path is the source of truth so users can tune knobs and
+see the effect on session PnL without redeploying Rust.
+
 ```rust
 // Diagnostic only — surfaced in the snapshot for research, not execution.
 let cfg = ConsensusCfg {

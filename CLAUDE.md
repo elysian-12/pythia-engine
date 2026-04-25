@@ -112,6 +112,16 @@ in the diff). Group related changes into a single commit.
   Hyperliquid panel. Stop / TP checks flow through `checkTriggers` so the
   same invariants hold whether positions close via mark sweep or user
   click.
+- Portfolio meta-agent (`lib/portfolio.ts`) sits between the router and
+  the ledger. `decideEntry` decides skip / open / reverse on a fresh
+  signal; `manageOnMark` runs trail + time-stop sweeps on every mark
+  refresh; `manageOnEvent` closes positions when the swarm votes
+  opposite at high conviction. The five rules
+  (`max_open_positions` / `min_conviction` / `time_stop_hours` /
+  `trail_after_r` / `swarm_flip_conviction`) live in `PortfolioConfig`,
+  are exposed in `SettingsForm`, and persist through `/api/config`.
+  Once the live executor gets a real HL key, the same rules port to
+  Rust as `crates/portfolio/src/meta.rs` with identical semantics.
 
 ## Adding a new feature
 
