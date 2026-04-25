@@ -792,7 +792,10 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               live feed · how the swarm thinks
             </span>
           </h2>
-          <LiveTradeFeed entries={feed} />
+          {/* The explainer sits above the feed on purpose — once the
+              feed fills up it scrolls inside its own bounded height, so
+              the 8-step walkthrough stays anchored on screen instead of
+              getting pushed below the fold by every new event. */}
           <div className="panel p-5">
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
               How the swarm gets smart
@@ -853,6 +856,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               </li>
             </ol>
           </div>
+          <LiveTradeFeed entries={feed} />
         </section>
       </section>
 

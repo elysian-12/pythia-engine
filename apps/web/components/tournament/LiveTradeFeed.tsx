@@ -38,13 +38,15 @@ function fmtTime(ts: number): string {
 
 export function LiveTradeFeed({ entries }: { entries: FeedEntry[] }) {
   return (
-    <div className="panel p-5 flex flex-col min-h-[320px]">
-      <div className="flex items-center justify-between mb-3">
+    <div className="panel p-5 flex flex-col h-[480px]">
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
           Trade feed
         </div>
         <div className="text-[0.65rem] text-mist num">
-          {entries.length} events
+          {entries.length === 0
+            ? "no events yet"
+            : `${entries.length} events · newest on top`}
         </div>
       </div>
 
@@ -54,7 +56,7 @@ export function LiveTradeFeed({ entries }: { entries: FeedEntry[] }) {
           row is one event and the agents that would have traded on it.
         </div>
       ) : (
-        <div className="flex-1 overflow-auto space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3">
           {entries.map((e) => (
             <EventRow key={e.id} entry={e} />
           ))}
