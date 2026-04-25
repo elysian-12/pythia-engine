@@ -14,6 +14,8 @@ import {
 import { TradeReplay } from "./TradeReplay";
 import { StrategyTable } from "./StrategyTable";
 import { TradeSettingsPanel } from "@/components/landing/TradeSettingsPanel";
+import { AgentLandscape } from "./AgentLandscape";
+import { fetchSwarm, type SwarmSnapshot } from "@/lib/swarm";
 
 type UserCfg = { equity_usd: number; risk_fraction: number };
 
@@ -55,6 +57,19 @@ export function VisualizeClient() {
     equity_usd: REFERENCE_EQUITY,
     risk_fraction: REFERENCE_RISK,
   });
+  const [swarm, setSwarm] = useState<SwarmSnapshot | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchSwarm()
+      .then((s) => alive && setSwarm(s))
+      .catch(() => {
+        /* ignore — landscape just won't render */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     Promise.all([loadEquity(), loadTrades(), loadSummary(), loadGrid()])
@@ -175,12 +190,18 @@ export function VisualizeClient() {
         />
         <div className="relative">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
-              Pythia · 365-day replay · your size
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 chip chip-amber text-[0.6rem]">
+                <span className="w-1 h-1 rounded-full bg-amber-300" />
+                Replay
+              </span>
+              <span className="text-[0.6rem] tracking-[0.4em] text-purple-300 uppercase">
+                Pythia · 365-day backtest · your size
+              </span>
             </div>
             <span
               className={`chip ${
-                isCustom ? "chip-cyan" : "chip-mist"
+                isCustom ? "chip-royal" : "chip-mist"
               } text-[0.6rem]`}
             >
               ${userCfg.equity_usd.toLocaleString()} @ {(userCfg.risk_fraction * 100).toFixed(2)}%
@@ -244,6 +265,13 @@ export function VisualizeClient() {
       {/* Settings live just under the replay so users connect cause →
           effect: change a knob, the curve above redraws. */}
       <TradeSettingsPanel />
+
+      {/* The swarm landscape — wireframe terrain + per-agent totems.
+          Sits below the replay so visitors first see the equity curve,
+          then drill into who produced it. */}
+      {swarm && swarm.agents.length > 0 ? (
+        <AgentLandscape agents={swarm.agents} />
+      ) : null}
 
       {/* Strategy comparison table */}
       <StrategyTable grid={grid} />

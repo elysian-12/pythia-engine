@@ -11,17 +11,19 @@ export default {
         mono: ["JetBrains Mono", "ui-monospace", "SF Mono", "monospace"],
       },
       colors: {
-        ink: "#0b0f14",
-        panel: "#11161e",
-        edge: "#1b222d",
-        mist: "#94a3b8",
-        cyan: "#06b6d4",
-        amber: "#f59e0b",
+        ink: "#0b0a14",          // tinted very faint purple-black
+        panel: "#13111d",        // panel with a violet undertone
+        edge: "#241c33",         // edge: violet-grey
+        mist: "#a394b8",         // body text on dark — warmer mist
+        // Primary accent — Tyrian / royal purple (Caesar's stripe).
+        royal: "#a855f7",
+        // Imperial gold — laurel + senate detail.
+        amber: "#fbbf24",
+        // Status — survives because traders need green/red regardless of theme.
         red: "#ef4444",
         green: "#10b981",
-        // Roman royal-emperor purple — Tyrian dye for accents and the
-        // "live preview" state. Used sparingly so it reads as ceremonial.
-        royal: "#7e22ce",
+        // Cyan demoted to "informational" / live-pulse only.
+        cyan: "#67e8f9",
         ivory: "#f5f0e1",
         marble: "#e9e6dc",
         sand: "#c2a878",

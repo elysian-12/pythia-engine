@@ -58,6 +58,72 @@ export async function fetchSwarm(): Promise<SwarmSnapshot> {
   return res.json();
 }
 
+/**
+ * Fold a simulated event's reactions into the snapshot — the page-local
+ * mutation that keeps the leaderboard alive between server refreshes.
+ *
+ * The Rust scoreboard does this server-side every event; on Vercel we
+ * only get the static bundled snapshot, so without this the swarm reads
+ * as a frozen tableau no matter how many events the user fires. We
+ * apply each fired agent a small synthetic R drawn from the agent's own
+ * empirical win-rate, increment trade counters, and re-rank.
+ */
+export type SimReactionLite = {
+  agent_id: string;
+  reacted: boolean;
+};
+
+export function applySessionDelta(
+  snap: SwarmSnapshot,
+  reactions: SimReactionLite[],
+  rngSeed: number,
+): SwarmSnapshot {
+  if (!snap.agents.length) return snap;
+  const fired = new Set(reactions.filter((r) => r.reacted).map((r) => r.agent_id));
+  if (fired.size === 0) return snap;
+  // Cheap deterministic hash → uniform [0,1).
+  const h = (n: number) => {
+    let s = (n + 0x9e3779b9) >>> 0;
+    s = Math.imul(s ^ (s >>> 15), s | 1);
+    s ^= s + Math.imul(s ^ (s >>> 7), s | 61);
+    return ((s ^ (s >>> 14)) >>> 0) / 4294967296;
+  };
+  let i = 0;
+  const nextAgents = snap.agents.map((a) => {
+    if (!fired.has(a.agent_id)) return a;
+    i += 1;
+    const u = h(rngSeed * 1000 + i);
+    // Win at the agent's empirical rate; +1.5R on win, -1.0R on loss.
+    const r = u < a.win_rate ? 1.5 : -1.0;
+    const wins = a.wins + (r > 0 ? 1 : 0);
+    const losses = a.losses + (r > 0 ? 0 : 1);
+    const decided = wins + losses;
+    const total_r = a.total_r + r;
+    return {
+      ...a,
+      total_decisions: a.total_decisions + 1,
+      wins,
+      losses,
+      total_r,
+      total_pnl_usd: a.total_pnl_usd + r * 10,
+      win_rate: decided > 0 ? wins / decided : a.win_rate,
+      last_r: r,
+      expectancy_r: decided > 0 ? total_r / decided : a.expectancy_r,
+    };
+  });
+  // Re-rank by total_r and update champion.
+  const sorted = [...nextAgents].sort((x, y) => y.total_r - x.total_r);
+  return {
+    ...snap,
+    agents: sorted,
+    champion: sorted[0] ?? null,
+    consensus: {
+      ...snap.consensus,
+      fires: snap.consensus.fires + fired.size,
+    },
+  };
+}
+
 /** Parent rule-family for colouring / clustering. */
 export type AgentFam =
   | "liq-trend"

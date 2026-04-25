@@ -9,10 +9,22 @@ export type FeedEntry = {
   event: SimEvent;
   reactions: SimReaction[];
   championId: string | null;
-  /** Wall-clock latency from event-arrival → trade-sent, in ms. The
-   *  parent component stamps this when it processes the event so we can
-   *  show the same end-to-end timing the live executor would log. */
+  /** Wall-clock latency from event-arrival → trade-sent, in ms. */
   latencyMs?: number;
+  /** Router decision for this event — which specialist owns the kind,
+   *  what direction the ensemble vote landed on, and why we did or
+   *  didn't trade. */
+  routing?: {
+    specialist_id: string | null;
+    specialist_short: string | null;
+    fired_count: number;
+    total_reactors: number;
+    vote_direction: "long" | "short" | "flat";
+    conviction: number;
+    decision_direction: "long" | "short" | null;
+    size_factor: number;
+    rationale: string;
+  };
 };
 
 function fmtTime(ts: number): string {
@@ -137,7 +149,13 @@ function EventRow({ entry }: { entry: FeedEntry }) {
           })
         )}
       </div>
-      {champion ? (
+      {/* Router footer — shows which specialist owns this event kind,
+          the ensemble vote, and the resulting trade decision. Replaces
+          the old "did the global champion fire?" copy with the actual
+          routing math the system executes. */}
+      {entry.routing ? (
+        <RouterFooter routing={entry.routing} latencyMs={entry.latencyMs} />
+      ) : champion ? (
         <div className="px-3 py-1.5 border-t border-amber/20 bg-amber/5 text-[0.65rem] text-amber flex items-center justify-between gap-2">
           <span>
             Copy-trader would {champion.direction === "long" ? "GO LONG" : "GO SHORT"} —
@@ -147,10 +165,55 @@ function EventRow({ entry }: { entry: FeedEntry }) {
             <span className="num text-cyan/80">{entry.latencyMs}ms event→sent</span>
           ) : null}
         </div>
-      ) : firing.length > 0 ? (
-        <div className="px-3 py-1.5 border-t border-edge/50 text-[0.65rem] text-mist">
-          Champion abstained this event → copy-trader stays flat.
-        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RouterFooter({
+  routing,
+  latencyMs,
+}: {
+  routing: NonNullable<FeedEntry["routing"]>;
+  latencyMs?: number;
+}) {
+  const trading = routing.decision_direction != null;
+  const dirColor = trading
+    ? routing.decision_direction === "long"
+      ? "text-green"
+      : "text-red"
+    : "text-mist";
+  const tone = trading
+    ? "border-amber/30 bg-amber/5"
+    : "border-edge/50 bg-edge/10";
+  return (
+    <div
+      className={`px-3 py-1.5 border-t ${tone} text-[0.65rem] flex flex-wrap items-baseline gap-x-3 gap-y-1`}
+    >
+      <span className="font-mono">
+        <span className="text-purple-300">{routing.specialist_short ?? "—"}</span>
+        <span className="text-mist/60"> specialist</span>
+      </span>
+      <span className="text-mist">
+        <span className="num text-slate-200">
+          {routing.fired_count}/{routing.total_reactors}
+        </span>{" "}
+        fired
+      </span>
+      <span className={`uppercase ${dirColor}`}>
+        {trading ? routing.decision_direction : "FLAT"}
+      </span>
+      <span className="text-mist">
+        conviction <span className="num">{routing.conviction.toFixed(2)}</span>
+      </span>
+      {trading ? (
+        <span className="text-mist">
+          size <span className="num">{(routing.size_factor * 100).toFixed(0)}%</span>
+        </span>
+      ) : null}
+      <span className="grow" />
+      {latencyMs != null ? (
+        <span className="num text-cyan/80">{latencyMs}ms</span>
       ) : null}
     </div>
   );

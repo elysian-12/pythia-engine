@@ -15,7 +15,12 @@ export const revalidate = 0;
 
 type SimAsset = "BTC" | "ETH";
 type SimDir = "long" | "short";
-type SimKind = "liq-spike" | "funding-spike" | "vol-breakout";
+type SimKind =
+  | "liq-spike"
+  | "funding-spike"
+  | "vol-breakout"
+  | "polymarket-lead"
+  | "fusion";
 
 type SimEvent = {
   id: string;
@@ -27,6 +32,7 @@ type SimEvent = {
 };
 
 type Candle = { close: number; volume: number; ts: number };
+type FundingPoint = { rate: number; ts: number };
 
 /** GET wrapper with retry on transient errors (429 + 5xx + abort) and a
  *  short fixed-jitter backoff. Kiyotaka's documented rate limit is ~10
@@ -63,6 +69,45 @@ async function fetchKiyotaka(
     }
   }
   return { ok: false, reason: lastReason };
+}
+
+async function fetchFunding(
+  key: string,
+  rawSymbol: string,
+  hoursBack = 96,
+): Promise<{ ok: true; rates: FundingPoint[] } | { ok: false; reason: string }> {
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - hoursBack * 3600;
+  const url = new URL("https://api.kiyotaka.ai/v1/points");
+  url.searchParams.set("type", "FUNDING_RATE_AGG");
+  url.searchParams.set("exchange", "BINANCE_FUTURES");
+  url.searchParams.set("rawSymbol", rawSymbol);
+  url.searchParams.set("interval", "HOUR");
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("period", String(hoursBack * 3600));
+  const r = await fetchKiyotaka(url, key);
+  if (!r.ok) return r;
+  const data = r.data as {
+    series?: Array<{
+      points?: Array<{
+        Point?: {
+          rate?: number;
+          rateClose?: number;
+          timestamp?: { s?: number };
+        };
+      }>;
+    }>;
+  };
+  const pts = data.series?.[0]?.points ?? [];
+  const out: FundingPoint[] = [];
+  for (const p of pts) {
+    const rate = p.Point?.rateClose ?? p.Point?.rate;
+    const t = p.Point?.timestamp?.s;
+    if (typeof rate === "number" && Number.isFinite(rate) && typeof t === "number") {
+      out.push({ rate, ts: t });
+    }
+  }
+  return { ok: true, rates: out };
 }
 
 async function fetchCandles(
@@ -121,6 +166,65 @@ function zscore(x: number, arr: number[]): number {
     arr.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (arr.length - 1);
   const sd = Math.sqrt(Math.max(varr, 1e-12));
   return (x - mean) / sd;
+}
+
+/** Funding-rate spike detector. A z-score on the last hour's funding
+ *  rate against the prior 95 hours surfaces sustained tilts that the
+ *  funding-trend / funding-arb agents trade on. */
+function detectFundingEvents(
+  asset: SimAsset,
+  rates: FundingPoint[],
+  now: number,
+): SimEvent[] {
+  if (rates.length < 12) return [];
+  const last = rates[rates.length - 1];
+  const rest = rates.slice(0, -1).map((p) => p.rate);
+  const z = zscore(last.rate, rest);
+  if (Math.abs(z) < 2.0) return [];
+  return [
+    {
+      id: `sig-fund-${asset}-${last.ts}`,
+      ts: now,
+      asset,
+      kind: "funding-spike",
+      magnitude_z: Math.min(Math.abs(z), 6),
+      // Positive funding → longs paying shorts → likely overheated long
+      // → trend agents ride, arb agents fade. Direction = sign of rate.
+      direction: last.rate >= 0 ? "long" : "short",
+    },
+  ];
+}
+
+/** Polymarket-leadership event. Real production would call
+ *  econometrics::granger_f + Hasbrouck IS on a paired BTC perp / PM
+ *  series; here we synthesise a plausible event when funding has been
+ *  drifting hard in one direction (a cheap proxy for sentiment-led
+ *  spot moves). Kept conservative — fires <1× per hour normally. */
+function detectPolymarketEvents(
+  asset: SimAsset,
+  rates: FundingPoint[],
+  candles: Candle[],
+  now: number,
+): SimEvent[] {
+  if (rates.length < 24 || candles.length < 24) return [];
+  // 8h funding drift z-score against the prior 16h baseline.
+  const recent = rates.slice(-8).map((p) => p.rate);
+  const baseline = rates.slice(-24, -8).map((p) => p.rate);
+  if (recent.length < 4 || baseline.length < 8) return [];
+  const recentMean = recent.reduce((a, b) => a + b, 0) / recent.length;
+  const z = zscore(recentMean, baseline);
+  if (Math.abs(z) < 2.5) return [];
+  // Direction: sentiment lead → align with the funding tilt sign.
+  return [
+    {
+      id: `sig-pm-${asset}-${candles[candles.length - 1].ts}`,
+      ts: now,
+      asset,
+      kind: "polymarket-lead",
+      magnitude_z: Math.min(Math.abs(z), 5),
+      direction: recentMean >= 0 ? "long" : "short",
+    },
+  ];
 }
 
 function detectEvents(asset: SimAsset, candles: Candle[], now: number): SimEvent[] {
@@ -199,45 +303,84 @@ export async function GET() {
     });
   }
 
-  const [btc, eth] = await Promise.all([
+  // Pool four Kiyotaka calls in parallel: candles + funding for BTC and
+  // ETH. Funding feeds the funding-spike + polymarket-lead detectors;
+  // candles feed liq-spike + vol-breakout. All four go in one round-trip
+  // burst and the response surfaces partial outages per channel.
+  const [btcC, ethC, btcF, ethF] = await Promise.all([
     fetchCandles(key, "BTCUSDT"),
     fetchCandles(key, "ETHUSDT"),
+    fetchFunding(key, "BTCUSDT"),
+    fetchFunding(key, "ETHUSDT"),
   ]);
 
-  // If both upstream calls failed, return a clear error so the autopilot
-  // surfaces it rather than silently looking idle.
-  if (!btc.ok && !eth.ok) {
+  // If both candle calls failed, the page can't even show prices.
+  if (!btcC.ok && !ethC.ok) {
     return NextResponse.json({
       ok: false,
       ts: now,
-      reason: `BTC: ${btc.reason} · ETH: ${eth.reason}`,
+      reason: `BTC: ${btcC.reason} · ETH: ${ethC.reason}`,
       events: [],
       prices: { BTC: null, ETH: null },
     });
   }
 
-  const btcCandles = btc.ok ? btc.candles : [];
-  const ethCandles = eth.ok ? eth.candles : [];
+  const btcCandles = btcC.ok ? btcC.candles : [];
+  const ethCandles = ethC.ok ? ethC.candles : [];
+  const btcRates = btcF.ok ? btcF.rates : [];
+  const ethRates = ethF.ok ? ethF.rates : [];
   const events: SimEvent[] = [];
   const prices: Record<string, number | null> = {
     BTC: btcCandles[btcCandles.length - 1]?.close ?? null,
     ETH: ethCandles[ethCandles.length - 1]?.close ?? null,
   };
 
-  if (btc.ok) events.push(...detectEvents("BTC", btcCandles, now));
-  if (eth.ok) events.push(...detectEvents("ETH", ethCandles, now));
+  if (btcC.ok) events.push(...detectEvents("BTC", btcCandles, now));
+  if (ethC.ok) events.push(...detectEvents("ETH", ethCandles, now));
+  if (btcF.ok) events.push(...detectFundingEvents("BTC", btcRates, now));
+  if (ethF.ok) events.push(...detectFundingEvents("ETH", ethRates, now));
+  if (btcF.ok && btcC.ok)
+    events.push(...detectPolymarketEvents("BTC", btcRates, btcCandles, now));
+  if (ethF.ok && ethC.ok)
+    events.push(...detectPolymarketEvents("ETH", ethRates, ethCandles, now));
+
+  // Fusion event: when ≥2 different signal kinds fire on the same asset
+  // in this poll, emit a synthetic "fusion" event so the polyfusion
+  // confluence agent can grab it. Direction = majority of fired events.
+  for (const asset of ["BTC", "ETH"] as const) {
+    const here = events.filter((e) => e.asset === asset);
+    if (here.length >= 2) {
+      const longs = here.filter((e) => e.direction === "long").length;
+      const dir: SimDir = longs > here.length / 2 ? "long" : "short";
+      const z = Math.max(...here.map((e) => e.magnitude_z));
+      events.push({
+        id: `sig-fusion-${asset}-${now}`,
+        ts: now,
+        asset,
+        kind: "fusion",
+        magnitude_z: Math.min(z + 0.5, 6),
+        direction: dir,
+      });
+    }
+  }
 
   return NextResponse.json({
     ok: true,
     ts: now,
     prices,
     events,
-    // Surface a per-asset partial-failure note so the UI can show "ETH down"
-    // distinct from "no signals". Empty when both succeeded.
+    // Per-channel partial-outage surface. Lets the UI show "funding down"
+    // or "ETH candles down" distinctly from "no signals fired".
     partial:
-      !btc.ok || !eth.ok
-        ? { btc: btc.ok ? null : btc.reason, eth: eth.ok ? null : eth.reason }
+      !btcC.ok || !ethC.ok || !btcF.ok || !ethF.ok
+        ? {
+            btc_candles: btcC.ok ? null : btcC.reason,
+            eth_candles: ethC.ok ? null : ethC.reason,
+            btc_funding: btcF.ok ? null : btcF.reason,
+            eth_funding: ethF.ok ? null : ethF.reason,
+          }
         : null,
-    source: "kiyotaka:TRADE_SIDE_AGNOSTIC_AGG",
+    source:
+      "kiyotaka:TRADE_SIDE_AGNOSTIC_AGG+FUNDING_RATE_AGG (incl. polymarket-lead synth)",
   });
 }

@@ -768,7 +768,7 @@ function BackWall({ generation }: { generation: number }) {
         anchorY="middle"
         letterSpacing={0.5}
       >
-        ΟΡΑΚΛΟΝ ΤΟΥ ΣΜΗΝΟΥΣ
+        ΜΑΝΤΕΙΟΝ ΤΟΥ ΣΜΗΝΟΥΣ
       </Text>
       <Text
         position={[0, -1.4, 0]}

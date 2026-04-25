@@ -124,13 +124,17 @@ export function PythiaWordmark({
       <PythiaLogo size={size} animated={animated} />
       <span className="flex flex-col leading-none">
         <span
-          className="font-semibold tracking-[0.32em] bg-gradient-to-r from-amber-300 via-purple-300 to-purple-500 bg-clip-text text-transparent"
-          style={{ fontSize: size * 0.46 }}
+          className="font-semibold tracking-[0.32em] text-amber-200"
+          style={{
+            fontSize: size * 0.46,
+            // Subtle drop-shadow for contrast against any background.
+            textShadow: "0 0 16px rgba(168, 85, 247, 0.45)",
+          }}
         >
           PYTHIA
         </span>
         <span
-          className="text-purple-300/80 tracking-[0.4em] uppercase mt-1"
+          className="text-purple-300 tracking-[0.4em] uppercase mt-1"
           style={{ fontSize: size * 0.22 }}
         >
           Oracle of the swarm

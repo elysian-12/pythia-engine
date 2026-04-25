@@ -15,11 +15,38 @@ surfaces the rule that is actually paying out under the current regime.
 
 ### The feedback loop in one sentence
 
-> **Kiyotaka events (incl. Polymarket SWP-vs-mid leads) → 27 quant
-> personas compete → scoreboard picks the champion → executor copy-trades
-> the champion → realised PnL feeds back into the scoreboard → each agent
+> **Kiyotaka events (liquidation, funding, vol-breakout, Polymarket
+> SWP-vs-mid lead, fusion) → 27 quant personas vote independently →
+> scoreboard tallies per-event-kind expertise → router picks the
+> specialist for *this* event kind → Sharpe-weighted ensemble vote sets
+> direction + conviction → quarter-Kelly sizes the trade → executor
+> copy-trades on Hyperliquid → realised PnL feeds back → every agent
 > gates its next decision on its own recent expectancy → every N events,
 > `Evolution` replaces the weakest half with mutated + crossed elite.**
+
+### The eight steps in plain English
+
+1. **Event** — every agent sees the same Kiyotaka tick at the same time.
+2. **Vote** — each one fires or abstains independently using its own
+   rule family (7 systematic + 5 LLM personas).
+3. **PeerView** — social agents read peer + champion directions; every
+   agent also sees its own recent expectancy and abstains when its E[R]
+   turns negative (self-backtest gate).
+4. **Scoreboard** — closed trades update Σ R, rolling Sharpe, profit
+   factor, PSR, DSR — the oracle the router reads.
+5. **Specialist** — per-event-kind routing. Polymarket leads → polyedge;
+   liquidation cascades → liq-trend; funding spikes → funding-trend;
+   confluence events → polyfusion. No global oracle missing the
+   specialist's edge.
+6. **Ensemble** — Sharpe-weighted vote across the agents that *did*
+   fire. Trade only when conviction > 0.25; size scales with quarter-
+   Kelly on the specialist's profit factor.
+7. **Evolution** — every N events, weak agents replaced by log-space
+   Gaussian mutants + elite crossovers (same family). The specialist
+   roster itself evolves to fit the regime, not just the params.
+8. **Copy trade** — specialist + ensemble direction + Kelly-scaled size
+   → paper Hyperliquid (live signing wired in next pass). Closed-trade
+   R feeds back into the scoreboard, closing the loop on the next event.
 
 - **PeerView** = what agents see *of each other* within one event
   (momentum / contrarian meta-behaviour) plus their *own* recent
@@ -135,6 +162,60 @@ apps/web/                    Next.js 15 · three.js · Vercel-deployed
 ```
 
 ★ = the hero crate. Everything else feeds it or is fed by it.
+
+## Trade selection — how a single event becomes a paper trade
+
+A common failure mode of swarm trading: one agent dominates the global
+ranking, but its rule family doesn't react to *every* event kind. The
+"global champion" copy-trader then misses entire categories — a
+vol-breakout-only champion abstains on every Polymarket leadership
+signal, and the user wonders why the swarm went quiet. The router
+in `apps/web/lib/router.ts` (mirroring the Rust path in
+`crates/swarm/src/scoring.rs`) replaces that policy with three
+layered decisions:
+
+1. **Specialist for the event kind.** Each event arrives tagged with a
+   kind (`liq-spike`, `funding-spike`, `vol-breakout`, `polymarket-lead`,
+   `fusion`). The router picks the agent whose rule family is
+   preferred for that kind *and* whose rolling Sharpe is highest among
+   peers with ≥10 closed decisions. Falls back to the global Σ R
+   leader if no eligible specialist exists yet.
+
+2. **Sharpe-weighted ensemble vote.** Among the agents that fired on
+   this event, each one's vote is weighted by `clip(rolling_sharpe,
+   -2, +2) + 2`. Negative-Sharpe agents barely vote. The signed
+   conviction is `(weight_long − weight_short) / total_weight ∈
+   [−1, +1]`; if its absolute value is below 0.25, the copy-trader
+   sits the event out (split votes are noise).
+
+3. **Quarter-Kelly sizing.** Final notional is
+   `equity × user_risk_fraction × kelly_frac × |conviction|`, where
+   `kelly_frac = clip(0.5 · log₂(specialist_PF), 0, 1)`. A specialist
+   with PF=2 gets 0.5 of the risk budget, PF=4 gets 1.0, PF<1 sits
+   out. Conviction further scales the size so a 0.3-conviction trade
+   is smaller than a 0.9-conviction one with the same specialist.
+
+Every event the user fires (manually or via autopilot) walks this
+exact path on the Vercel-deployed `/tournament` page; the trade-feed
+footer surfaces the chosen specialist, fired count, vote direction,
+conviction, and size factor. The Rust `Scoreboard` exposes a
+`recent_expectancy(agent_id, n, min_sample)` that already feeds the
+self-backtest gate; threading the same per-kind expectancy table into
+`Scoreboard::champion_for_kind()` is the next-pass migration so the
+live executor can use the same policy without TS-side mirroring.
+
+### Verification — the steps in the UI actually do what they say
+
+| UI step | Where it runs in Rust | Where it runs in TS (UI mirror) |
+|---|---|---|
+| 1. Event | `Swarm::broadcast(&Event)` | `simulateReactions(ev, agents)` |
+| 2. Vote | each `SwarmAgent::observe` independently | each agent's reaction emitted in `lib/simulate.ts` |
+| 3. PeerView + self-backtest gate | `PeerView { regime, self_recent_expectancy }` populated by `Swarm.with_scoreboard()` | regime fitness mirror in `lib/simulate.ts::regimeFitness` |
+| 4. Scoreboard | `Scoreboard::mark_outcome` updates per-trade R, Sharpe, PSR, DSR | `applySessionDelta` mutates the local snapshot live so the leaderboard re-ranks during a session |
+| 5. Specialist | (next-pass: `Scoreboard::champion_for_kind`) | `router::pickSpecialist(kind, agents)` |
+| 6. Ensemble | (next-pass) | `router::weightedVote(reactions, agents)` |
+| 7. Evolution | `Evolution::advance` every `PYTHIA_EVOLVE_EVERY` events | snapshot bundler injects evolved population at deploy time |
+| 8. Copy trade | `live-executor` signs EIP-712 + sends to Hyperliquid | TournamentClient opens a paper position with stop + TP, marks live PnL against Kiyotaka prices |
 
 ## Quantitative integration
 

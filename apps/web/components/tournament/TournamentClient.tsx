@@ -13,6 +13,7 @@ import { HyperliquidPanel } from "./HyperliquidPanel";
 import { PipelineRail } from "./PipelineRail";
 import {
   fetchSwarm,
+  applySessionDelta,
   FAMILY_COLORS,
   agentFamily,
   type SwarmSnapshot,
@@ -20,6 +21,7 @@ import {
 import type { SimEvent } from "@/lib/simulate";
 import { simulateReactions, simulateCopyTrade } from "@/lib/simulate";
 import { checkTriggers, sumRealized, type PaperPosition } from "@/lib/paper";
+import { routeTrade } from "@/lib/router";
 
 const COPY_LS_KEY = "pythia-copytrade-agent";
 const FEED_MAX = 25;
@@ -353,10 +355,13 @@ export function TournamentClient() {
     if (!currentSnap) return;
     const rxs = simulateReactions(ev, currentSnap.agents, currentSnap.regime);
     const championId = currentSnap.champion?.agent_id ?? null;
-    // Stamp the wall-clock latency of the synchronous portion of the
-    // pipeline (simulate reactions + size the trade). The Rust live
-    // executor logs the same number for its async path; surfacing it
-    // here lets the visitor see the same end-to-end timing.
+
+    // Route via the new specialist + ensemble policy. Replaces "follow
+    // global champion" with "follow this kind's specialist if the
+    // weighted-Sharpe ensemble agrees with conviction > 0.25".
+    const route = routeTrade(ev, rxs, currentSnap.agents);
+    const userOverride = copyAgentRef.current; // explicit pin from CopyTradePanel
+
     const latencyMs = Math.max(1, Math.round(performance.now() - t0));
     const entry: FeedEntry = {
       id: ev.id,
@@ -365,43 +370,94 @@ export function TournamentClient() {
       reactions: rxs,
       championId,
       latencyMs,
+      routing: {
+        specialist_id: route.specialist?.agent_id ?? null,
+        specialist_short:
+          route.specialist?.agent_id.replace(/^gen\d+-mut\d+-/, "") ?? null,
+        fired_count: route.vote.fired_count,
+        total_reactors: rxs.length,
+        vote_direction: route.vote.direction,
+        conviction: route.vote.conviction,
+        decision_direction: route.decision.direction,
+        size_factor: route.decision.size_factor,
+        rationale: route.decision.rationale,
+      },
     };
     setLastEvent(ev);
     setFeed((prev) => [entry, ...prev].slice(0, FEED_MAX));
     setPulseKey((k) => k + 1);
 
-    // Paper-HL placement: whichever agent the user is mirroring (champion by
-    // default) reacts → open a paper position sized like the Rust executor.
-    const mirroredId = copyAgentRef.current ?? championId;
-    if (!mirroredId) return;
-    const mirrored = currentSnap.agents.find((a) => a.agent_id === mirroredId);
-    if (!mirrored) return;
+    setSnap((prevSnap) =>
+      prevSnap ? applySessionDelta(prevSnap, rxs, ev.ts) : prevSnap,
+    );
+
+    // Paper-HL placement. If the user pinned a specific agent in the
+    // CopyTradePanel we honour that (manual override); otherwise we
+    // follow the router's chosen specialist + ensemble direction +
+    // ensemble-conviction-scaled size.
     const liveMarks = marksRef.current;
     const btcPx = liveMarks.BTC ?? DEFAULT_BTC;
     const ethPx = liveMarks.ETH ?? DEFAULT_ETH;
-    const sim = simulateCopyTrade(
-      mirrored,
-      ev,
-      rxs,
-      EQUITY_USD,
-      riskFractionRef.current,
-      btcPx,
-      ethPx,
-    );
-    if (!sim) return;
-    const pos: PaperPosition = {
-      id: `pos-${ev.id}`,
-      agent_id: sim.agent_id,
-      asset: ev.asset,
-      side: sim.direction,
-      size_contracts: sim.size_contracts,
-      notional_usd: sim.size_usd,
-      entry: sim.entry,
-      stop: sim.stop,
-      take_profit: sim.take_profit,
-      opened_at: ev.ts,
-    };
-    setOpenPositions((prev) => [...prev, pos]);
+
+    if (userOverride) {
+      const mirrored = currentSnap.agents.find((a) => a.agent_id === userOverride);
+      if (!mirrored) return;
+      const sim = simulateCopyTrade(
+        mirrored,
+        ev,
+        rxs,
+        EQUITY_USD,
+        riskFractionRef.current,
+        btcPx,
+        ethPx,
+      );
+      if (!sim) return;
+      setOpenPositions((prev) => [
+        ...prev,
+        {
+          id: `pos-${ev.id}`,
+          agent_id: sim.agent_id,
+          asset: ev.asset,
+          side: sim.direction,
+          size_contracts: sim.size_contracts,
+          notional_usd: sim.size_usd,
+          entry: sim.entry,
+          stop: sim.stop,
+          take_profit: sim.take_profit,
+          opened_at: ev.ts,
+        },
+      ]);
+      return;
+    }
+
+    // Router path — only trade if the ensemble landed on a direction.
+    if (!route.decision.direction || !route.specialist) return;
+    const price = ev.asset === "BTC" ? btcPx : ethPx;
+    if (!Number.isFinite(price) || price <= 0) return;
+    const atr = price * 0.005;
+    const stopDist = 1.5 * atr;
+    const riskUsd =
+      EQUITY_USD * riskFractionRef.current * route.decision.size_factor;
+    const notional = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 3);
+    if (notional <= 0) return;
+    const dir = route.decision.direction;
+    const stop = dir === "long" ? price - stopDist : price + stopDist;
+    const take = dir === "long" ? price + 3 * atr : price - 3 * atr;
+    setOpenPositions((prev) => [
+      ...prev,
+      {
+        id: `pos-${ev.id}`,
+        agent_id: route.specialist!.agent_id,
+        asset: ev.asset,
+        side: dir,
+        size_contracts: notional / price,
+        notional_usd: notional,
+        entry: price,
+        stop,
+        take_profit: take,
+        opened_at: ev.ts,
+      },
+    ]);
   }, []);
 
   const onPrices = useCallback(
@@ -452,12 +508,23 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
         <Arena agents={snap.agents} generation={snap.generation ?? 0} />
         <div className="pointer-events-none absolute top-0 left-0 right-0 p-5 flex items-start justify-between">
           <div>
-            <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
-              Pythia tournament
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem]">
+                <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
+                Live
+              </span>
+              <span className="text-[0.65rem] tracking-[0.4em] text-purple-300 uppercase">
+                Pythia tournament
+              </span>
             </div>
             <h2 className="text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight">
               Events → Swarm → Champion → Your copy trade
             </h2>
+            <p className="mt-2 text-[0.7rem] text-mist max-w-xl">
+              Live decision loop on real Kiyotaka events. The leaderboard
+              re-ranks the moment an agent fires — page is dynamic, not a
+              static snapshot.
+            </p>
           </div>
           <div className="text-right space-y-1 pointer-events-auto">
             <KiyotakaBadge />
@@ -729,35 +796,52 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             </div>
             <ol className="mt-3 space-y-2 text-xs text-slate-300">
               <li>
-                <span className="text-cyan font-mono">1. Event →</span>{" "}
-                Every agent observes the same liquidation, funding,
-                candle, or Polymarket-leadership tick simultaneously.
+                <span className="text-purple-300 font-mono">1. Event →</span>{" "}
+                Every agent observes the same Kiyotaka tick — liquidation
+                cascade, funding spike, vol breakout, Polymarket
+                leadership, or a fusion of two or more.
               </li>
               <li>
-                <span className="text-cyan font-mono">2. Vote →</span>{" "}
-                Each agent fires (or abstains) independently using its own
-                rule family.
+                <span className="text-purple-300 font-mono">2. Vote →</span>{" "}
+                Each agent fires (or abstains) independently using its
+                own rule family — 7 systematic + 5 LLM personas.
               </li>
               <li>
-                <span className="text-cyan font-mono">3. PeerView →</span>{" "}
+                <span className="text-purple-300 font-mono">3. PeerView →</span>{" "}
                 Social agents see peer + champion directions; every agent
                 also sees its own recent expectancy and abstains when its
                 E[R] turns negative (self-backtest gate).
               </li>
               <li>
-                <span className="text-cyan font-mono">4. Scoreboard →</span>{" "}
-                Realized R updates Σ R, rolling Sharpe, win rate — the
-                oracle the system reads.
+                <span className="text-purple-300 font-mono">4. Scoreboard →</span>{" "}
+                Realized R updates Σ R, rolling Sharpe, profit-factor,
+                PSR, DSR — the oracle the router reads.
               </li>
               <li>
-                <span className="text-cyan font-mono">5. Evolution →</span>{" "}
-                Every N events, weak agents replaced by log-space Gaussian
-                mutants + elite crossovers.
+                <span className="text-purple-300 font-mono">5. Specialist →</span>{" "}
+                Per-event-kind specialist routing: Polymarket leads go
+                to <span className="font-mono">polyedge</span>, liquidation
+                cascades to <span className="font-mono">liq-trend</span>,
+                funding spikes to <span className="font-mono">funding-trend</span>,
+                etc. No more global oracle missing the specialist's edge.
               </li>
               <li>
-                <span className="text-yellow-300 font-mono">6. Copy trade →</span>{" "}
-                Champion → paper HL — when regime shifts, a different
-                family rises → execution follows, no restart.
+                <span className="text-purple-300 font-mono">6. Ensemble →</span>{" "}
+                Sharpe-weighted vote across all fired agents. Trade only
+                fires when conviction crosses 0.25; size scales with
+                quarter-Kelly on the specialist's profit factor.
+              </li>
+              <li>
+                <span className="text-amber-300 font-mono">7. Evolution →</span>{" "}
+                Every N events, weak agents replaced by log-space
+                Gaussian mutants + elite crossovers. The specialist roster
+                itself evolves to fit the regime, not just the params.
+              </li>
+              <li>
+                <span className="text-amber-300 font-mono">8. Copy trade →</span>{" "}
+                Specialist + direction + size → paper Hyperliquid.
+                Closed-trade R feeds back into the scoreboard, closing
+                the loop on the next event.
               </li>
             </ol>
           </div>
