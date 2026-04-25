@@ -30,19 +30,22 @@ export function PythiaLogo({
       role="img"
     >
       <defs>
+        {/* Tyrian-purple core glowing into imperial gold — the Roman
+            emperor palette: Caesar's purple toga lined with gilded
+            laurel. */}
         <radialGradient id={`${id}-core`} cx="50%" cy="50%" r="50%">
           <stop offset="0%" stopColor="#fde68a" stopOpacity="1" />
-          <stop offset="55%" stopColor="#22d3ee" stopOpacity="0.9" />
+          <stop offset="55%" stopColor="#a855f7" stopOpacity="0.9" />
           <stop offset="100%" stopColor="#0b0f14" stopOpacity="0" />
         </radialGradient>
         <linearGradient id={`${id}-ring`} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#22d3ee" />
-          <stop offset="60%" stopColor="#34d399" />
-          <stop offset="100%" stopColor="#a78bfa" />
+          <stop offset="0%" stopColor="#fbbf24" />
+          <stop offset="50%" stopColor="#a855f7" />
+          <stop offset="100%" stopColor="#7e22ce" />
         </linearGradient>
       </defs>
 
-      {/* outer swarm ring — dashed to suggest 25 distinct nodes */}
+      {/* outer swarm ring — dashed to suggest 27 distinct nodes */}
       <circle
         cx="50"
         cy="50"
@@ -51,7 +54,7 @@ export function PythiaLogo({
         stroke={`url(#${id}-ring)`}
         strokeWidth="2"
         strokeDasharray="3 4.5"
-        opacity="0.85"
+        opacity="0.9"
       >
         {animated ? (
           <animateTransform
@@ -65,16 +68,16 @@ export function PythiaLogo({
         ) : null}
       </circle>
 
-      {/* three signal arcs at 120° */}
+      {/* three signal arcs at 120° — gold + two shades of imperial purple */}
       {[0, 120, 240].map((deg, i) => (
         <g key={deg} transform={`rotate(${deg} 50 50)`}>
           <path
             d="M 50 18 A 32 32 0 0 1 77.7 36"
             fill="none"
-            stroke={["#22d3ee", "#34d399", "#fbbf24"][i]}
+            stroke={["#fbbf24", "#a855f7", "#7e22ce"][i]}
             strokeWidth="2.4"
             strokeLinecap="round"
-            opacity="0.9"
+            opacity="0.95"
           />
         </g>
       ))}
@@ -85,15 +88,15 @@ export function PythiaLogo({
         cy="50"
         r="20"
         fill="none"
-        stroke="#22d3ee"
+        stroke="#a855f7"
         strokeWidth="1.6"
-        opacity="0.55"
+        opacity="0.6"
       />
 
       {/* pupil core */}
       <circle cx="50" cy="50" r="14" fill={`url(#${id}-core)`} />
 
-      {/* champion spark */}
+      {/* champion spark — gilded centre */}
       <circle cx="50" cy="50" r="3.2" fill="#fde68a">
         {animated ? (
           <animate
@@ -121,13 +124,13 @@ export function PythiaWordmark({
       <PythiaLogo size={size} animated={animated} />
       <span className="flex flex-col leading-none">
         <span
-          className="font-semibold tracking-[0.32em] text-slate-100"
+          className="font-semibold tracking-[0.32em] bg-gradient-to-r from-amber-300 via-purple-300 to-purple-500 bg-clip-text text-transparent"
           style={{ fontSize: size * 0.46 }}
         >
           PYTHIA
         </span>
         <span
-          className="text-mist tracking-[0.4em] uppercase mt-1"
+          className="text-purple-300/80 tracking-[0.4em] uppercase mt-1"
           style={{ fontSize: size * 0.22 }}
         >
           Oracle of the swarm

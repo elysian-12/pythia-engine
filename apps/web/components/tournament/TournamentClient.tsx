@@ -622,9 +622,52 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
         />
       </section>
 
-      {/* 3-column deck: Inputs | Trading | Outputs */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="space-y-6">
+      {/* New-user wayfinding: a single "what to do here" strip with three
+          numbered actions matching the columns below. Without this,
+          first-time visitors land on a wall of similarly-styled panels
+          and have no entry point. */}
+      <section
+        aria-label="Quick start"
+        className="rounded-md border border-royal/30 bg-royal/5 px-4 py-3 flex items-center flex-wrap gap-x-6 gap-y-2 text-[0.75rem]"
+      >
+        <span className="text-[0.6rem] tracking-[0.4em] uppercase text-purple-300">
+          Start here
+        </span>
+        <a href="#zone-controls" className="hover:text-cyan flex items-center gap-2">
+          <span className="num text-purple-300">1.</span>
+          Configure your size + risk
+        </a>
+        <a href="#zone-controls" className="hover:text-cyan flex items-center gap-2">
+          <span className="num text-purple-300">2.</span>
+          Start autopilot or fire a synthetic event
+        </a>
+        <a href="#zone-trading" className="hover:text-cyan flex items-center gap-2">
+          <span className="num text-purple-300">3.</span>
+          Watch the paper position open under the champion
+        </a>
+        <a href="#zone-monitoring" className="hover:text-cyan flex items-center gap-2">
+          <span className="num text-purple-300">4.</span>
+          Read the trade feed + leaderboard
+        </a>
+      </section>
+
+      {/* 3-column deck — each zone has its own header so a first-time
+          visitor knows what each column is for at a glance. Order chosen
+          to match the natural left-to-right reading flow: configure →
+          observe positions → review history. */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* CONTROLS */}
+        <section
+          id="zone-controls"
+          aria-labelledby="zone-controls-h"
+          className="space-y-4"
+        >
+          <h2 id="zone-controls-h" className="zone-header">
+            <span className="text-purple-300">A · Controls</span>
+            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
+              your inputs · settings · autopilot · what-if events
+            </span>
+          </h2>
           <AutoPilot
             onFire={onFire}
             onPrices={onPrices}
@@ -632,9 +675,20 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           />
           <EventSimulator onFire={onFire} lastFired={lastEvent} />
           <SettingsForm />
-        </div>
+        </section>
 
-        <div className="space-y-6">
+        {/* TRADING */}
+        <section
+          id="zone-trading"
+          aria-labelledby="zone-trading-h"
+          className="space-y-4"
+        >
+          <h2 id="zone-trading-h" className="zone-header">
+            <span className="text-purple-300">B · Trading</span>
+            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
+              your paper positions · who you mirror
+            </span>
+          </h2>
           <HyperliquidPanel
             open={openPositions}
             closed={closedPositions}
@@ -654,9 +708,20 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             reactions={reactions}
             lastEvent={lastEvent}
           />
-        </div>
+        </section>
 
-        <div className="space-y-6">
+        {/* MONITORING + INFO */}
+        <section
+          id="zone-monitoring"
+          aria-labelledby="zone-monitoring-h"
+          className="space-y-4"
+        >
+          <h2 id="zone-monitoring-h" className="zone-header">
+            <span className="text-purple-300">C · Monitoring</span>
+            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
+              live feed · how the swarm thinks
+            </span>
+          </h2>
           <LiveTradeFeed entries={feed} />
           <div className="panel p-5">
             <div className="text-xs uppercase tracking-[0.3em] text-mist">
@@ -665,8 +730,8 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             <ol className="mt-3 space-y-2 text-xs text-slate-300">
               <li>
                 <span className="text-cyan font-mono">1. Event →</span>{" "}
-                Every agent observes the same liquidation / funding / candle
-                tick simultaneously.
+                Every agent observes the same liquidation, funding,
+                candle, or Polymarket-leadership tick simultaneously.
               </li>
               <li>
                 <span className="text-cyan font-mono">2. Vote →</span>{" "}
@@ -675,8 +740,9 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               </li>
               <li>
                 <span className="text-cyan font-mono">3. PeerView →</span>{" "}
-                Social agents see peer + champion directions → momentum /
-                contrarian meta-behaviours.
+                Social agents see peer + champion directions; every agent
+                also sees its own recent expectancy and abstains when its
+                E[R] turns negative (self-backtest gate).
               </li>
               <li>
                 <span className="text-cyan font-mono">4. Scoreboard →</span>{" "}
@@ -689,17 +755,23 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 mutants + elite crossovers.
               </li>
               <li>
-                <span className="text-amber font-mono">6. Copy trade →</span>{" "}
-                Champion → paper HL — when regime shifts, a different family
-                rises → execution follows, no restart.
+                <span className="text-yellow-300 font-mono">6. Copy trade →</span>{" "}
+                Champion → paper HL — when regime shifts, a different
+                family rises → execution follows, no restart.
               </li>
             </ol>
           </div>
-        </div>
+        </section>
       </section>
 
       {/* Full leaderboard */}
-      <section>
+      <section aria-labelledby="zone-leaderboard-h" className="space-y-4">
+        <h2 id="zone-leaderboard-h" className="zone-header">
+          <span className="text-purple-300">D · Leaderboard</span>
+          <span className="text-mist normal-case tracking-normal text-[0.6rem]">
+            every agent · ranked by Σ R · click any column header to re-sort
+          </span>
+        </h2>
         <Leaderboard agents={snap.agents} />
       </section>
     </div>

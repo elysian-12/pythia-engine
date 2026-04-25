@@ -21,3 +21,46 @@ html, body {
 .chip-mist { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
 .chip-royal { background: rgba(126, 34, 206, 0.18); color: #d8b4fe; }
 .chip-amber { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }
+
+/* Global focus-visible — without this, keyboard tab order is invisible
+   on the dark panels. Cyan ring matches the brand accent. */
+*:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Section headers used to delineate the three Tournament columns
+   (Controls, Trading, Monitoring). Royal-purple accent + tracking. */
+.zone-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: #d8b4fe;
+  padding: 0 0.25rem 0.5rem;
+  border-bottom: 1px solid rgba(126, 34, 206, 0.25);
+}
+.zone-header::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #a855f7;
+  box-shadow: 0 0 8px #a855f7;
+}
+
+/* Screen-reader-only utility (for table captions, aria-text). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

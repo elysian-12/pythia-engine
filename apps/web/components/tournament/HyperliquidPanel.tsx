@@ -106,8 +106,17 @@ export function HyperliquidPanel({
             </div>
             {onReset ? (
               <button
-                onClick={onReset}
-                className="text-[0.65rem] text-mist hover:text-red transition-colors"
+                onClick={() => {
+                  if (
+                    typeof window === "undefined" ||
+                    window.confirm(
+                      "Clear all open + closed paper positions for this session? This cannot be undone.",
+                    )
+                  ) {
+                    onReset();
+                  }
+                }}
+                className="text-[0.65rem] text-mist hover:text-red transition-colors px-1 py-0.5 rounded-sm"
               >
                 Reset session
               </button>

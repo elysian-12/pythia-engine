@@ -900,11 +900,14 @@ export function Arena({
   }, [ranked]);
 
   return (
+    // The canvas is decorative — every datum it shows is also rendered in
+    // the Leaderboard table below, so we hide it from assistive tech.
     <Canvas
       dpr={[1, 2]}
       shadows
       camera={{ position: [0, 8, 28], fov: 42 }}
       gl={{ antialias: true, alpha: true }}
+      aria-hidden="true"
     >
       <color attach="background" args={["#030509"]} />
       <fog attach="fog" args={["#030509", 28, 75]} />

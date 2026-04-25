@@ -136,6 +136,40 @@ apps/web/                    Next.js 15 · three.js · Vercel-deployed
 
 ★ = the hero crate. Everything else feeds it or is fed by it.
 
+## Quantitative integration
+
+Pythia is built on a stack of well-defined quantitative pieces. The
+table below is the authoritative truth about what's actually called
+during a swarm event, vs. what lives in the workspace but isn't yet
+fed into the agent decision path. Be honest with yourself before
+trusting any number — research code drifts, this list does not.
+
+| Concept | Crate / fn | Wired into the swarm? | Where it fires |
+|---|---|:-:|---|
+| **R-multiple ledger** (Van Tharp expectancy) | `swarm::scoring::Scoreboard::mark_outcome` | ✅ live | every closed trade in `swarm-backtest` and `pythia-swarm-live` |
+| **Probabilistic Sharpe Ratio** (Bailey & López de Prado 2012) | `evaluation::probabilistic_sharpe_ratio` | ✅ live | end-of-run certification block in `swarm-backtest`; PSR shown on the champion HUD and in the snapshot |
+| **Deflated Sharpe Ratio** (B&LdP 2014, multiple-testing correction) | `evaluation::deflated_sharpe_ratio` | ✅ live | same call site as PSR; uses every agent's Sharpe as the trial set |
+| **Block-bootstrap CI on Sharpe** (block size 7) | `evaluation::block_bootstrap_sharpe` | ✅ live | 95% CI lower/upper around the champion's Sharpe |
+| **Quarter-Kelly position sizing** | `live-executor::pythia-swarm-live` | ✅ live, opt-in | toggled by `kelly_enabled` in user settings; falls back to risk-fraction sizing |
+| **Regime classifier** (Trending / Ranging / Chaotic / Calm) | `regime::classify` | ✅ live | rolling BTC candle buffer feeds `Swarm.current_regime`; agents see it via `PeerView.regime` |
+| **Per-family regime fitness gate** | `swarm::systematic::SystematicAgent::regime_fitness` | ✅ live | every `decide_for_asset()` — agents abstain when fitness < 0.3, scale risk by fitness otherwise |
+| **Self-backtest gate** (live recent-expectancy filter) | `swarm::scoring::Scoreboard::recent_expectancy` → `PeerView.self_recent_expectancy` | ✅ live | `Swarm::with_scoreboard(...)` populates per-agent before each `observe()`; `decide_for_asset()` abstains on E[R] < −0.05R |
+| **Realistic execution simulation** (taker fees 5bps × 2, slippage 3bps × 2, funding cost, within-bar stop/TP, ATR R) | `paper_trader::simulate` | ✅ live | every closed trade in backtest and live-loop replay |
+| **Genetic evolution** (log-space Gaussian mutation + same-family crossover, rank-weighted parent selection, elite preservation) | `swarm::evolution::Evolution::advance` | ✅ live | every `PYTHIA_EVOLVE_EVERY` events; carries generation counter across runs via `data/swarm-population.json` |
+| **Population persistence** (id + params + stats + r_history round-trip) | `swarm::persistence::PersistedPopulation` | ✅ live | save at end of run, load at start; resume preserves prior R-history so PSR/DSR survive restarts |
+| **Granger F-statistic** (lag-4 prediction-market lead test) | `econometrics::granger_f` | ⚠️ present, **not** wired | `signal-engine` evaluates it offline; the `polyedge` agent uses a magnitude-z proxy instead. |
+| **Hasbrouck information share** | `econometrics::information_share` | ⚠️ present, **not** wired | same — `signal-engine` only |
+| **Engle-Granger cointegration gate** | `econometrics::engle_granger` | ⚠️ present, **not** wired | same — `signal-engine` only |
+| **Probabilistic Backtest Overfit (PBO)** | `evaluation::pbo` | ⚠️ wired in `strategy::ablate`, **not** in `swarm-backtest` | grid-search ablation only |
+
+The honest gap: `polyedge` agents currently fire on a Polymarket
+event's z-magnitude alone. The "real" PolyEdge thesis — fire when
+Granger-F passes its threshold AND Hasbrouck IS exceeds 0.5 AND the
+two series are cointegrated — needs those three calls threaded into
+`SystematicAgent::observe` for the `polyedge` family. That's the
+next-pass follow-up; everything else above is exercised on every
+event.
+
 ## What's validated
 
 - **365 days · BTC + ETH perps via Kiyotaka · ~69k events** replayed through

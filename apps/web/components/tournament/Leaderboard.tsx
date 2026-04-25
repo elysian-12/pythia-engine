@@ -10,40 +10,53 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
       </div>
       <div className="max-h-[520px] overflow-auto">
         <table className="w-full text-xs">
+          <caption className="sr-only">
+            Pythia agent scoreboard, ranked by total R-multiple (Σ R).
+            Columns: trades, win rate, Σ R, expectancy E[R], profit
+            factor, Sharpe, max drawdown, PnL in dollars.
+          </caption>
           <thead className="text-[0.65rem] text-mist uppercase sticky top-0 bg-panel">
             <tr>
-              <th className="text-left py-2 pr-2">#</th>
-              <th className="text-left py-2 pr-2">Agent</th>
-              <th className="text-right py-2 pr-2" title="Total closed trades">
+              <th scope="col" className="text-left py-2 pr-2">#</th>
+              <th scope="col" className="text-left py-2 pr-2">Agent</th>
+              <th
+                scope="col"
+                className="text-right py-2 pr-2"
+                title="Total closed trades"
+              >
                 Trades
               </th>
-              <th className="text-right py-2 pr-2">Win %</th>
-              <th className="text-right py-2 pr-2" title="Σ R-multiple">Σ R</th>
+              <th scope="col" className="text-right py-2 pr-2">Win %</th>
+              <th scope="col" className="text-right py-2 pr-2" title="Σ R-multiple">Σ R</th>
               <th
+                scope="col"
                 className="text-right py-2 pr-2"
                 title="Average R per trade (Van Tharp expectancy)"
               >
                 E[R]
               </th>
               <th
+                scope="col"
                 className="text-right py-2 pr-2"
                 title="Profit factor = gross win R / gross loss R"
               >
                 PF
               </th>
               <th
+                scope="col"
                 className="text-right py-2 pr-2"
                 title="Sharpe of per-trade R-multiples"
               >
                 Sharpe
               </th>
               <th
+                scope="col"
                 className="text-right py-2 pr-2"
                 title="Max drawdown in cumulative R"
               >
                 Max DD
               </th>
-              <th className="text-right py-2">PnL $</th>
+              <th scope="col" className="text-right py-2">PnL $</th>
             </tr>
           </thead>
           <tbody className="num">
@@ -65,7 +78,11 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                   } hover:bg-edge/30 transition-colors`}
                 >
                   <td className="py-1.5 pr-2 text-mist">
-                    {i === 0 ? "👑" : rank}
+                    {i === 0 ? (
+                      <span aria-label="champion (rank 1)">👑</span>
+                    ) : (
+                      rank
+                    )}
                   </td>
                   <td className="py-1.5 pr-2">
                     <span
