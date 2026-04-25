@@ -124,6 +124,11 @@ pub struct PeerView {
     pub long_fraction: f64,
     /// Fraction that matched the current dominant champion.
     pub champion_agreement: f64,
+    /// Current market regime, if classified yet. Populated by the swarm
+    /// driver from a rolling candle buffer; agents use this to gate
+    /// firing (e.g. mean-reverters skip trending regimes) and to scale
+    /// position size (Chaotic → halve risk).
+    pub regime: Option<regime::RegimeSnapshot>,
 }
 
 /// The trait every agent implements.

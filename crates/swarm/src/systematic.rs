@@ -19,6 +19,8 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
+use regime::Regime;
+
 use crate::agent::{AgentDecision, AgentKind, AgentProfile, Event, PeerView, SwarmAgent};
 
 /// The family of rule each systematic agent belongs to. Determines
@@ -267,8 +269,51 @@ impl SystematicAgent {
         self.params.asset_filter.is_none_or(|a| a == asset)
     }
 
-    fn decide_for_asset(&mut self, asset: Asset, ts: EventTs) -> Option<AgentDecision> {
+    /// How well-suited this agent's family is to the current regime.
+    /// Classic regime-aware risk allocation (López de Prado): trend-
+    /// followers thrive in directional regimes, mean-reverters in
+    /// ranges, and everyone halves size in chaos. The multiplier scales
+    /// `risk_fraction` rather than fully blocking — small bets in
+    /// hostile regimes still capture mispricings without bleeding to
+    /// fees if the rule still triggers cleanly.
+    fn regime_fitness(&self, snap: Option<regime::RegimeSnapshot>) -> f64 {
+        let Some(s) = snap else {
+            return 1.0;
+        };
+        match (self.params.family, s.regime) {
+            // Trend-followers: liq-trend, funding-trend, vol-breakout
+            (RuleFamily::LiqZScore { trend_follow: true }, r)
+            | (RuleFamily::FundingZScore { trend_follow: true }, r)
+            | (RuleFamily::VolBreakout, r) => match r {
+                Regime::Trending => 1.0,
+                Regime::Chaotic => 0.5,
+                Regime::Calm => 0.6,
+                Regime::Ranging => 0.3,
+            },
+            // Mean-reverters: liq-fade, funding-arb
+            (RuleFamily::LiqZScore { trend_follow: false }, r)
+            | (RuleFamily::FundingZScore { trend_follow: false }, r) => match r {
+                Regime::Trending => 0.3,
+                Regime::Chaotic => 0.5,
+                Regime::Calm => 0.7,
+                Regime::Ranging => 1.0,
+            },
+        }
+    }
+
+    fn decide_for_asset(
+        &mut self,
+        asset: Asset,
+        ts: EventTs,
+        regime: Option<regime::RegimeSnapshot>,
+    ) -> Option<AgentDecision> {
         let params = self.params.clone();
+        // Compute fitness up-front so the borrow on `self` doesn't conflict
+        // with the mutable borrow `window_mut` takes below.
+        let fitness = self.regime_fitness(regime);
+        if fitness < 0.3 {
+            return None;
+        }
         let window = self.window_mut(asset);
         if window.bar_counter - window.last_signal_bar < params.cooldown_bars as i64 {
             return None;
@@ -298,8 +343,13 @@ impl SystematicAgent {
                 window.donchian_break(params.donchian_bars)?
             }
         };
+        // Fitness pre-checked at function entry — no second gate here.
         window.last_signal_bar = window.bar_counter;
-        let conviction = 80; // simple constant; future: derive from |z|
+        let conviction = ((80.0 * fitness) as u8).max(20);
+        let scaled_risk = params.risk_fraction * fitness;
+        let regime_tag = regime
+            .map(|r| r.regime.as_str())
+            .unwrap_or("regime?");
         Some(AgentDecision {
             id: next_decision_id(),
             agent_id: self.id.clone(),
@@ -307,9 +357,9 @@ impl SystematicAgent {
             asset,
             direction,
             conviction,
-            risk_fraction: params.risk_fraction,
+            risk_fraction: scaled_risk,
             horizon_s: params.horizon_hours * 3600,
-            rationale: format!("{:?}", params.family),
+            rationale: format!("{:?} · {} · fit {:.2}", params.family, regime_tag, fitness),
         })
     }
 }
@@ -338,7 +388,8 @@ impl SwarmAgent for SystematicAgent {
         &self.profile
     }
 
-    async fn observe(&mut self, event: &Event, _peers: &PeerView) -> Option<AgentDecision> {
+    async fn observe(&mut self, event: &Event, peers: &PeerView) -> Option<AgentDecision> {
+        let regime = peers.regime;
         match event {
             Event::Liquidation { ts, asset, side, usd_value } => {
                 if !self.passes_asset_filter(*asset) {
@@ -346,7 +397,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 if self.window_mut(*asset).push_liq(ts.0, *side, *usd_value).is_some() {
                     // a new hourly bucket just closed — evaluate
-                    return self.decide_for_asset(*asset, *ts);
+                    return self.decide_for_asset(*asset, *ts, regime);
                 }
                 None
             }
@@ -356,7 +407,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_candle(candle.open, candle.high, candle.low, candle.close);
                 if matches!(self.params.family, RuleFamily::VolBreakout) {
-                    return self.decide_for_asset(*asset, *ts);
+                    return self.decide_for_asset(*asset, *ts, regime);
                 }
                 None
             }
@@ -366,7 +417,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_funding(funding.rate_close);
                 if matches!(self.params.family, RuleFamily::FundingZScore { .. }) {
-                    return self.decide_for_asset(*asset, *ts);
+                    return self.decide_for_asset(*asset, *ts, regime);
                 }
                 None
             }

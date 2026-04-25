@@ -24,6 +24,21 @@ export type RegimeInfo = {
   vol_ratio: number; // 1 = normal
 };
 
+export type ChampionCertification = {
+  /** Probability the champion's true Sharpe is positive given sample
+   * size, skew, and kurtosis. >0.95 = "real edge, not noise". */
+  psr: number;
+  /** PSR after deflating for multiple-testing bias from N trials. >0.95
+   * means the edge survives even after correcting for picking the best
+   * of N agents. The strict statistical green-light. */
+  dsr: number;
+  sharpe_ci_lo: number | null;
+  sharpe_ci_hi: number | null;
+  skew: number;
+  kurtosis: number;
+  n_trials: number;
+};
+
 export type SwarmSnapshot = {
   generated_at: number;
   generation?: number;
@@ -33,6 +48,7 @@ export type SwarmSnapshot = {
   recent_decisions: unknown[];
   consensus: { fires: number; wins?: number };
   regime?: RegimeInfo | null;
+  champion_certification?: ChampionCertification | null;
   source: "live" | "backtest" | "empty";
 };
 

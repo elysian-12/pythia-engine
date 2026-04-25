@@ -29,6 +29,9 @@ pub struct Swarm {
     /// Optional champion-id from the scoreboard — used to compute
     /// `champion_agreement` in the `PeerView`.
     pub current_champion: Option<String>,
+    /// Latest market regime, populated by the driver from a rolling
+    /// candle buffer. None until enough candles are seen.
+    pub current_regime: Option<regime::RegimeSnapshot>,
 }
 
 impl std::fmt::Debug for Swarm {
@@ -48,6 +51,7 @@ impl Swarm {
             recent: VecDeque::with_capacity(128),
             recent_capacity: 64,
             current_champion: None,
+            current_regime: None,
         }
     }
 
@@ -109,6 +113,7 @@ impl Swarm {
             recent: self.recent.iter().cloned().collect(),
             long_fraction,
             champion_agreement,
+            regime: self.current_regime,
         }
     }
 }

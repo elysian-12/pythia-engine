@@ -66,7 +66,13 @@ pub struct Scoreboard {
 struct Inner {
     stats: HashMap<String, AgentStats>,
     pending: HashMap<String, (AgentDecision, Vec<f64>)>,
+    /// Last `R_HISTORY_CAP` realised R values per agent — used by the
+    /// evaluation crate (DSR/PSR/block-bootstrap CI). Capped to keep
+    /// memory bounded across hundreds of evolved generations.
+    r_history: HashMap<String, std::collections::VecDeque<f64>>,
 }
+
+const R_HISTORY_CAP: usize = 2_000;
 
 impl Default for Scoreboard {
     fn default() -> Self {
@@ -154,6 +160,26 @@ impl Scoreboard {
             let sd = var.sqrt().max(1e-9);
             s.rolling_sharpe = mean / sd;
         }
+
+        // Capture the R series for the evaluation crate's significance tests.
+        let aid = d.agent_id.clone();
+        let buf = g.r_history.entry(aid).or_default();
+        buf.push_back(r_multiple);
+        while buf.len() > R_HISTORY_CAP {
+            buf.pop_front();
+        }
+    }
+
+    /// Per-trade R history for an agent — used by `evaluation` for
+    /// PSR / DSR / block-bootstrap CI on Sharpe. Returns up to the last
+    /// `R_HISTORY_CAP` realised R values (oldest first).
+    pub fn r_history(&self, agent_id: &str) -> Vec<f64> {
+        self.inner
+            .lock()
+            .r_history
+            .get(agent_id)
+            .map(|d| d.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     pub fn stats(&self, agent_id: &str) -> Option<AgentStats> {

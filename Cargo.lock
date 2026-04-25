@@ -3036,6 +3036,7 @@ dependencies = [
  "backtest",
  "chrono",
  "domain",
+ "econometrics",
  "evaluation",
  "paper-trader",
  "parking_lot",

@@ -15,6 +15,7 @@ reports = { path = "../reports" }
 store = { path = "../store" }
 regime = { path = "../regime" }
 evaluation = { path = "../evaluation" }
+econometrics = { path = "../econometrics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

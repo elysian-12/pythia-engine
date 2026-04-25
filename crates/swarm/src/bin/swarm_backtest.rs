@@ -13,6 +13,7 @@ use domain::{
     signal::Signal,
     time::EventTs,
 };
+use evaluation::{block_bootstrap_sharpe, deflated_sharpe_ratio, probabilistic_sharpe_ratio};
 use paper_trader::{atr, simulate, Sizing, TraderConfig};
 use store::Store;
 use swarm::{
@@ -111,9 +112,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // consume the histories into the event stream.
     let market_data = MarketData::from_histories(&btc, &eth);
 
+    // Pre-compute a (ts → regime) timeline from BTC's hourly candles so the
+    // swarm driver can fast-lookup the regime at each event ts. Recompute
+    // every `REGIME_STEP` candles — re-running the classifier on every
+    // event would dominate the wall time.
+    let regime_cfg = regime::RegimeCfg::default();
+    let regime_timeline = build_regime_timeline(
+        market_data.candles.get(&Asset::Btc).cloned().unwrap_or_default().as_slice(),
+        &regime_cfg,
+    );
+
     // Merge all events chronologically.
     let events = interleave(btc, eth);
-    tracing::info!(n_agents, n_events = events.len(), "starting replay");
+    tracing::info!(n_agents, n_events = events.len(), n_regimes = regime_timeline.len(), "starting replay");
     let trader = TraderConfig {
         sizing: Sizing::AtrRisk {
             risk_fraction: 0.01,
@@ -140,6 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         swarm.current_champion = scoreboard
             .champion(cons_cfg.min_decisions_for_champion)
             .map(|c| c.agent_id);
+        // Update the regime PeerView attribute — agents read this to skip
+        // hostile-regime trades and to scale `risk_fraction` by fitness.
+        swarm.current_regime = regime_at(&regime_timeline, ts_now);
 
         event_counter += 1;
         // Every N events: replace weak systematic agents with elite-seeded
@@ -265,13 +279,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let champion = ranked.first();
+    // Statistical certification of the champion's edge.
+    //
+    // Three orthogonal tests from `evaluation`:
+    //
+    //  - **PSR** (Bailey & López de Prado 2012): probability the *true*
+    //    Sharpe is positive given sample size, skew, and kurtosis. >0.95
+    //    is the conventional "this is real" threshold.
+    //  - **DSR** (Bailey & López de Prado 2014): PSR after deflating for
+    //    multiple-testing bias — necessary because we picked the best of
+    //    N agents. >0.95 means the champion's edge survives even after
+    //    correcting for cherry-picking from the population.
+    //  - **Block-bootstrap CI** on Sharpe at 95% confidence with block
+    //    size = 7 trades — standard nonparametric range, autocorrelation
+    //    aware. CI strictly above 0 = robust to resampling.
+    let mut champion_psr = 0.0;
+    let mut champion_dsr = 0.0;
+    let mut champion_sharpe_ci_lo = f64::NAN;
+    let mut champion_sharpe_ci_hi = f64::NAN;
+    let mut champion_skew = 0.0;
+    let mut champion_kurtosis = 0.0;
     if let Some(c) = champion {
+        let r_series = scoreboard.r_history(&c.agent_id);
+        let trial_sharpes: Vec<f64> = ranked
+            .iter()
+            .filter(|s| s.wins + s.losses >= 5)
+            .map(|s| s.rolling_sharpe)
+            .collect();
+        if r_series.len() >= 10 {
+            let psr = probabilistic_sharpe_ratio(&r_series, 0.0);
+            let dsr = deflated_sharpe_ratio(&r_series, &trial_sharpes);
+            let ci = block_bootstrap_sharpe(&r_series, 1_000, 1.0, 0.95, 7);
+            champion_psr = psr.psr;
+            champion_dsr = dsr.psr;
+            champion_skew = psr.skew;
+            champion_kurtosis = psr.kurtosis;
+            champion_sharpe_ci_lo = ci.lo;
+            champion_sharpe_ci_hi = ci.hi;
+        }
         println!(
             "\nCHAMPION: {} · total_r={:+.2} · win_rate={:.1}% · pnl=${:+.0}",
             c.agent_id,
             c.total_r,
             c.win_rate * 100.0,
             c.total_pnl_usd
+        );
+        println!(
+            "           Sharpe={:.3} (95% CI [{:.3}, {:.3}]) · PSR={:.3} · DSR={:.3} · skew={:.2} · kurt={:.2}",
+            c.rolling_sharpe,
+            champion_sharpe_ci_lo,
+            champion_sharpe_ci_hi,
+            champion_psr,
+            champion_dsr,
+            champion_skew,
+            champion_kurtosis,
         );
     }
     println!(
@@ -316,6 +377,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "directional": r.directional,
             "vol_ratio": r.vol_ratio,
         })),
+        // Quant-grade certification of the champion's edge so the UI can
+        // tell users whether the headline number is statistically real
+        // (PSR/DSR > 0.95) or noise.
+        "champion_certification": {
+            "psr": champion_psr,
+            "dsr": champion_dsr,
+            "sharpe_ci_lo": if champion_sharpe_ci_lo.is_finite() { Some(champion_sharpe_ci_lo) } else { None },
+            "sharpe_ci_hi": if champion_sharpe_ci_hi.is_finite() { Some(champion_sharpe_ci_hi) } else { None },
+            "skew": champion_skew,
+            "kurtosis": champion_kurtosis,
+            "n_trials": ranked.iter().filter(|s| s.wins + s.losses >= 5).count(),
+        },
         "source": "backtest"
     });
     let data_dir = PathBuf::from("data");
@@ -447,6 +520,41 @@ fn close_expired(
         let pnl = trade.pnl_usd.unwrap_or(0.0);
         scoreboard.mark_outcome(&p.decision.id, r, pnl);
     }
+}
+
+/// Pre-compute (ts, regime) checkpoints across the candle history so the
+/// driver can resolve "what regime was the market in at time T" with a
+/// binary search instead of re-running classify() on every event.
+const REGIME_STEP: usize = 12; // re-classify every 12 hours
+fn build_regime_timeline(
+    candles: &[Candle],
+    cfg: &regime::RegimeCfg,
+) -> Vec<(i64, regime::RegimeSnapshot)> {
+    let mut out = Vec::new();
+    if candles.len() <= cfg.window {
+        return out;
+    }
+    let start = cfg.window;
+    let mut i = start;
+    while i < candles.len() {
+        if let Some(snap) = regime::classify(&candles[..=i], cfg) {
+            out.push((candles[i].ts.0, snap));
+        }
+        i += REGIME_STEP;
+    }
+    out
+}
+
+fn regime_at(timeline: &[(i64, regime::RegimeSnapshot)], ts: i64) -> Option<regime::RegimeSnapshot> {
+    if timeline.is_empty() {
+        return None;
+    }
+    // Binary search for the latest checkpoint at or before ts.
+    let idx = timeline.partition_point(|(t, _)| *t <= ts);
+    if idx == 0 {
+        return None;
+    }
+    Some(timeline[idx - 1].1)
 }
 
 /// Per-asset chronological candles + funding, indexed by Asset for cheap

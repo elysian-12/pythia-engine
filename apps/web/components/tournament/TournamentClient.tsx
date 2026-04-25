@@ -71,6 +71,32 @@ function PhaseBadge({ phase }: { phase: "swarm" | "ranking" | "podium" }) {
   );
 }
 
+function CertificationBadge({
+  cert,
+}: {
+  cert: NonNullable<SwarmSnapshot["champion_certification"]>;
+}) {
+  const dsrPass = cert.dsr >= 0.95;
+  const psrPass = cert.psr >= 0.95;
+  const ciPass =
+    cert.sharpe_ci_lo !== null && cert.sharpe_ci_lo > 0;
+  const allPass = dsrPass && psrPass && ciPass;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-[0.6rem] uppercase tracking-[0.2em] px-2 py-0.5 rounded-sm ring-1 ${
+        allPass
+          ? "ring-green/60 text-green bg-green/5"
+          : "ring-amber/60 text-amber bg-amber/5"
+      }`}
+      title={`PSR ${cert.psr.toFixed(3)} · DSR ${cert.dsr.toFixed(3)} · Sharpe CI 95% [${(cert.sharpe_ci_lo ?? 0).toFixed(2)}, ${(cert.sharpe_ci_hi ?? 0).toFixed(2)}] · skew ${cert.skew.toFixed(2)} · kurt ${cert.kurtosis.toFixed(2)} · ${cert.n_trials} trials`}
+    >
+      <span>
+        {allPass ? "Quant-certified" : "Statistically uncertain"}
+      </span>
+    </span>
+  );
+}
+
 function SourceBadge({ source }: { source: SwarmSnapshot["source"] }) {
   const map: Record<SwarmSnapshot["source"], { label: string; dot: string }> = {
     live: { label: "Live daemon", dot: "bg-green animate-pulse" },
@@ -448,7 +474,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
               <div className="mt-1 text-lg font-mono text-slate-100">
                 {champ.agent_id}
               </div>
-              <div className="grid grid-cols-3 gap-x-5 gap-y-1 text-xs mt-2 num">
+              <div className="grid grid-cols-4 gap-x-5 gap-y-1 text-xs mt-2 num">
                 <span>
                   <span className="text-mist">Σ R</span>{" "}
                   <span
@@ -494,7 +520,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                       : "—"}
                   </span>
                 </span>
-                <span title="Sharpe of per-trade R">
+                <span title="Sharpe of per-trade R + 95% block-bootstrap CI">
                   <span className="text-mist">Sharpe</span>{" "}
                   <span
                     className={
@@ -507,8 +533,52 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                   >
                     {champ.rolling_sharpe.toFixed(2)}
                   </span>
+                  {snap.champion_certification?.sharpe_ci_lo != null &&
+                  snap.champion_certification?.sharpe_ci_hi != null ? (
+                    <span className="text-[0.55rem] text-mist ml-1">
+                      [{snap.champion_certification.sharpe_ci_lo.toFixed(2)},{" "}
+                      {snap.champion_certification.sharpe_ci_hi.toFixed(2)}]
+                    </span>
+                  ) : null}
                 </span>
+                {snap.champion_certification ? (
+                  <>
+                    <span title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
+                      <span className="text-mist">PSR</span>{" "}
+                      <span
+                        className={
+                          snap.champion_certification.psr >= 0.95
+                            ? "text-green"
+                            : snap.champion_certification.psr >= 0.5
+                              ? "text-amber"
+                              : "text-red"
+                        }
+                      >
+                        {snap.champion_certification.psr.toFixed(2)}
+                      </span>
+                    </span>
+                    <span title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias across the swarm">
+                      <span className="text-mist">DSR</span>{" "}
+                      <span
+                        className={
+                          snap.champion_certification.dsr >= 0.95
+                            ? "text-green"
+                            : snap.champion_certification.dsr >= 0.5
+                              ? "text-amber"
+                              : "text-red"
+                        }
+                      >
+                        {snap.champion_certification.dsr.toFixed(2)}
+                      </span>
+                    </span>
+                  </>
+                ) : null}
               </div>
+              {snap.champion_certification ? (
+                <div className="mt-2">
+                  <CertificationBadge cert={snap.champion_certification} />
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[380px]">
               {Object.entries(FAMILY_COLORS)
