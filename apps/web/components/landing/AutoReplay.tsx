@@ -13,15 +13,14 @@ import {
 } from "@/lib/simulate";
 
 /**
- * Auto-looping demo on the landing page. Generates synthetic events on a
- * fixed cadence, walks through the closed-loop pipeline (event → swarm →
- * champion → trade → PnL), and resets to event-1 once the demo run reaches
- * its target length. The point is to give a first-time visitor a clear,
- * always-on visualisation of the trading flow without needing to start the
- * Rust backtest or click into the tournament page.
+ * Auto-looping landing demo. Generates synthetic events on a fixed cadence,
+ * walks through the closed-loop pipeline (Event → Swarm → Champion → Trade
+ * → PnL), and stamps the latency between each transition so the visitor
+ * sees how fast the path runs end-to-end.
  *
- * Math is intentionally simplified — this is a reactive *story*, not a
- * statistical model. Real positions are sized + scored by the Rust core.
+ * The trade dollar sizes come from the user's saved settings (equity +
+ * risk-fraction). When settings change via the SettingsPanel, this view
+ * recomputes immediately.
  */
 
 type Stage =
@@ -31,19 +30,26 @@ type Stage =
   | "executed"
   | "settled";
 
+type Latencies = Partial<Record<Stage, number>>; // ms since event-fired
+
 type DemoTrade = {
   id: string;
   ev: SimEvent;
   championId: string | null;
+  championShort: string;
   direction: "long" | "short" | null;
-  rPnl: number; // realised R after settle (0 while open)
+  rPnl: number;
+  pnlUsd: number;
+  notional: number;
   outcome: "win" | "loss" | "skip" | "pending";
   voted_long: number;
   voted_short: number;
   voted_total: number;
+  latency_ms: number; // event → trade-sent
 };
 
-const TICK_MS = 1100;
+type LandingMode = "paper" | "live";
+
 const STAGES: Stage[] = [
   "event-fired",
   "swarm-voting",
@@ -52,11 +58,27 @@ const STAGES: Stage[] = [
   "settled",
 ];
 
+// Per-stage delay (ms). Real production latency is dominated by network
+// (Binance WS frame → Hyperliquid order ack ≈ 80–250 ms). The demo runs
+// a 4–6× expansion so the eye can follow each stage.
+const STAGE_MS: Record<Stage, number> = {
+  "event-fired": 0,
+  "swarm-voting": 600,
+  "champion-locked": 350,
+  executed: 250,
+  settled: 1100,
+};
+
+// Optional jitter so consecutive cycles don't look mechanical.
+function jittered(base: number): number {
+  return base + Math.round(Math.random() * 60 - 30);
+}
+
 function generateEvent(seed: number): SimEvent {
   const kinds: SimEvent["kind"][] = ["liq-spike", "vol-breakout", "funding-spike"];
   const assets: SimEvent["asset"][] = ["BTC", "ETH"];
   const dir: SimEvent["direction"] = Math.sin(seed * 12.9898) > 0 ? "long" : "short";
-  const z = 2.0 + Math.abs(Math.cos(seed * 78.233)) * 1.6; // 2.0 .. 3.6
+  const z = 2.0 + Math.abs(Math.cos(seed * 78.233)) * 1.6;
   return {
     id: `demo-${seed}`,
     ts: Math.floor(Date.now() / 1000),
@@ -67,14 +89,24 @@ function generateEvent(seed: number): SimEvent {
   };
 }
 
-/** Deterministic R outcome for the demo — heavier tail toward champion's win
- *  rate so visitors see a realistic mix without hard-coding wins.
- *  champion's empirical win rate ~0.60 → outcomes ~ +1.5R / -1.0R. */
-function settleTrade(seed: number, championWinRate: number): number {
-  const u = Math.abs(Math.sin(seed * 91.347)) % 1; // pseudo-random uniform
-  if (u < championWinRate) return 1.5; // TP
-  return -1.0; // stop
+function settleR(seed: number, championWinRate: number): number {
+  const u = Math.abs(Math.sin(seed * 91.347)) % 1;
+  return u < championWinRate ? 1.5 : -1.0;
 }
+
+export type AutoReplaySettings = {
+  equity_usd: number;
+  risk_fraction: number;
+  mode: LandingMode;
+  wallet_address: string;
+};
+
+const DEFAULT_SETTINGS: AutoReplaySettings = {
+  equity_usd: 1000,
+  risk_fraction: 0.005,
+  mode: "paper",
+  wallet_address: "",
+};
 
 export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
   const [seed, setSeed] = useState(1);
@@ -82,14 +114,55 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
   const [trades, setTrades] = useState<DemoTrade[]>([]);
   const [running, setRunning] = useState(true);
   const [reactions, setReactions] = useState<SimReaction[]>([]);
-  const stageIdxRef = useRef(0);
+  const [latencies, setLatencies] = useState<Latencies>({});
+  const [settings, setSettings] = useState<AutoReplaySettings>(DEFAULT_SETTINGS);
+
+  // Read latest user settings from localStorage / API + listen for changes.
+  useEffect(() => {
+    const apply = (cfg: Partial<AutoReplaySettings>) => {
+      setSettings((prev) => ({
+        equity_usd:
+          typeof cfg.equity_usd === "number" && cfg.equity_usd > 0
+            ? cfg.equity_usd
+            : prev.equity_usd,
+        risk_fraction:
+          typeof cfg.risk_fraction === "number" && cfg.risk_fraction > 0
+            ? cfg.risk_fraction
+            : prev.risk_fraction,
+        mode: cfg.mode === "live" || cfg.mode === "paper" ? cfg.mode : prev.mode,
+        wallet_address:
+          typeof cfg.wallet_address === "string"
+            ? cfg.wallet_address
+            : prev.wallet_address,
+      }));
+    };
+    (async () => {
+      try {
+        const res = await fetch("/api/config", { cache: "no-store" });
+        if (res.ok) apply((await res.json()) as Partial<AutoReplaySettings>);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const ls = localStorage.getItem("pythia-swarm-config");
+        if (ls) apply(JSON.parse(ls) as Partial<AutoReplaySettings>);
+      } catch {
+        /* ignore */
+      }
+    })();
+    const onCustom = (e: Event) => {
+      const detail = (e as CustomEvent<Partial<AutoReplaySettings>>).detail;
+      if (detail) apply(detail);
+    };
+    window.addEventListener("pythia-config-updated", onCustom);
+    return () => window.removeEventListener("pythia-config-updated", onCustom);
+  }, []);
 
   const current: SimEvent = useMemo(() => generateEvent(seed), [seed]);
   const championId = snap?.champion?.agent_id ?? null;
   const championWinRate = snap?.champion?.win_rate ?? 0.6;
 
-  // When a fresh event lands, recompute the swarm reactions immediately so
-  // the visual picks them up at stage="swarm-voting".
+  // Recompute swarm reactions when the event lands.
   useEffect(() => {
     if (!snap || snap.agents.length === 0) {
       setReactions([]);
@@ -98,62 +171,123 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
     setReactions(simulateReactions(current, snap.agents, snap.regime));
   }, [current, snap]);
 
-  // Drive the stage machine.
+  // Stage machine — each stage advances after its STAGE_MS budget. Records
+  // a real wall-clock latency stamp at every transition so the latency
+  // meter shows perceived end-to-end time, not the configured budget.
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(() => {
-      stageIdxRef.current = (stageIdxRef.current + 1) % STAGES.length;
-      const next = STAGES[stageIdxRef.current];
-      setStage(next);
-      if (next === "event-fired") {
-        setSeed((s) => s + 1);
-      } else if (next === "settled") {
-        // Realise the trade into the ledger.
-        const championReacted = reactions.find(
-          (r) => r.agent_id === championId && r.reacted,
-        );
-        const longs = reactions.filter((r) => r.reacted && r.direction === "long").length;
-        const shorts = reactions.filter((r) => r.reacted && r.direction === "short").length;
-        const total = reactions.filter((r) => r.reacted).length;
-        const direction = championReacted?.direction ?? null;
-        const rPnl = championReacted ? settleTrade(seed, championWinRate) : 0;
-        const outcome: DemoTrade["outcome"] = !championReacted
-          ? "skip"
-          : rPnl > 0
-            ? "win"
-            : "loss";
-        setTrades((prev) =>
-          [
-            {
-              id: current.id,
-              ev: current,
-              championId,
-              direction,
-              rPnl,
-              outcome,
-              voted_long: longs,
-              voted_short: shorts,
-              voted_total: total,
-            },
-            ...prev,
-          ].slice(0, 8),
-        );
-      }
-    }, TICK_MS);
-    return () => clearInterval(t);
-  }, [
-    running,
-    reactions,
-    championId,
-    championWinRate,
-    seed,
-    current,
-  ]);
+    let cancelled = false;
+    let stageIdx = 0;
+    let cycleStart = performance.now();
+    const stamps: Latencies = { "event-fired": 0 };
+    setStage(STAGES[0]);
+    setLatencies(stamps);
+    setSeed((s) => s + 1);
 
+    const advance = () => {
+      if (cancelled) return;
+      stageIdx += 1;
+      if (stageIdx >= STAGES.length) {
+        // start a new cycle
+        stageIdx = 0;
+        cycleStart = performance.now();
+        const fresh: Latencies = { "event-fired": 0 };
+        setLatencies(fresh);
+        setStage(STAGES[0]);
+        setSeed((s) => s + 1);
+      } else {
+        const st = STAGES[stageIdx];
+        const delta = performance.now() - cycleStart;
+        stamps[st] = Math.round(delta);
+        setLatencies({ ...stamps });
+        setStage(st);
+        if (st === "executed") {
+          // finalise demo trade once it's "sent"
+          const championReacted = reactionsRef.current.find(
+            (r) => r.agent_id === championId && r.reacted,
+          );
+          const longs = reactionsRef.current.filter(
+            (r) => r.reacted && r.direction === "long",
+          ).length;
+          const shorts = reactionsRef.current.filter(
+            (r) => r.reacted && r.direction === "short",
+          ).length;
+          const total = reactionsRef.current.filter((r) => r.reacted).length;
+          const direction = championReacted?.direction ?? null;
+          const r = championReacted ? settleR(seedRef.current, championWinRate) : 0;
+          const fitness = championReacted?.fitness ?? 1;
+          const riskUsd = settingsRef.current.equity_usd *
+            settingsRef.current.risk_fraction *
+            fitness;
+          const notional = championReacted ? riskUsd / 0.0075 : 0; // STOP_PCT 0.75%
+          const pnlUsd = championReacted ? r * riskUsd : 0;
+          const outcome: DemoTrade["outcome"] = !championReacted
+            ? "skip"
+            : r > 0
+              ? "win"
+              : "loss";
+          setTrades((prev) =>
+            [
+              {
+                id: currentRef.current.id,
+                ev: currentRef.current,
+                championId,
+                championShort: championId
+                  ? championId.replace(/^gen\d+-mut\d+-/, "")
+                  : "—",
+                direction,
+                rPnl: r,
+                pnlUsd,
+                notional,
+                outcome,
+                voted_long: longs,
+                voted_short: shorts,
+                voted_total: total,
+                latency_ms: Math.round(delta),
+              },
+              ...prev,
+            ].slice(0, 10),
+          );
+        }
+      }
+      const nextStage = STAGES[(stageIdx + 1) % STAGES.length];
+      setTimeout(advance, jittered(STAGE_MS[nextStage] ?? 800));
+    };
+    setTimeout(advance, jittered(STAGE_MS["swarm-voting"]));
+    return () => {
+      cancelled = true;
+    };
+  }, [running, championId, championWinRate]);
+
+  // Refs mirror state for the timer body.
+  const reactionsRef = useRef<SimReaction[]>([]);
+  const currentRef = useRef<SimEvent>(current);
+  const seedRef = useRef<number>(seed);
+  const settingsRef = useRef<AutoReplaySettings>(settings);
+  useEffect(() => {
+    reactionsRef.current = reactions;
+  }, [reactions]);
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+  useEffect(() => {
+    seedRef.current = seed;
+  }, [seed]);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  const cumPnl = trades.reduce((a, t) => a + t.pnlUsd, 0);
   const cumR = trades.reduce((a, t) => a + t.rPnl, 0);
   const wins = trades.filter((t) => t.outcome === "win").length;
   const losses = trades.filter((t) => t.outcome === "loss").length;
   const skips = trades.filter((t) => t.outcome === "skip").length;
+  const median =
+    trades.length > 0
+      ? [...trades].map((t) => t.latency_ms).sort((a, b) => a - b)[
+          Math.floor(trades.length / 2)
+        ]
+      : 0;
 
   if (!snap) return null;
 
@@ -173,12 +307,12 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
               Auto-replay · always-on demo
             </div>
             <h3 className="text-xl font-semibold text-slate-100 mt-1">
-              Watch the closed loop in real time
+              Watch the closed loop — event to trade in real time
             </h3>
             <p className="text-xs text-mist mt-1.5 max-w-xl">
-              Synthesised events fire every ~5s. Each one walks through the
-              full pipeline so you can see what happens without running the
-              backtest yourself.
+              Synthesised events fire continuously and walk through the full
+              pipeline. Trade sizes come from your settings below. Mode:
+              <ModeBadge mode={settings.mode} />
             </p>
           </div>
           <div className="flex items-center gap-2 text-[0.7rem]">
@@ -192,8 +326,7 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
               onClick={() => {
                 setTrades([]);
                 setSeed(1);
-                stageIdxRef.current = 0;
-                setStage("event-fired");
+                setLatencies({});
               }}
               className="chip chip-mist hover:opacity-80 transition-opacity"
             >
@@ -202,12 +335,12 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
           </div>
         </div>
 
-        {/* Pipeline rail */}
+        {/* Pipeline rail with per-stage latency stamps */}
         <div className="flex items-stretch gap-2 mb-4">
-          {STAGES.map((s) => {
-            const idx = STAGES.indexOf(s);
-            const here = idx === stageIdxRef.current;
-            const passed = idx < stageIdxRef.current;
+          {STAGES.map((s, idx) => {
+            const here = stage === s;
+            const passed = STAGES.indexOf(stage) > idx;
+            const t = latencies[s];
             return (
               <div
                 key={s}
@@ -219,7 +352,14 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
                       : "border-edge/40 text-mist/60"
                 }`}
               >
-                <span className="num">{idx + 1}.</span> {labelOf(s)}
+                <div className="flex items-baseline justify-between gap-1">
+                  <span>
+                    <span className="num">{idx + 1}.</span> {labelOf(s)}
+                  </span>
+                  {t != null ? (
+                    <span className="num text-[0.6rem]">+{t}ms</span>
+                  ) : null}
+                </div>
               </div>
             );
           })}
@@ -264,7 +404,6 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
                   </span>
                 ) : (
                   reactions.map((r) => {
-                    const passed = stage !== "event-fired";
                     const isChamp = r.agent_id === championId;
                     return (
                       <span
@@ -276,7 +415,7 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
                               ? "bg-amber/15 text-amber ring-1 ring-amber/50"
                               : "bg-edge/50 text-slate-200"
                             : "bg-edge/15 text-mist/50"
-                        } ${passed ? "" : "scale-95 opacity-60"}`}
+                        }`}
                       >
                         <span
                           className="inline-block w-1.5 h-1.5 rounded-full"
@@ -309,22 +448,44 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
           </div>
         </div>
 
+        {/* Latency + settings live readout */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4 text-[0.7rem]">
+          <Tile
+            label="Equity"
+            value={`$${settings.equity_usd.toLocaleString()}`}
+            sub={settings.mode === "live" ? "live preview" : "paper"}
+          />
+          <Tile
+            label="Risk"
+            value={`${(settings.risk_fraction * 100).toFixed(2)}%`}
+            sub={`= $${(settings.equity_usd * settings.risk_fraction).toFixed(0)} per trade`}
+          />
+          <Tile
+            label="Median latency"
+            value={median > 0 ? `${median} ms` : "—"}
+            sub="event → trade-sent"
+            tone="cyan"
+          />
+          <Tile
+            label="Demo PnL"
+            value={
+              cumPnl >= 0 ? `+$${cumPnl.toFixed(2)}` : `-$${Math.abs(cumPnl).toFixed(2)}`
+            }
+            sub={`${wins}W / ${losses}L · ${cumR >= 0 ? "+" : ""}${cumR.toFixed(1)}R`}
+            tone={cumPnl >= 0 ? "pos" : "neg"}
+          />
+        </div>
+
         {/* Trade ledger */}
         <div className="rounded-sm border border-edge/60 bg-black/20">
           <div className="flex items-center justify-between px-3 py-2 border-b border-edge/50">
             <div className="text-[0.6rem] uppercase tracking-widest text-mist">
-              Demo trade ledger · last {trades.length}
+              Demo ledger · last {trades.length}
             </div>
             <div className="flex items-center gap-3 text-[0.65rem] num">
               <span className="text-green">{wins}W</span>
               <span className="text-red">{losses}L</span>
               <span className="text-mist">{skips} skipped</span>
-              <span
-                className={cumR >= 0 ? "text-green" : "text-red"}
-              >
-                Σ R {cumR >= 0 ? "+" : ""}
-                {cumR.toFixed(1)}
-              </span>
             </div>
           </div>
           {trades.length === 0 ? (
@@ -344,18 +505,66 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
   );
 }
 
+function ModeBadge({ mode }: { mode: LandingMode }) {
+  return (
+    <span
+      className={`ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[0.6rem] uppercase tracking-widest ${
+        mode === "live"
+          ? "bg-amber/15 text-amber"
+          : "bg-cyan/10 text-cyan"
+      }`}
+    >
+      <span
+        className={`w-1 h-1 rounded-full ${
+          mode === "live" ? "bg-amber animate-pulse" : "bg-cyan"
+        }`}
+      />
+      {mode}
+    </span>
+  );
+}
+
 function labelOf(s: Stage): string {
   return {
     "event-fired": "Event",
     "swarm-voting": "Swarm",
     "champion-locked": "Champion",
-    executed: "Trade",
+    executed: "Trade sent",
     settled: "PnL",
   }[s];
 }
 
+function Tile({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "pos" | "neg" | "cyan";
+}) {
+  const c =
+    tone === "pos"
+      ? "text-green"
+      : tone === "neg"
+        ? "text-red"
+        : tone === "cyan"
+          ? "text-cyan"
+          : "text-slate-100";
+  return (
+    <div className="rounded-sm border border-edge/60 bg-black/30 px-3 py-2 num">
+      <div className="text-[0.55rem] uppercase tracking-widest text-mist">
+        {label}
+      </div>
+      <div className={`mt-0.5 text-base ${c}`}>{value}</div>
+      {sub ? <div className="text-[0.6rem] text-mist mt-0.5">{sub}</div> : null}
+    </div>
+  );
+}
+
 function TradeRow({ t }: { t: DemoTrade }) {
-  const championShort = t.championId?.replace(/^gen\d+-mut\d+-/, "") ?? "—";
   const family = t.championId ? agentFamily(t.championId) : "other";
   const dot = FAMILY_COLORS[family];
   const pnlColor =
@@ -365,28 +574,24 @@ function TradeRow({ t }: { t: DemoTrade }) {
         ? "text-red"
         : "text-mist";
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-1.5 text-[0.7rem]">
+    <div className="grid grid-cols-[1fr_70px_70px_84px_64px] items-center gap-2 px-3 py-1.5 text-[0.7rem]">
       <div className="flex items-center gap-2 min-w-0">
         <span
-          className="inline-block w-1.5 h-1.5 rounded-full"
+          className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
           style={{ background: dot, boxShadow: `0 0 6px ${dot}` }}
         />
         <span className="font-mono text-slate-100 uppercase">{t.ev.kind}</span>
         <span className="font-mono text-cyan">{t.ev.asset}</span>
-        <span className="text-mist num">|z|={t.ev.magnitude_z.toFixed(2)}</span>
         <span
           className={`truncate text-mist ${
             t.outcome === "skip" ? "italic" : ""
           }`}
         >
-          → {championShort}
+          → {t.championShort}
         </span>
       </div>
-      <span className="num text-mist">
-        {t.voted_long}L/{t.voted_short}S of {t.voted_total}
-      </span>
       <span
-        className={`num ${
+        className={`num text-right ${
           t.direction === "long"
             ? "text-green"
             : t.direction === "short"
@@ -394,13 +599,21 @@ function TradeRow({ t }: { t: DemoTrade }) {
               : "text-mist"
         }`}
       >
-        {t.direction === "long" ? "LONG" : t.direction === "short" ? "SHORT" : "FLAT"}
+        {t.direction === "long"
+          ? "LONG"
+          : t.direction === "short"
+            ? "SHORT"
+            : "FLAT"}
       </span>
-      <span className={`num ${pnlColor}`}>
+      <span className="num text-right text-mist">
+        ${t.notional > 0 ? t.notional.toFixed(0) : "—"}
+      </span>
+      <span className={`num text-right ${pnlColor}`}>
         {t.outcome === "skip"
           ? "—"
-          : `${t.rPnl >= 0 ? "+" : ""}${t.rPnl.toFixed(1)}R`}
+          : `${t.pnlUsd >= 0 ? "+" : ""}$${t.pnlUsd.toFixed(2)}`}
       </span>
+      <span className="num text-right text-mist">{t.latency_ms}ms</span>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from "@/lib/swarm";
 import { loadEquity, type EquityPoint } from "@/lib/vis-data";
 import { AutoReplay } from "./AutoReplay";
+import { TradeSettingsPanel } from "./TradeSettingsPanel";
 
 type Marks = { BTC: number | null; ETH: number | null };
 
@@ -313,6 +314,9 @@ export function LandingDashboard() {
           ) : null}
         </div>
       </section>
+
+      {/* User settings — drives sizing in the auto-replay below */}
+      <TradeSettingsPanel />
 
       {/* Auto-replay live demo loop */}
       <AutoReplay snap={snap} />
