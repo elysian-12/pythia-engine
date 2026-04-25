@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import bundledSnapshot from "@/lib/bundled/swarm-snapshot.json";
 
-// Serve the swarm snapshot JSON. Priority:
-//   1. data/swarm-snapshot.json   — written by swarm-backtest or the
-//                                     live daemon every 10 s
-//   2. reports/swarm/<latest>/swarm.json — fall back to the most recent
-//                                            backtest if step 1 missing
-//   3. Empty snapshot              — signals the UI to show an onboarding
-//                                      message instead of fake numbers
+// Snapshot resolution priority:
+//   1. PYTHIA_SNAPSHOT env var (explicit override path)
+//   2. repo-root data/swarm-snapshot.json (live daemon writes here every 10s)
+//   3. apps/web/public/swarm-snapshot.json (build-time copy for local /public/...)
+//   4. Compiled-in lib/bundled/swarm-snapshot.json — the only one Vercel
+//      ships into the serverless function bundle by default. Guaranteed
+//      to exist (bundle-snapshot.mjs writes both public + lib at prebuild).
+//
+// Steps 1–3 only fire on hosts with a writable filesystem (local dev,
+// dedicated VMs). On Vercel they all fail and we fall through to step 4.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -37,18 +41,10 @@ type Snapshot = {
 };
 
 function repoRoot(): string {
-  // apps/web → ../..
   return path.resolve(process.cwd(), "..", "..");
 }
 
-/**
- * Snapshot sources, in priority order:
- *   1. PYTHIA_SNAPSHOT env var (explicit override)
- *   2. repo-root data/swarm-snapshot.json (live daemon + swarm-backtest write here)
- *   3. bundled public/swarm-snapshot.json (copied at build time by
- *      scripts/bundle-snapshot.mjs — the only path that works on Vercel)
- */
-function snapshotCandidates(): string[] {
+function fsCandidates(): string[] {
   const env = process.env.PYTHIA_SNAPSHOT;
   const out: string[] = [];
   if (env) out.push(env);
@@ -86,29 +82,29 @@ async function latestBacktestReport(): Promise<AgentStats[] | null> {
   }
 }
 
-function emptySnapshot(): Snapshot {
+function compiled(): Snapshot {
+  const s = bundledSnapshot as unknown as Partial<Snapshot>;
   return {
-    generated_at: Math.floor(Date.now() / 1000),
-    generation: 0,
-    n_agents: 0,
-    champion: null,
-    agents: [],
-    recent_decisions: [],
-    consensus: { fires: 0 },
-    source: "empty",
+    generated_at: s.generated_at ?? Math.floor(Date.now() / 1000),
+    generation: s.generation ?? 0,
+    n_agents: s.n_agents ?? (s.agents?.length ?? 0),
+    champion: s.champion ?? null,
+    agents: (s.agents as AgentStats[]) ?? [],
+    recent_decisions: s.recent_decisions ?? [],
+    consensus: s.consensus ?? { fires: 0 },
+    source: s.source ?? "backtest",
   };
 }
 
 export async function GET() {
-  // 1. Try each snapshot candidate path in order.
-  for (const p of snapshotCandidates()) {
+  // 1–3. Try writable filesystem candidates.
+  for (const p of fsCandidates()) {
     const live = (await readJson(p)) as Partial<Snapshot> | null;
     if (live && Array.isArray(live.agents) && live.agents.length > 0) {
       return NextResponse.json({ ...live, source: live.source ?? "live" });
     }
   }
-
-  // 2. Fall back to the latest backtest report (dev-only; no fs on Vercel).
+  // 4. Latest reports/swarm/* (dev-only).
   const ranked = await latestBacktestReport();
   if (ranked && ranked.length > 0) {
     return NextResponse.json({
@@ -122,7 +118,6 @@ export async function GET() {
       source: "backtest",
     } satisfies Snapshot);
   }
-
-  // 3. Nothing available — UI shows the onboarding copy.
-  return NextResponse.json(emptySnapshot());
+  // 5. Compiled-in fallback — always works, even on Vercel.
+  return NextResponse.json(compiled());
 }

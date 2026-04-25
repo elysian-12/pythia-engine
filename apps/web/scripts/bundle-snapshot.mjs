@@ -14,6 +14,11 @@ const webDir = path.resolve(process.cwd());
 const repoRoot = path.resolve(webDir, "..", "..");
 const srcPrimary = path.join(repoRoot, "data", "swarm-snapshot.json");
 const dest = path.join(webDir, "public", "swarm-snapshot.json");
+// Vercel serverless functions don't trace public/ by default, so route
+// handlers can't fs.readFile the public copy. We also drop a copy into
+// lib/bundled/ which gets imported at module level → bundled with the
+// function → guaranteed to be present at runtime.
+const bundledDest = path.join(webDir, "lib", "bundled", "swarm-snapshot.json");
 
 async function latestBacktest() {
   const base = path.join(repoRoot, "reports", "swarm");
@@ -50,8 +55,14 @@ async function toSnapshotShape(p) {
   return parsed;
 }
 
-async function main() {
+async function writeBoth(snap) {
+  const json = JSON.stringify(snap, null, 2);
   await fs.mkdir(path.dirname(dest), { recursive: true });
+  await fs.mkdir(path.dirname(bundledDest), { recursive: true });
+  await Promise.all([fs.writeFile(dest, json), fs.writeFile(bundledDest, json)]);
+}
+
+async function main() {
   let src = null;
   if (existsSync(srcPrimary)) src = srcPrimary;
   else src = await latestBacktest();
@@ -70,13 +81,13 @@ async function main() {
       consensus: { fires: 0 },
       source: "empty",
     };
-    await fs.writeFile(dest, JSON.stringify(empty, null, 2));
+    await writeBoth(empty);
     return;
   }
   const snap = await toSnapshotShape(src);
-  await fs.writeFile(dest, JSON.stringify(snap, null, 2));
+  await writeBoth(snap);
   console.log(
-    `[bundle-snapshot] ${path.relative(repoRoot, src)} → public/swarm-snapshot.json (${snap.agents.length} agents)`
+    `[bundle-snapshot] ${path.relative(repoRoot, src)} → public/ + lib/bundled/swarm-snapshot.json (${snap.agents.length} agents)`
   );
 }
 

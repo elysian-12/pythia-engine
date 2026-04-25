@@ -11,73 +11,123 @@ import {
   type Summary,
   type TradePoint,
 } from "@/lib/vis-data";
-import { GridScatter } from "./GridScatter";
-import { HeroCanvas } from "./HeroCanvas";
-import { MetricOverlay } from "./MetricOverlay";
-import { PipelineFlow } from "./PipelineFlow";
+import { TradeReplay } from "./TradeReplay";
+import { StrategyTable } from "./StrategyTable";
 
 export function VisualizeClient() {
   const [equity, setEquity] = useState<EquityPoint[]>([]);
   const [trades, setTrades] = useState<TradePoint[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [grid, setGrid] = useState<GridRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([loadEquity(), loadTrades(), loadSummary(), loadGrid()]).then(
-      ([e, t, s, g]) => {
+    Promise.all([loadEquity(), loadTrades(), loadSummary(), loadGrid()])
+      .then(([e, t, s, g]) => {
         setEquity(e);
         setTrades(t);
         setSummary(s);
         setGrid(g);
-      },
-    );
+      })
+      .catch((err) => setErr((err as Error).message));
   }, []);
 
-  if (!summary || !equity.length) {
+  if (err) {
     return (
-      <div className="min-h-[80vh] flex items-center justify-center text-mist">
-        Loading pythia…
+      <div className="panel p-8 text-center">
+        <div className="text-[0.65rem] tracking-[0.4em] text-amber uppercase">
+          Dataset failed to load
+        </div>
+        <p className="mt-2 text-mist text-sm">
+          {err}. Re-run <code className="num text-cyan">cargo run -p strategy --bin export_vis</code>
+          {" "}to regenerate{" "}
+          <code className="num text-cyan">apps/web/public/data/*.json</code>.
+        </p>
+      </div>
+    );
+  }
+
+  if (!summary || equity.length === 0 || trades.length === 0) {
+    return (
+      <div className="panel p-8 text-center">
+        <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
+          Loading replay…
+        </div>
+        <p className="mt-2 text-mist text-sm">
+          Reading 365 days of equity and trade data.
+        </p>
       </div>
     );
   }
 
   return (
-    <>
-      <section className="relative h-screen -mx-6 md:-mx-0 overflow-hidden rounded-2xl">
-        <HeroCanvas equity={equity} trades={trades} />
-        <MetricOverlay summary={summary} />
-      </section>
-
-      <PipelineFlow />
-
-      <section className="my-20 mx-auto max-w-6xl px-4">
-        <div className="text-xs tracking-[0.3em] text-cyan uppercase text-center">
-          Strategy grid
-        </div>
-        <h2 className="text-3xl md:text-4xl font-semibold text-slate-100 text-center mt-2">
-          30 variants · ranked by profitability
-        </h2>
-        <p className="max-w-2xl mx-auto text-sm text-mist text-center mt-3">
-          Every variant in our grid-search plotted in 3D. Green dots are
-          realistic (survive exchange-limit + drawdown checks). Amber
-          dots are the mathematical ceiling — theoretically achievable,
-          practically impossible. The pulsing gold point is the winner:
-          liq-trend @ 1 % compound.
-        </p>
-        <div className="mt-8">
-          <GridScatter grid={grid} />
-        </div>
-      </section>
-
-      <section className="my-20 mx-auto max-w-5xl px-4">
-        <div className="panel p-6 md:p-8">
-          <div className="text-xs tracking-[0.3em] text-cyan uppercase">
-            The trade
+    <div className="space-y-6">
+      {/* Hero summary */}
+      <section className="panel p-6 md:p-8 relative overflow-hidden">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-50"
+          style={{
+            background:
+              "radial-gradient(circle at 90% 20%, rgba(34,211,238,0.10), transparent 55%)",
+          }}
+        />
+        <div className="relative">
+          <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
+            Pythia · 365-day backtest
           </div>
-          <h3 className="text-2xl md:text-3xl font-semibold text-slate-100 mt-2">
-            Four rules. 578 trades. 75 % win.
-          </h3>
-          <pre className="mt-5 overflow-auto rounded-lg border border-edge p-4 text-xs md:text-sm text-slate-200 bg-black/40 num">
+          <h2 className="mt-2 text-3xl md:text-4xl font-semibold text-slate-100 leading-tight">
+            <span className="num">${summary.starting_equity.toFixed(0)}</span>
+            <span className="mx-2 text-mist">→</span>
+            <span className="text-cyan num">
+              ${summary.final_equity.toFixed(0)}
+            </span>
+            <span className="ml-3 text-base text-mist num">
+              +{summary.roi_pct.toFixed(0)}%
+            </span>
+          </h2>
+          <p className="mt-2 text-sm text-mist max-w-2xl">
+            {summary.strategy} on {summary.universe}. {summary.n_trades.toLocaleString()} paper
+            trades, executed with realistic taker fees, slippage, and funding.
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-5">
+            <Metric
+              label="Win rate"
+              value={`${(summary.win_rate * 100).toFixed(1)}%`}
+              tone="pos"
+            />
+            <Metric label="Sharpe / trade" value={summary.sharpe.toFixed(2)} tone="cyan" />
+            <Metric label="Sortino" value={summary.sortino.toFixed(2)} tone="cyan" />
+            <Metric
+              label="Profit factor"
+              value={summary.profit_factor.toFixed(2)}
+              tone="pos"
+            />
+            <Metric
+              label="Max DD"
+              value={`${(summary.max_drawdown * 100).toFixed(1)}%`}
+              tone="neutral"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Trade replay — the centrepiece */}
+      <TradeReplay equity={equity} trades={trades} />
+
+      {/* Strategy comparison table */}
+      <StrategyTable grid={grid} />
+
+      {/* The rule */}
+      <section className="panel p-5 md:p-6">
+        <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
+          The rule
+        </div>
+        <h3 className="text-xl font-semibold text-slate-100 mt-1">
+          Four conditions. {summary.n_trades.toLocaleString()} trades.{" "}
+          {(summary.win_rate * 100).toFixed(0)}% win rate.
+        </h3>
+        <pre className="mt-4 overflow-auto rounded-sm border border-edge/60 p-4 text-xs md:text-sm text-slate-200 bg-black/40 num leading-relaxed">
 {`every hour on BTCUSDT and ETHUSDT:
 
   net_liq[t] = Σ buy-liq usd - Σ sell-liq usd   for that hour
@@ -92,9 +142,41 @@ export function VisualizeClient() {
     time-stop    = entry_ts + 4 h
   risk 1 % of current equity per trade   (compounded)
 `}
-          </pre>
-        </div>
+        </pre>
+        <p className="mt-3 text-xs text-mist">
+          That's the seed agent. The 25-agent swarm has 5 rule families running
+          in parallel — liq-trend, liq-fade, vol-breakout, funding-trend,
+          funding-arb. Every {summary.data_points.toLocaleString().split(",")[0]}
+          {" "}events the population mutates and the worst agents are replaced.
+        </p>
       </section>
-    </>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "pos" | "neg" | "cyan" | "neutral";
+}) {
+  const c =
+    tone === "pos"
+      ? "text-green"
+      : tone === "neg"
+        ? "text-red"
+        : tone === "cyan"
+          ? "text-cyan"
+          : "text-slate-100";
+  return (
+    <div className="rounded-sm border border-edge/60 bg-black/30 px-3 py-2.5 num">
+      <div className="text-[0.55rem] uppercase tracking-widest text-mist">
+        {label}
+      </div>
+      <div className={`mt-0.5 text-xl font-semibold ${c}`}>{value}</div>
+    </div>
   );
 }
