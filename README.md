@@ -156,9 +156,12 @@ apps/web/                    Next.js 15 · three.js · Vercel-deployed
 ├── /                        landing — equity curve, champion HUD, auto-
 │                            replay loop, trade-settings panel
 ├── /visualize               trade replay rescaled to user equity + risk
-└── /tournament ★            live arena (Roman Colosseum theme): 27
-                             agent orbs, elite filaments with traveling
-                             sparks, activity-driven flash, latency meter
+└── /tournament ★            live Pythian arena: wireframe regime
+                             surface, gilded tripod + omphalos at the
+                             centre with the champion oracle floating
+                             above, prophecy filaments to the top-3
+                             specialists, agent totems flash on fire,
+                             event-to-trade latency meter in the header
 ```
 
 ★ = the hero crate. Everything else feeds it or is fed by it.
@@ -256,6 +259,12 @@ event.
 - **365 days · BTC + ETH perps via Kiyotaka · ~69k events** replayed through
   the swarm in <1 s wall. Ranking + champion report at
   `reports/swarm/<ts>/swarm.md`.
+- **Concurrent broadcast verified**: `broadcast_scales_constant_with_agent_count`
+  proves 25 agents complete in roughly the same wall-clock as 5 (single
+  cohort × 50 ms each) — i.e. agent observe() futures actually overlap
+  via `futures::join_all`, not iterate. Serial implementation would be
+  5× slower at n=25. Run `cargo test -p swarm broadcast` to verify
+  locally; all 4 broadcast tests + 19 other unit tests finish in 0.2 s.
 - Underlying systematic rules (grid-searched independently of the swarm) —
   `liq-trend` at 1 % risk compound: $1k → $64k over the same year with
   3 % max-DD, Sharpe 0.43, 75 % win rate across 578 trades.

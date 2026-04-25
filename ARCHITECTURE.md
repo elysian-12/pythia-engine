@@ -146,7 +146,7 @@ population collapse.
 
 ### UI — `/tournament` (apps/web)
 
-A Three.js arena (Roman Colosseum theme) that renders the 27-agent scoreboard in 3D:
+A Three.js Pythian arena that renders the 27-agent scoreboard in 3D:
 
 - each agent is an icosahedron floating in an elliptical band; size
   scales with `total_r`, colour with rule family

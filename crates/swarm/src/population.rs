@@ -272,8 +272,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn broadcast_scales_constant_with_agent_count() {
+        // Stronger guarantee: doubling the agent count from 5 to 25
+        // should NOT roughly double the wall-clock. With concurrent
+        // futures, both sizes finish in ~delay + epsilon. With a serial
+        // loop, 25 agents would take 5× as long as 5.
+        async fn cycle_ms(n: usize, delay_ms: u64) -> u128 {
+            let mk = |i: usize| -> Box<dyn SwarmAgent> {
+                Box::new(SlowAgent {
+                    id: format!("slow-{i}"),
+                    delay: std::time::Duration::from_millis(delay_ms),
+                    profile: AgentProfile {
+                        kind: AgentKind::Systematic,
+                        risk_fraction: 0.005,
+                        horizon_s: 3600,
+                        personality: None,
+                        social: false,
+                    },
+                })
+            };
+            let agents: Vec<Box<dyn SwarmAgent>> = (0..n).map(mk).collect();
+            let mut swarm = Swarm::new(agents);
+            let started = std::time::Instant::now();
+            let _ = swarm
+                .broadcast(&Event::Liquidation {
+                    ts: EventTs::from_secs(0),
+                    asset: Asset::Btc,
+                    side: LiqSide::Buy,
+                    usd_value: 1.0,
+                })
+                .await;
+            started.elapsed().as_millis()
+        }
+
+        let small = cycle_ms(5, 50).await;
+        let big = cycle_ms(25, 50).await;
+
+        // Concurrent: big ≈ small (both ~50 ms). We allow big to be up
+        // to 2× small to absorb tokio scheduling jitter on shared CI.
+        // A serial implementation would be 5× small here.
+        assert!(
+            big < (small * 2).max(120),
+            "broadcast didn't scale concurrently — 5 agents: {small} ms, 25 agents: {big} ms (serial would be ~5×)",
+        );
+    }
+
+    #[tokio::test]
+    async fn broadcast_timed_returns_realistic_elapsed() {
+        // The broadcast_timed return value should match wall-clock for
+        // a slow agent. Anything > delay × 2 indicates we're polling
+        // futures sequentially or holding locks.
+        let agents: Vec<Box<dyn SwarmAgent>> = (0..3)
+            .map(|i| -> Box<dyn SwarmAgent> {
+                Box::new(SlowAgent {
+                    id: format!("t-{i}"),
+                    delay: std::time::Duration::from_millis(40),
+                    profile: AgentProfile {
+                        kind: AgentKind::Systematic,
+                        risk_fraction: 0.005,
+                        horizon_s: 3600,
+                        personality: None,
+                        social: false,
+                    },
+                })
+            })
+            .collect();
+        let mut swarm = Swarm::new(agents);
+        let (_, elapsed_us) = swarm
+            .broadcast_timed(&Event::Liquidation {
+                ts: EventTs::from_secs(0),
+                asset: Asset::Btc,
+                side: LiqSide::Buy,
+                usd_value: 1.0,
+            })
+            .await;
+        // 40 ms ≤ elapsed_us ≤ 100 ms (scheduler overhead). Serial
+        // would be ≥ 120 ms.
+        let ms = elapsed_us / 1000;
+        assert!(
+            (35..=110).contains(&ms),
+            "elapsed_us out of expected concurrent band: {ms} ms (expected ~40 ms)",
+        );
+    }
+
+    #[tokio::test]
     async fn broadcast_collects_decisions_from_all_agents() {
-        let mut agents: Vec<Box<dyn SwarmAgent>> = vec![
+        let agents: Vec<Box<dyn SwarmAgent>> = vec![
             Box::new(SystematicAgent::new("a1", SystematicParams {
                 z_threshold: 1.0,
                 z_window: 10,
