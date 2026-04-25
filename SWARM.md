@@ -139,7 +139,7 @@ hours of live liquidations):
    UI can still show what they did) but stop firing.
 
 The result is a **self-improving quant floor**: each agent is its
-own systematic or LLM persona, they compete in parallel, PnL selects
+own systematic or LLM persona, they compete concurrently on the same event (each `observe()` future runs in parallel via `futures::join_all`, so LLM network calls overlap), PnL selects
 winners, mutation + crossover produce the next generation, and the
 cycle repeats. No LLM judge in this loop — PnL *is* the judge.
 
@@ -261,22 +261,40 @@ One agent drives trading at a time. If the champion passes on this
 event, no trade. If a different agent climbs the scoreboard, the
 executor follows it smoothly — no config change, no restart.
 
-## Consensus (diagnostic)
+## Consensus and the new ensemble router
 
-`consensus()` runs on every event and is reported in the snapshot /
-UI, but it no longer drives execution. Useful for:
+The original Rust `consensus()` is **equal-weight majority voting**
+across all firing agents. On 365 days of replayed data it fired 751×
+with **49 % directional wins (coin-flip)** — averaging 27 votes
+destroys signal because weak agents drown the strong. That's why the
+live executor is champion-driven rather than consensus-driven.
 
-- visualising how much the top-K agree (filaments in the 3D arena)
-- catching regimes where the champion is a statistical fluke
-- optional alternative firing rule for research
+The Vercel UI ships a smarter alternative in
+[`apps/web/lib/router.ts`](apps/web/lib/router.ts):
+
+1. **Per-event-kind specialist** — pick the highest-Sharpe agent in
+   the family preferred for *this* event kind. Polymarket leads → polyedge,
+   liq cascades → liq-trend, funding spikes → funding-trend, etc.
+2. **Sharpe-weighted ensemble vote** across the agents that fired, not
+   equal-weight. Negative-Sharpe agents barely vote; positive-Sharpe
+   agents dominate. Trade only when conviction > 0.25.
+3. **Quarter-Kelly** sizing on the specialist's profit factor.
+
+This is what the `/tournament` page actually executes today. The Rust
+`consensus()` is preserved as a diagnostic counter (it still fires per
+event so backtests can compare champion-vs-consensus PnL) but does not
+drive execution. The next-pass migration is to expose
+`Scoreboard::champion_for_kind()` + `weighted_vote()` from Rust so the
+live executor uses the same router.
 
 ```rust
+// Diagnostic only — surfaced in the snapshot for research, not execution.
 let cfg = ConsensusCfg {
     top_k: 5,
-    min_decisions_for_champion: 3,  // ignore newbies with < 3 decisions
-    champion_agreement: 0.6,        // 60 % of champions must agree
-    min_agent_count: 3,             // at least 3 agents vote this event
-    overall_agreement: 0.5,         // > 50 % overall tilt
+    min_decisions_for_champion: 3,
+    champion_agreement: 0.6,
+    min_agent_count: 3,
+    overall_agreement: 0.5,
 };
 let diagnostic = consensus(&decisions, &scoreboard, &cfg);
 ```

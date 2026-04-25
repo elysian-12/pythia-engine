@@ -3037,6 +3037,7 @@ dependencies = [
  "chrono",
  "domain",
  "evaluation",
+ "futures",
  "paper-trader",
  "parking_lot",
  "regime",

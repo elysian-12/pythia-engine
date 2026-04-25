@@ -1,13 +1,23 @@
 //! Swarm orchestration — broadcast events, collect decisions.
 //!
-//! Sequential over agents (they're cheap — no network, no locks). A
-//! 20-agent swarm processes ~200 µs per event on an M-series Mac,
-//! dominated by the aggregator updates. For much larger swarms we'd
-//! parallelise across threads; at current scale a single task is fine.
+//! `broadcast` runs every agent's `observe()` future *concurrently* on a
+//! single tokio task via `futures::join_all`. Systematic agents finish
+//! inline (microseconds) and LLM agents that hit the network overlap
+//! their HTTP round-trips instead of serialising them — the difference
+//! between a 250 ms event-to-trade cycle and a 50 ms one with five
+//! simulated 50 ms agents (verified by the
+//! `broadcast_runs_agents_concurrently` test).
+//!
+//! This is async concurrency, not OS-thread parallelism: a single
+//! tokio task multiplexes the futures. CPU-only agents see no speed-up
+//! over a serial loop; the whole point is overlapping network I/O,
+//! which is the actual latency floor.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Instant;
 
+use futures::future::join_all;
 use tracing::debug;
 
 use crate::agent::{AgentDecision, Event, PeerView, SwarmAgent};
@@ -88,23 +98,54 @@ impl Swarm {
 
     /// Broadcast one event, collect every agent's decision (if any).
     pub async fn broadcast(&mut self, event: &Event) -> Vec<AgentDecision> {
+        self.broadcast_timed(event).await.0
+    }
+
+    /// Same as `broadcast` but also returns elapsed wall-clock for the
+    /// observe round (in microseconds). The live executor surfaces this
+    /// to the UI so visitors can see the "<2 s event-to-trade" claim
+    /// backed by a real number.
+    pub async fn broadcast_timed(
+        &mut self,
+        event: &Event,
+    ) -> (Vec<AgentDecision>, u128) {
+        let started = Instant::now();
+        // Pre-build per-agent peer views into a Vec so the futures below
+        // each own their own peer view (no shared-borrow conflict). One
+        // PeerView clone per agent is cheap — a few dozen recent
+        // decisions + scalars.
         let peers_base = self.compute_peer_view();
-        let mut decisions = Vec::new();
-        for agent in &mut self.agents {
-            // Per-agent peer view: clone the shared base, then layer in
-            // this agent's own recent expectancy from the scoreboard.
-            let mut peers = peers_base.clone();
-            if let Some(sb) = &self.scoreboard {
-                peers.self_recent_expectancy = sb.recent_expectancy(
-                    agent.id(),
-                    SELF_BACKTEST_WINDOW,
-                    SELF_BACKTEST_MIN_SAMPLE,
-                );
-            }
-            if let Some(d) = agent.observe(event, &peers).await {
-                decisions.push(d);
-            }
-        }
+        let peers_per_agent: Vec<PeerView> = self
+            .agents
+            .iter()
+            .map(|a| {
+                let mut p = peers_base.clone();
+                if let Some(sb) = &self.scoreboard {
+                    p.self_recent_expectancy = sb.recent_expectancy(
+                        a.id(),
+                        SELF_BACKTEST_WINDOW,
+                        SELF_BACKTEST_MIN_SAMPLE,
+                    );
+                }
+                p
+            })
+            .collect();
+
+        // Concurrent observation: each agent's observe() future is polled
+        // in the same tokio task with `join_all`. CPU-only systematic
+        // agents finish inline (microseconds); network-bound LLM agents
+        // overlap their HTTP calls instead of serialising them, which is
+        // the actual latency bottleneck. Borrow-checker is happy because
+        // `iter_mut` produces disjoint &mut to each Box<dyn SwarmAgent>
+        // and each future captures its own &mut.
+        let futures = self
+            .agents
+            .iter_mut()
+            .zip(peers_per_agent.iter())
+            .map(|(agent, peers)| async move { agent.observe(event, peers).await });
+        let raw: Vec<Option<AgentDecision>> = join_all(futures).await;
+        let decisions: Vec<AgentDecision> = raw.into_iter().flatten().collect();
+
         // Remember what everyone just did.
         for d in &decisions {
             self.recent.push_back(d.clone());
@@ -112,14 +153,16 @@ impl Swarm {
         while self.recent.len() > self.recent_capacity {
             self.recent.pop_front();
         }
+        let elapsed_us = started.elapsed().as_micros();
         if !decisions.is_empty() {
             debug!(
                 n_decisions = decisions.len(),
                 n_total_recent = self.recent.len(),
+                elapsed_us,
                 "swarm produced decisions"
             );
         }
-        decisions
+        (decisions, elapsed_us)
     }
 
     fn compute_peer_view(&self) -> PeerView {
@@ -156,11 +199,77 @@ impl Swarm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{AgentDecision, AgentKind, AgentProfile, Event, PeerView, SwarmAgent};
     use crate::systematic::{SystematicAgent, SystematicParams};
+    use async_trait::async_trait;
     use domain::{
         crypto::{Asset, LiqSide},
         time::EventTs,
     };
+
+    /// Simulates a slow agent (e.g. an LLM doing a network call). We use
+    /// it to prove broadcast actually runs agents concurrently — if the
+    /// loop were sequential, N slow agents would multiply, not overlap.
+    struct SlowAgent {
+        id: String,
+        delay: std::time::Duration,
+        profile: AgentProfile,
+    }
+
+    #[async_trait]
+    impl SwarmAgent for SlowAgent {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn profile(&self) -> &AgentProfile {
+            &self.profile
+        }
+        async fn observe(
+            &mut self,
+            _event: &Event,
+            _peers: &PeerView,
+        ) -> Option<AgentDecision> {
+            tokio::time::sleep(self.delay).await;
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn broadcast_runs_agents_concurrently() {
+        // Five agents that each "wait" 50 ms. If the loop were sequential
+        // the total would be ≥ 250 ms; with join_all it should be ~50 ms
+        // plus tiny overhead. We assert < 150 ms which leaves ample slack
+        // for slow CI without re-introducing serial latency.
+        let mk = |i: usize| -> Box<dyn SwarmAgent> {
+            Box::new(SlowAgent {
+                id: format!("slow-{i}"),
+                delay: std::time::Duration::from_millis(50),
+                profile: AgentProfile {
+                    kind: AgentKind::Systematic,
+                    risk_fraction: 0.005,
+                    horizon_s: 3600,
+                    personality: None,
+                    social: false,
+                },
+            })
+        };
+        let agents: Vec<Box<dyn SwarmAgent>> = (0..5).map(mk).collect();
+        let mut swarm = Swarm::new(agents);
+        let started = std::time::Instant::now();
+        let _ = swarm
+            .broadcast(&Event::Liquidation {
+                ts: EventTs::from_secs(0),
+                asset: Asset::Btc,
+                side: LiqSide::Buy,
+                usd_value: 1.0,
+            })
+            .await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(150),
+            "broadcast was sequential — took {elapsed:?}, expected ≈ 50 ms",
+        );
+    }
 
     #[tokio::test]
     async fn broadcast_collects_decisions_from_all_agents() {

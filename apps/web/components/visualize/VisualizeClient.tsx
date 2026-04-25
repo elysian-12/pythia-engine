@@ -3,19 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   loadEquity,
-  loadGrid,
   loadSummary,
   loadTrades,
   type EquityPoint,
-  type GridRow,
   type Summary,
   type TradePoint,
 } from "@/lib/vis-data";
 import { TradeReplay } from "./TradeReplay";
-import { StrategyTable } from "./StrategyTable";
 import { TradeSettingsPanel } from "@/components/landing/TradeSettingsPanel";
-import { AgentLandscape } from "./AgentLandscape";
-import { fetchSwarm, type SwarmSnapshot } from "@/lib/swarm";
 
 type UserCfg = { equity_usd: number; risk_fraction: number };
 
@@ -51,33 +46,18 @@ export function VisualizeClient() {
   const [equity, setEquity] = useState<EquityPoint[]>([]);
   const [trades, setTrades] = useState<TradePoint[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [grid, setGrid] = useState<GridRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [userCfg, setUserCfg] = useState<UserCfg>({
     equity_usd: REFERENCE_EQUITY,
     risk_fraction: REFERENCE_RISK,
   });
-  const [swarm, setSwarm] = useState<SwarmSnapshot | null>(null);
 
   useEffect(() => {
-    let alive = true;
-    fetchSwarm()
-      .then((s) => alive && setSwarm(s))
-      .catch(() => {
-        /* ignore — landscape just won't render */
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    Promise.all([loadEquity(), loadTrades(), loadSummary(), loadGrid()])
-      .then(([e, t, s, g]) => {
+    Promise.all([loadEquity(), loadTrades(), loadSummary()])
+      .then(([e, t, s]) => {
         setEquity(e);
         setTrades(t);
         setSummary(s);
-        setGrid(g);
       })
       .catch((err) => setErr((err as Error).message));
   }, []);
@@ -266,46 +246,106 @@ export function VisualizeClient() {
           effect: change a knob, the curve above redraws. */}
       <TradeSettingsPanel />
 
-      {/* The swarm landscape — wireframe terrain + per-agent totems.
-          Sits below the replay so visitors first see the equity curve,
-          then drill into who produced it. */}
-      {swarm && swarm.agents.length > 0 ? (
-        <AgentLandscape agents={swarm.agents} />
-      ) : null}
 
-      {/* Strategy comparison table */}
-      <StrategyTable grid={grid} />
-
-      {/* The rule */}
+      {/* Rule families — replaces the old single-strategy pseudocode card.
+          Lists the seven rule families currently in the swarm and the
+          event kind each family specialises in. The router on
+          /tournament uses this same table to pick a per-event-kind
+          specialist; visitors who want to inspect specific agent stats
+          should head there. */}
       <section className="panel p-5 md:p-6">
-        <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
-          The rule
+        <div className="text-[0.6rem] tracking-[0.4em] uppercase">
+          <span className="text-amber-300">Rule families</span>
+          <span className="text-mist/60 mx-2">·</span>
+          <span className="text-purple-300">what each agent watches</span>
         </div>
         <h3 className="text-xl font-semibold text-slate-100 mt-1">
-          Four conditions. {summary.n_trades.toLocaleString()} trades.{" "}
-          {(summary.win_rate * 100).toFixed(0)}% win rate.
+          Seven specialists, one swarm
         </h3>
-        <pre className="mt-4 overflow-auto rounded-sm border border-edge/60 p-4 text-xs md:text-sm text-slate-200 bg-black/40 num leading-relaxed">
-{`every hour on Kiyotaka BTC + ETH:
+        <p className="mt-1 text-xs text-mist max-w-2xl">
+          Each row is one rule family. Multiple agents per family run with
+          different parameters, mutate every N events via log-space
+          Gaussian + same-family crossover, and feed the scoreboard. The
+          router on{" "}
+          <a className="text-cyan hover:underline" href="/tournament">
+            /tournament
+          </a>{" "}
+          picks the specialist whose family best matches an incoming
+          event.
+        </p>
 
-  net_liq[t] = Σ buy-liq usd - Σ sell-liq usd   for that hour
-  z[t]       = (net_liq[t] - mean₄₈ₕ) / std₄₈ₕ
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3 text-[0.75rem]">
+          {[
+            {
+              name: "liq-trend",
+              dot: "#34d399",
+              kind: "liq-spike",
+              rule: "ride a forced-liquidation cascade in the cascade direction (|z| > 2.5σ on hourly net liq).",
+            },
+            {
+              name: "liq-fade",
+              dot: "#f87171",
+              kind: "liq-spike",
+              rule: "fade the same cascade — thesis: forced flow exhausts and reverts.",
+            },
+            {
+              name: "vol-breakout",
+              dot: "#fbbf24",
+              kind: "vol-breakout",
+              rule: "Donchian-24 break + ATR% in band → enter in breakout direction.",
+            },
+            {
+              name: "funding-trend",
+              dot: "#60a5fa",
+              kind: "funding-spike",
+              rule: "ride extreme funding tilt (z > 2σ) until sentiment flips.",
+            },
+            {
+              name: "funding-arb",
+              dot: "#c084fc",
+              kind: "funding-spike",
+              rule: "fade the same tilt — thesis: tilts overshoot, mean-revert.",
+            },
+            {
+              name: "polyedge",
+              dot: "#f472b6",
+              kind: "polymarket-lead",
+              rule: "Polymarket SWP lags spot in calm regimes; leads in directional ones. Trade the gap when it leads.",
+            },
+            {
+              name: "polyfusion",
+              dot: "#fde68a",
+              kind: "fusion",
+              rule: "fire only when ≥2 of {liq, funding, vol, polymarket} align — confluence agent.",
+            },
+          ].map((f) => (
+            <div
+              key={f.name}
+              className="rounded-sm border border-edge/60 bg-black/30 p-3"
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-2 h-2 rounded-full"
+                  style={{ background: f.dot, boxShadow: `0 0 6px ${f.dot}` }}
+                />
+                <span className="font-mono text-slate-100">{f.name}</span>
+                <span className="text-[0.55rem] uppercase tracking-widest text-mist ml-auto">
+                  → {f.kind}
+                </span>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-300 leading-relaxed">
+                {f.rule}
+              </p>
+            </div>
+          ))}
+        </div>
 
-  if |z| > 2.5  AND  last signal on asset ≥ 6 bars ago:
-    side = LONG   if z > 0   (shorts wiped → continuation up)
-         = SHORT  if z < 0   (longs flushed → continuation down)
-  enter at next bar's open
-    stop-loss    = entry ∓ 1.5 × ATR(14)
-    take-profit  = entry ± 3.0 × ATR(14)
-    time-stop    = entry_ts + 4 h
-  risk 1 % of current equity per trade   (compounded)
-`}
-        </pre>
-        <p className="mt-3 text-xs text-mist">
-          That's the seed agent. The 25-agent swarm has 5 rule families running
-          in parallel — liq-trend, liq-fade, vol-breakout, funding-trend,
-          funding-arb. Every {summary.data_points.toLocaleString().split(",")[0]}
-          {" "}events the population mutates and the worst agents are replaced.
+        <p className="mt-4 text-[0.7rem] text-mist">
+          Plus 5 LLM personas (degen-scalper, momentum-chaser,
+          contrarian-fader, cautious-risk-manager, macro-ranger) that
+          take the same event stream and reason narratively. They pass
+          the self-backtest gate on the same per-trade R as everyone else
+          — PnL is the only judge.
         </p>
       </section>
     </div>

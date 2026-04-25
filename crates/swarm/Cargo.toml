@@ -21,6 +21,7 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
+futures = { workspace = true }
 
 [[bin]]
 name = "swarm-backtest"

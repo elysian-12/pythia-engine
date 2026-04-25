@@ -122,6 +122,7 @@ export function TournamentClient() {
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [lastEvent, setLastEvent] = useState<SimEvent | null>(null);
   const [pulseKey, setPulseKey] = useState(0);
+  const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
   const [autopilotOn, setAutopilotOn] = useState(false);
 
   // Paper HL ledger — opens when the copy-trader's agent reacts to an event.
@@ -386,6 +387,7 @@ export function TournamentClient() {
     setLastEvent(ev);
     setFeed((prev) => [entry, ...prev].slice(0, FEED_MAX));
     setPulseKey((k) => k + 1);
+    setLastLatencyMs(latencyMs);
 
     setSnap((prevSnap) =>
       prevSnap ? applySessionDelta(prevSnap, rxs, ev.ts) : prevSnap,
@@ -686,6 +688,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           realizedPnl={sumRealized(closedPositions)}
           generation={snap.generation ?? 0}
           championId={champ?.agent_id ?? null}
+          lastLatencyMs={lastLatencyMs}
         />
       </section>
 

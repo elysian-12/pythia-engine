@@ -13,6 +13,10 @@ type Props = {
   realizedPnl: number;
   generation: number;
   championId: string | null;
+  /** Total wall-clock latency of the most recent event-to-trade cycle,
+   *  in milliseconds. Surfaced as a "last cycle" badge so the visitor
+   *  sees the system actually runs in <2 s end-to-end. */
+  lastLatencyMs?: number | null;
 };
 
 const STAGES: Array<{ id: Stage; label: string; caption: string }> = [
@@ -39,6 +43,7 @@ export function PipelineRail({
   realizedPnl,
   generation,
   championId,
+  lastLatencyMs,
 }: Props) {
   const [active, setActive] = useState<Stage | null>(null);
 
@@ -76,6 +81,24 @@ export function PipelineRail({
           >
             {realizedPnl >= 0 ? "+" : ""}${realizedPnl.toFixed(2)}
           </span>
+          {/* Last cycle latency. Surfaces the wall-clock event-to-trade
+              time; concurrent broadcast keeps this < 2 s end-to-end. */}
+          {lastLatencyMs != null ? (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border ${
+                lastLatencyMs < 2000
+                  ? "border-green/40 text-green"
+                  : "border-amber/40 text-amber"
+              }`}
+              title="Wall-clock latency from event arrival to paper-trade-sent"
+            >
+              <span className="w-1 h-1 rounded-full bg-current" />
+              last cycle{" "}
+              {lastLatencyMs >= 1000
+                ? `${(lastLatencyMs / 1000).toFixed(2)}s`
+                : `${lastLatencyMs}ms`}
+            </span>
+          ) : null}
         </div>
       </div>
 
