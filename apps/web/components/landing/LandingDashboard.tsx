@@ -11,6 +11,7 @@ import {
 import { loadEquity, type EquityPoint } from "@/lib/vis-data";
 import { AutoReplay } from "./AutoReplay";
 import { TradeSettingsPanel } from "./TradeSettingsPanel";
+import { PythiaLogo } from "@/components/brand/PythiaLogo";
 
 type Marks = { BTC: number | null; ETH: number | null };
 
@@ -220,30 +221,37 @@ export function LandingDashboard() {
           }}
         />
         <div className="relative">
-          <div className="flex items-start justify-between flex-wrap gap-4">
-            <div>
-              <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
-                Pythia · agent-swarm trader
+          <div className="flex items-start justify-between flex-wrap gap-6">
+            <div className="flex items-start gap-5 max-w-3xl">
+              <PythiaLogo size={72} className="hidden md:block mt-1" />
+              <div>
+                <div className="text-[0.65rem] tracking-[0.4em] text-cyan uppercase">
+                  Pythia · oracle of the swarm
+                </div>
+                <h2 className="mt-2 text-4xl md:text-5xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
+                  25 agents.{" "}
+                  <span className="text-cyan">One champion.</span>
+                  <br />
+                  <span className="bg-gradient-to-r from-cyan via-emerald-300 to-amber-300 bg-clip-text text-transparent">
+                    Every Kiyotaka event becomes a trade.
+                  </span>
+                </h2>
+                <p className="mt-3 text-sm md:text-base text-mist max-w-2xl leading-relaxed">
+                  Liquidations, funding, hourly candles, volume, and Polymarket
+                  leadership all stream from Kiyotaka into the swarm. Each
+                  agent votes; the scoreboard picks the champion; the champion
+                  drives a paper Hyperliquid position — sized by Kelly, gated
+                  by regime, certified by Probabilistic & Deflated Sharpe.
+                </p>
               </div>
-              <h2 className="mt-2 text-3xl md:text-4xl font-semibold text-slate-100 leading-tight">
-                25 agents compete on liquidations + funding +&nbsp;volume.
-                <br />
-                <span className="text-cyan">The champion takes the trade.</span>
-              </h2>
-              <p className="mt-3 text-sm text-mist max-w-2xl">
-                Every event from Kiyotaka and Binance fans out to the swarm.
-                Their per-trade R-multiples feed a scoreboard that drives a
-                paper Hyperliquid position — sized by Kelly, gated by regime,
-                certified by Probabilistic / Deflated Sharpe.
-              </p>
             </div>
             <div className="space-y-3 text-right">
               <MarkTicker marks={marks} />
               <Link
                 href="/tournament"
-                className="inline-block chip chip-cyan hover:opacity-80 transition-opacity"
+                className="inline-flex items-center gap-1.5 chip chip-cyan hover:opacity-80 transition-opacity"
               >
-                Open the tournament →
+                Open tournament →
               </Link>
               <div>
                 <Link

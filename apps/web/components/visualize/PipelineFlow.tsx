@@ -3,17 +3,17 @@
 import { motion } from "framer-motion";
 
 /**
- * The data pipeline as an animated flow: external APIs flow into
- * DuckDB, which flows into the strategy engine, which fires signals,
- * which the paper-trader turns into P&L. Each stage blinks and
- * particles travel between them.
+ * The data pipeline as an animated flow: Kiyotaka events fan out to
+ * the swarm, the scoreboard picks the champion, the paper-trader turns
+ * the champion's signals into P&L. Each stage blinks and particles
+ * travel between them.
  */
 export function PipelineFlow() {
   const stages = [
-    { label: "Kiyotaka API", sub: "REST + WS feed", color: "#22d3ee" },
-    { label: "DuckDB store", sub: "17,520 candles / 34k liqs", color: "#a78bfa" },
-    { label: "Signal engine", sub: "liq-trend z-score", color: "#34d399" },
-    { label: "Paper trader", sub: "ATR-risk · 1 % / trade", color: "#fbbf24" },
+    { label: "Kiyotaka API", sub: "liqs · funding · candles · Polymarket", color: "#22d3ee" },
+    { label: "Swarm", sub: "25 agents · 6 rule families", color: "#a78bfa" },
+    { label: "Scoreboard", sub: "Σ R · Sharpe · PSR / DSR", color: "#34d399" },
+    { label: "Champion", sub: "ATR-risk · 1% / trade", color: "#fbbf24" },
     { label: "Equity curve", sub: "$1k → $64k", color: "#f472b6" },
   ];
 
@@ -82,9 +82,9 @@ export function PipelineFlow() {
         transition={{ delay: 1.0, duration: 0.6 }}
         className="mt-8 text-center text-sm text-mist max-w-2xl mx-auto"
       >
-        Every stage is implemented as a pure-functional Rust crate with its
-        own test suite. 80 tests green. Full backtest ablation on 17,520
-        hourly bars completes in <span className="num text-cyan">403 ms</span>.
+        Every stage is a pure-functional Rust crate with its own test
+        suite. 80 tests green. The full backtest ablation on a year of
+        Kiyotaka hourly bars completes in <span className="num text-cyan">403 ms</span>.
       </motion.p>
     </section>
   );

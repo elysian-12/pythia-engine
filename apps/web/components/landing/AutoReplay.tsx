@@ -59,8 +59,8 @@ const STAGES: Stage[] = [
 ];
 
 // Per-stage delay (ms). Real production latency is dominated by network
-// (Binance WS frame → Hyperliquid order ack ≈ 80–250 ms). The demo runs
-// a 4–6× expansion so the eye can follow each stage.
+// (Kiyotaka push → Hyperliquid order ack ≈ 80–250 ms). The demo expands
+// each stage 4–6× so the eye can follow it.
 const STAGE_MS: Record<Stage, number> = {
   "event-fired": 0,
   "swarm-voting": 600,
@@ -75,7 +75,19 @@ function jittered(base: number): number {
 }
 
 function generateEvent(seed: number): SimEvent {
-  const kinds: SimEvent["kind"][] = ["liq-spike", "vol-breakout", "funding-spike"];
+  // Cycle through five Kiyotaka-derived event kinds: forced liquidations,
+  // funding-rate spikes, hourly volume breakouts, Polymarket leadership
+  // signals (SWP-vs-mid gap), and confluence ("fusion") events where
+  // multiple signal families align at once. The mix is roughly 40% liq,
+  // 20% each of funding/vol, 15% polymarket, 5% fusion.
+  const kindPool: SimEvent["kind"][] = [
+    "liq-spike",
+    "liq-spike",
+    "funding-spike",
+    "vol-breakout",
+    "polymarket-lead",
+    "fusion",
+  ];
   const assets: SimEvent["asset"][] = ["BTC", "ETH"];
   const dir: SimEvent["direction"] = Math.sin(seed * 12.9898) > 0 ? "long" : "short";
   const z = 2.0 + Math.abs(Math.cos(seed * 78.233)) * 1.6;
@@ -83,7 +95,7 @@ function generateEvent(seed: number): SimEvent {
     id: `demo-${seed}`,
     ts: Math.floor(Date.now() / 1000),
     asset: assets[seed % 2],
-    kind: kinds[seed % 3],
+    kind: kindPool[seed % kindPool.length],
     magnitude_z: z,
     direction: dir,
   };

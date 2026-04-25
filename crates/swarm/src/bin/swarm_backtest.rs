@@ -5,7 +5,7 @@
 //!
 //! Run: `cargo run --release -p swarm --bin swarm-backtest`
 
-use std::{collections::HashMap, path::PathBuf, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use domain::{
     crypto::{Asset, Candle, FundingRate, LiqSide, Liquidation, OpenInterest},
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // persisted population exists, replace the systematic half with its
     // surviving agents (LLM personas are always re-attached; their state
     // lives in the LLM, not in serialised params).
-    let scoreboard = Scoreboard::new();
+    let scoreboard = Arc::new(Scoreboard::new());
     let mut agents: Vec<Box<dyn SwarmAgent>> = if let Some(prior) = &prior_population {
         let mut out: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(prior.agents.len() + 5);
         for a in &prior.agents {
@@ -85,7 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )));
     }
     let n_agents = agents.len();
-    let mut swarm = Swarm::new(agents);
+    // Hand the swarm a clone of the live scoreboard so it can populate
+    // each agent's `self_recent_expectancy` per `observe()` — driving the
+    // self-backtest gate inside SystematicAgent.
+    let mut swarm = Swarm::new(agents).with_scoreboard(Arc::clone(&scoreboard));
     // Evolution: same configuration the live executor uses, so the backtest
     // measures the evolved population's PnL — not just the static seed roster.
     // PYTHIA_EVOLVE_EVERY controls the cadence (default: 500 events).
@@ -176,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Box::<MockLlmDecider>::default(),
                     )));
                 }
-                swarm = Swarm::new(next_agents);
+                swarm = Swarm::new(next_agents).with_scoreboard(Arc::clone(&scoreboard));
                 tracing::info!(
                     generation = evolution.generation(),
                     event = event_counter,

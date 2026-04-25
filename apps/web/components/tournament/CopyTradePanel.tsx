@@ -83,24 +83,26 @@ export function CopyTradePanel({
         ) : null}
       </div>
 
-      {/* Agent selector — defaults to champion. */}
+      {/* Agent selector — defaults to champion. min-w-0 + w-full keep the
+          select inside its panel even when an option label is long; the
+          earlier flex-1 alone could overflow because select inherits its
+          intrinsic option width. */}
       <label className="block text-[0.7rem] text-mist mb-1">Mirror agent</label>
-      <div className="flex gap-2 mb-4">
+      <div className="mb-4 min-w-0">
         <select
-          className="flex-1 bg-black/40 border border-edge rounded-sm px-2 py-1.5 text-sm num"
+          className="block w-full max-w-full bg-black/40 border border-edge rounded-sm px-2 py-1.5 text-xs num truncate appearance-none focus:border-cyan/60 outline-none"
           value={selected ?? "__champion__"}
           onChange={(e) => {
             const v = e.target.value;
             saveSelection(v === "__champion__" ? null : v);
           }}
         >
-          <option value="__champion__">
-            Current champion — auto-follow whoever&apos;s top
-          </option>
+          <option value="__champion__">Champion · auto-follow #1</option>
           {agents.map((a, i) => (
             <option key={a.agent_id} value={a.agent_id}>
-              #{i + 1}  {a.agent_id}  ·  Σ R {a.total_r >= 0 ? "+" : ""}
-              {a.total_r.toFixed(2)}
+              #{i + 1} · {a.agent_id.replace(/^gen\d+-mut\d+-/, "")} ·{" "}
+              {a.total_r >= 0 ? "+" : ""}
+              {a.total_r.toFixed(1)}R
             </option>
           ))}
         </select>
@@ -109,9 +111,14 @@ export function CopyTradePanel({
       {/* Mirrored agent stats. */}
       {mirrored ? (
         <div className="space-y-2 text-xs num mb-4">
-          <div className="flex justify-between">
-            <span className="text-mist">Agent</span>
-            <span className="font-mono text-slate-100">{mirrored.agent_id}</span>
+          <div className="flex justify-between gap-2 min-w-0">
+            <span className="text-mist shrink-0">Agent</span>
+            <span
+              className="font-mono text-slate-100 truncate text-right"
+              title={mirrored.agent_id}
+            >
+              {mirrored.agent_id}
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-mist">Σ R</span>

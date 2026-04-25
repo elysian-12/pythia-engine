@@ -306,6 +306,7 @@ impl SystematicAgent {
         asset: Asset,
         ts: EventTs,
         regime: Option<regime::RegimeSnapshot>,
+        self_recent_expectancy: Option<f64>,
     ) -> Option<AgentDecision> {
         let params = self.params.clone();
         // Compute fitness up-front so the borrow on `self` doesn't conflict
@@ -313,6 +314,18 @@ impl SystematicAgent {
         let fitness = self.regime_fitness(regime);
         if fitness < 0.3 {
             return None;
+        }
+        // Self-backtest gate: when this agent's recent E[R] over the last
+        // N closed trades is meaningfully negative, abstain. The orchestrator
+        // sets `self_recent_expectancy` from `Scoreboard::recent_expectancy`;
+        // it stays `None` until the agent has built up at least the minimum
+        // sample, so new agents fire freely until they have enough history
+        // to gate on. Threshold of -0.05 R lets a slightly losing run still
+        // probe the market — only persistent decay shuts the agent down.
+        if let Some(expectancy) = self_recent_expectancy {
+            if expectancy < -0.05 {
+                return None;
+            }
         }
         let window = self.window_mut(asset);
         if window.bar_counter - window.last_signal_bar < params.cooldown_bars as i64 {
@@ -390,6 +403,7 @@ impl SwarmAgent for SystematicAgent {
 
     async fn observe(&mut self, event: &Event, peers: &PeerView) -> Option<AgentDecision> {
         let regime = peers.regime;
+        let self_e = peers.self_recent_expectancy;
         match event {
             Event::Liquidation { ts, asset, side, usd_value } => {
                 if !self.passes_asset_filter(*asset) {
@@ -397,7 +411,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 if self.window_mut(*asset).push_liq(ts.0, *side, *usd_value).is_some() {
                     // a new hourly bucket just closed — evaluate
-                    return self.decide_for_asset(*asset, *ts, regime);
+                    return self.decide_for_asset(*asset, *ts, regime, self_e);
                 }
                 None
             }
@@ -407,7 +421,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_candle(candle.open, candle.high, candle.low, candle.close);
                 if matches!(self.params.family, RuleFamily::VolBreakout) {
-                    return self.decide_for_asset(*asset, *ts, regime);
+                    return self.decide_for_asset(*asset, *ts, regime, self_e);
                 }
                 None
             }
@@ -417,7 +431,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_funding(funding.rate_close);
                 if matches!(self.params.family, RuleFamily::FundingZScore { .. }) {
-                    return self.decide_for_asset(*asset, *ts, regime);
+                    return self.decide_for_asset(*asset, *ts, regime, self_e);
                 }
                 None
             }

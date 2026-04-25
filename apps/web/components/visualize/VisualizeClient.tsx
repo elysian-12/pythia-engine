@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   loadEquity,
   loadGrid,
@@ -13,6 +13,37 @@ import {
 } from "@/lib/vis-data";
 import { TradeReplay } from "./TradeReplay";
 import { StrategyTable } from "./StrategyTable";
+import { TradeSettingsPanel } from "@/components/landing/TradeSettingsPanel";
+
+type UserCfg = { equity_usd: number; risk_fraction: number };
+
+const REFERENCE_EQUITY = 1000; // the bundled backtest starts here
+const REFERENCE_RISK = 0.01;   // and risks 1% per trade
+
+/** Rescale the bundled trade ledger to the visitor's chosen capital +
+ *  risk-fraction. The R-multiple is the ground truth (it's risk-units,
+ *  not dollars), so we recompute pnl as `r × (user_equity × user_risk)`
+ *  trade-by-trade and re-walk the equity curve from the user's starting
+ *  capital. The result is a faithful simulation of "what would I have
+ *  made running this exact strategy at *my* size?". */
+function rescaleToUser(
+  trades: TradePoint[],
+  user: UserCfg,
+): { equity: EquityPoint[]; trades: TradePoint[] } {
+  if (trades.length === 0) return { equity: [], trades: [] };
+  const dollarsPerR = user.equity_usd * user.risk_fraction;
+  let bal = user.equity_usd;
+  const out: EquityPoint[] = [
+    { ts: trades[0].ts, equity: bal },
+  ];
+  const scaled: TradePoint[] = trades.map((t) => {
+    const pnl = t.r * dollarsPerR;
+    bal += pnl;
+    out.push({ ts: t.ts, equity: bal });
+    return { ...t, pnl };
+  });
+  return { equity: out, trades: scaled };
+}
 
 export function VisualizeClient() {
   const [equity, setEquity] = useState<EquityPoint[]>([]);
@@ -20,6 +51,10 @@ export function VisualizeClient() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [grid, setGrid] = useState<GridRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [userCfg, setUserCfg] = useState<UserCfg>({
+    equity_usd: REFERENCE_EQUITY,
+    risk_fraction: REFERENCE_RISK,
+  });
 
   useEffect(() => {
     Promise.all([loadEquity(), loadTrades(), loadSummary(), loadGrid()])
@@ -31,6 +66,62 @@ export function VisualizeClient() {
       })
       .catch((err) => setErr((err as Error).message));
   }, []);
+
+  // Pull the user's settings on mount + whenever they change. The landing
+  // SettingsForm broadcasts `pythia-config-updated`; we also listen for
+  // cross-tab `storage` events for completeness.
+  useEffect(() => {
+    const apply = (cfg: Partial<UserCfg>) => {
+      setUserCfg((prev) => ({
+        equity_usd:
+          typeof cfg.equity_usd === "number" && cfg.equity_usd > 0
+            ? cfg.equity_usd
+            : prev.equity_usd,
+        risk_fraction:
+          typeof cfg.risk_fraction === "number" && cfg.risk_fraction > 0
+            ? cfg.risk_fraction
+            : prev.risk_fraction,
+      }));
+    };
+    (async () => {
+      try {
+        const r = await fetch("/api/config", { cache: "no-store" });
+        if (r.ok) apply((await r.json()) as Partial<UserCfg>);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const ls = localStorage.getItem("pythia-swarm-config");
+        if (ls) apply(JSON.parse(ls) as Partial<UserCfg>);
+      } catch {
+        /* ignore */
+      }
+    })();
+    const onCustom = (e: Event) => {
+      apply((e as CustomEvent<Partial<UserCfg>>).detail ?? {});
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== "pythia-swarm-config" || !e.newValue) return;
+      try {
+        apply(JSON.parse(e.newValue) as Partial<UserCfg>);
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("pythia-config-updated", onCustom);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("pythia-config-updated", onCustom);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  // Rescale the bundled ledger trade-by-trade to the user's size. Memoised
+  // so we don't recompute on every render.
+  const scaled = useMemo(() => {
+    if (trades.length === 0) return { equity, trades };
+    return rescaleToUser(trades, userCfg);
+  }, [trades, equity, userCfg]);
 
   if (err) {
     return (
@@ -60,6 +151,17 @@ export function VisualizeClient() {
     );
   }
 
+  // User-scaled headline numbers — what THEIR portfolio would have done.
+  const userFinal =
+    scaled.equity.length > 0
+      ? scaled.equity[scaled.equity.length - 1].equity
+      : userCfg.equity_usd;
+  const userPnl = userFinal - userCfg.equity_usd;
+  const userRoi = (userPnl / userCfg.equity_usd) * 100;
+  const isCustom =
+    Math.abs(userCfg.equity_usd - REFERENCE_EQUITY) > 1 ||
+    Math.abs(userCfg.risk_fraction - REFERENCE_RISK) > 1e-6;
+
   return (
     <div className="space-y-6">
       {/* Hero summary */}
@@ -72,22 +174,43 @@ export function VisualizeClient() {
           }}
         />
         <div className="relative">
-          <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
-            Pythia · 365-day backtest
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
+              Pythia · 365-day replay · your size
+            </div>
+            <span
+              className={`chip ${
+                isCustom ? "chip-cyan" : "chip-mist"
+              } text-[0.6rem]`}
+            >
+              ${userCfg.equity_usd.toLocaleString()} @ {(userCfg.risk_fraction * 100).toFixed(2)}%
+              {isCustom ? " · your config" : " · default"}
+            </span>
           </div>
           <h2 className="mt-2 text-3xl md:text-4xl font-semibold text-slate-100 leading-tight">
-            <span className="num">${summary.starting_equity.toFixed(0)}</span>
+            <span className="num">${userCfg.equity_usd.toLocaleString()}</span>
             <span className="mx-2 text-mist">→</span>
-            <span className="text-cyan num">
-              ${summary.final_equity.toFixed(0)}
+            <span className={`num ${userPnl >= 0 ? "text-cyan" : "text-red"}`}>
+              ${userFinal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span>
-            <span className="ml-3 text-base text-mist num">
-              +{summary.roi_pct.toFixed(0)}%
+            <span
+              className={`ml-3 text-base num ${
+                userRoi >= 0 ? "text-mist" : "text-red"
+              }`}
+            >
+              {userRoi >= 0 ? "+" : ""}
+              {userRoi.toFixed(0)}%
             </span>
           </h2>
           <p className="mt-2 text-sm text-mist max-w-2xl">
-            {summary.strategy} on {summary.universe}. {summary.n_trades.toLocaleString()} paper
-            trades, executed with realistic taker fees, slippage, and funding.
+            {summary.strategy} on Kiyotaka BTC + ETH perp data. R-multiples
+            from the bundled 365-day replay rescaled to your equity and
+            risk-fraction — adjust them on{" "}
+            <a href="/" className="text-cyan hover:underline">
+              the home page
+            </a>{" "}
+            and this view updates instantly. The strategy stats below
+            (win-rate, Sharpe, max DD) are size-invariant and stay constant.
           </p>
 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-5">
@@ -112,8 +235,15 @@ export function VisualizeClient() {
         </div>
       </section>
 
-      {/* Trade replay — the centrepiece */}
-      <TradeReplay equity={equity} trades={trades} />
+      {/* Trade replay — the centrepiece, sized to the user */}
+      <TradeReplay
+        equity={scaled.equity.length > 0 ? scaled.equity : equity}
+        trades={scaled.trades.length > 0 ? scaled.trades : trades}
+      />
+
+      {/* Settings live just under the replay so users connect cause →
+          effect: change a knob, the curve above redraws. */}
+      <TradeSettingsPanel />
 
       {/* Strategy comparison table */}
       <StrategyTable grid={grid} />
@@ -128,7 +258,7 @@ export function VisualizeClient() {
           {(summary.win_rate * 100).toFixed(0)}% win rate.
         </h3>
         <pre className="mt-4 overflow-auto rounded-sm border border-edge/60 p-4 text-xs md:text-sm text-slate-200 bg-black/40 num leading-relaxed">
-{`every hour on BTCUSDT and ETHUSDT:
+{`every hour on Kiyotaka BTC + ETH:
 
   net_liq[t] = Σ buy-liq usd - Σ sell-liq usd   for that hour
   z[t]       = (net_liq[t] - mean₄₈ₕ) / std₄₈ₕ

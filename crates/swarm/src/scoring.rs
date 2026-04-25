@@ -182,6 +182,40 @@ impl Scoreboard {
             .unwrap_or_default()
     }
 
+    /// Mean realised R over the agent's most recent `n` closed trades.
+    /// Returns `None` if the agent has fewer than `min_sample` trades on
+    /// record — caller should let the agent fire freely until it has built
+    /// up enough sample to make the gate meaningful (Van Tharp-style
+    /// expectancy filter).
+    ///
+    /// Used at decide-time by `SystematicAgent` to abstain when its own
+    /// recent expectancy turns negative — the post-hoc scoreboard then
+    /// becomes a live gating signal.
+    pub fn recent_expectancy(&self, agent_id: &str, n: usize, min_sample: usize) -> Option<f64> {
+        let g = self.inner.lock();
+        let buf = g.r_history.get(agent_id)?;
+        if buf.len() < min_sample {
+            return None;
+        }
+        let take = n.min(buf.len());
+        if take == 0 {
+            return None;
+        }
+        let start = buf.len().saturating_sub(take);
+        let slice = buf.iter().skip(start).copied();
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for r in slice {
+            sum += r;
+            count += 1;
+        }
+        if count == 0 {
+            None
+        } else {
+            Some(sum / count as f64)
+        }
+    }
+
     pub fn stats(&self, agent_id: &str) -> Option<AgentStats> {
         self.inner.lock().stats.get(agent_id).cloned()
     }

@@ -59,24 +59,49 @@ export async function fetchSwarm(): Promise<SwarmSnapshot> {
 }
 
 /** Parent rule-family for colouring / clustering. */
-export function agentFamily(
-  id: string,
-): "liq-trend" | "liq-fade" | "vol-breakout" | "funding-trend" | "funding-arb" | "llm" | "other" {
+export type AgentFam =
+  | "liq-trend"
+  | "liq-fade"
+  | "vol-breakout"
+  | "funding-trend"
+  | "funding-arb"
+  | "polyedge"
+  | "polyfusion"
+  | "llm"
+  | "other";
+
+export function agentFamily(id: string): AgentFam {
   if (id.startsWith("llm-")) return "llm";
   if (id.startsWith("liq-trend")) return "liq-trend";
   if (id.startsWith("liq-fade")) return "liq-fade";
   if (id.startsWith("vol-breakout")) return "vol-breakout";
   if (id.startsWith("funding-trend")) return "funding-trend";
   if (id.startsWith("funding-arb")) return "funding-arb";
+  if (id.startsWith("polyedge")) return "polyedge";
+  if (id.startsWith("polyfusion")) return "polyfusion";
   return "other";
 }
 
-export const FAMILY_COLORS: Record<string, string> = {
+export const FAMILY_COLORS: Record<AgentFam, string> = {
   "liq-trend": "#34d399",
   "liq-fade": "#f87171",
   "vol-breakout": "#fbbf24",
   "funding-trend": "#60a5fa",
   "funding-arb": "#c084fc",
+  polyedge: "#f472b6",
+  polyfusion: "#fde68a",
   llm: "#f0abfc",
   other: "#94a3b8",
+};
+
+export const FAMILY_LABEL: Record<AgentFam, string> = {
+  "liq-trend": "Liq trend · ride the cascade",
+  "liq-fade": "Liq fade · sell the panic",
+  "vol-breakout": "Vol breakout · donchian",
+  "funding-trend": "Funding trend · ride the tilt",
+  "funding-arb": "Funding arb · fade the tilt",
+  polyedge: "Polymarket edge · prediction-market lead",
+  polyfusion: "Poly + liq + vol + price fusion",
+  llm: "LLM persona · narrative reasoner",
+  other: "Other",
 };

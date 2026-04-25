@@ -14,6 +14,21 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { agentFamily, FAMILY_COLORS, type AgentStats } from "@/lib/swarm";
 
+/**
+ * Shared orb-state ref keyed by agent_id. The blob phase reads/writes
+ * positions into this map so AgentOrb instances can detect collisions
+ * with each other and apply elastic-bounce velocities. Once the podium
+ * snaps in, collisions disable themselves (the amphitheatre layout is
+ * deterministic so jitter is unnecessary). Storing this outside React
+ * state avoids per-frame re-renders.
+ */
+type OrbState = {
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  size: number;
+};
+type OrbMap = Map<string, OrbState>;
+
 /** Intro animation: deterministic "blob" position for an agent, used
  *  for the first ~4 s before the podium layout takes over. Clustered
  *  around the centre with turbulence so it reads as a swarm. */
@@ -77,12 +92,14 @@ function AgentOrb({
   seedIdx,
   maxAbsR,
   introProgress,
+  orbsRef,
 }: {
   agent: AgentStats;
   rank: number;
   seedIdx: number;
   maxAbsR: number;
   introProgress: number; // 0 = pure blob · 1 = pure podium
+  orbsRef: React.MutableRefObject<OrbMap>;
 }) {
   const group = useRef<THREE.Group>(null!);
   const satellite = useRef<THREE.Mesh>(null!);
@@ -97,18 +114,77 @@ function AgentOrb({
   const intensity = 0.8 + Math.abs(score) * 1.6;
   const phase = useMemo(() => Math.random() * Math.PI * 2, []);
 
-  useFrame(({ clock }) => {
+  // Initial velocity for the blob phase. Each orb gets a distinct direction
+  // so they collide and bounce off each other.
+  const velRef = useRef(
+    new THREE.Vector3(
+      Math.cos(seedIdx * 1.7) * 0.6,
+      0,
+      Math.sin(seedIdx * 1.7) * 0.6,
+    ),
+  );
+  // Register this orb in the shared map on mount.
+  useEffect(() => {
+    const init = blobPosition(seedIdx, 0);
+    orbsRef.current.set(agent.agent_id, {
+      pos: init.clone(),
+      vel: velRef.current,
+      size,
+    });
+    return () => {
+      orbsRef.current.delete(agent.agent_id);
+    };
+  }, [agent.agent_id, seedIdx, size, orbsRef]);
+
+  useFrame(({ clock }, delta) => {
     if (!group.current) return;
     const t = clock.elapsedTime + phase;
-    // Blend between the blob (swarm) position and the podium target.
-    const blob = blobPosition(seedIdx, clock.elapsedTime);
     const k = introProgress;
-    const ease = k * k * (3 - 2 * k); // smoothstep
-    const desired = new THREE.Vector3().lerpVectors(blob, target, ease);
+    const ease = k * k * (3 - 2 * k); // smoothstep — 0 blob · 1 podium
+
+    // Blob phase: integrate position with velocity + a soft pull toward
+    // the swarm centre, then resolve collisions against every other orb.
+    const me = orbsRef.current.get(agent.agent_id);
+    if (me && ease < 0.95) {
+      // Cheap drag + centre-pull so velocities don't blow up.
+      const centerPull = me.pos.clone().multiplyScalar(-0.6);
+      const desiredHover = blobPosition(seedIdx, clock.elapsedTime);
+      const hover = desiredHover.sub(me.pos).multiplyScalar(0.8);
+      me.vel.add(centerPull.multiplyScalar(delta * 0.05));
+      me.vel.add(hover.multiplyScalar(delta * 0.6));
+      me.vel.multiplyScalar(0.985); // damping
+      me.pos.addScaledVector(me.vel, delta);
+
+      // O(n²) collision resolution. n ≤ 30 in practice — trivially cheap.
+      orbsRef.current.forEach((other, id) => {
+        if (id === agent.agent_id) return;
+        const minDist = me.size + other.size;
+        const diff = me.pos.clone().sub(other.pos);
+        const d = diff.length();
+        if (d > 0.0001 && d < minDist) {
+          // Push apart along the contact normal.
+          const overlap = minDist - d;
+          const n = diff.divideScalar(d); // normal
+          me.pos.addScaledVector(n, overlap * 0.5);
+          // Reflect velocity component along the normal — elastic bounce.
+          const vDotN = me.vel.dot(n);
+          if (vDotN < 0) {
+            // Add a small kick proportional to relative speed for energy.
+            me.vel.addScaledVector(n, -2 * vDotN * 0.85);
+          }
+        }
+      });
+    }
+
+    // Blend between the blob (interactive) position and the podium target.
+    const blobP = me ? me.pos : blobPosition(seedIdx, clock.elapsedTime);
+    const desired = new THREE.Vector3().lerpVectors(blobP, target, ease);
     const p = group.current.position;
-    p.x += (desired.x - p.x) * 0.08;
-    p.y += (desired.y + Math.sin(t * 0.8) * 0.18 * ease - p.y) * 0.08;
-    p.z += (desired.z - p.z) * 0.08;
+    p.x += (desired.x - p.x) * 0.12;
+    p.y += (desired.y + Math.sin(t * 0.8) * 0.18 * ease - p.y) * 0.12;
+    p.z += (desired.z - p.z) * 0.12;
+    if (me) me.pos.set(p.x, p.y, p.z);
+
     if (satellite.current) {
       const r = size * 1.6;
       satellite.current.position.x = Math.cos(t * 1.5) * r;
@@ -321,31 +397,146 @@ function EliteLinks({ ranked }: { ranked: AgentStats[] }) {
 }
 
 function Floor() {
-  // Obsidian disc + radial ridges.
+  // Marble disc + radial ridges — the Pythian sanctuary at Delphi.
   return (
     <group position={[0, -1.5, 3]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <circleGeometry args={[50, 128]} />
         <meshStandardMaterial
-          color="#05080d"
-          emissive="#0b1a2a"
-          emissiveIntensity={0.4}
-          roughness={0.35}
-          metalness={0.6}
+          color="#0b0e16"
+          emissive="#1a233a"
+          emissiveIntensity={0.45}
+          roughness={0.3}
+          metalness={0.55}
         />
       </mesh>
-      {/* Concentric faint rings. */}
+      {/* Concentric faint rings — sanctuary terraces. */}
       {[8, 14, 20, 28].map((r, i) => (
         <mesh key={r} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
           <ringGeometry args={[r - 0.03, r, 128]} />
           <meshBasicMaterial
-            color="#0ea5e9"
+            color="#fde68a"
             transparent
             opacity={0.18 - i * 0.035}
             toneMapped={false}
           />
         </mesh>
       ))}
+      {/* Compass rose at the centre — the omphalos, navel of the world. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+        <ringGeometry args={[2.4, 2.55, 64]} />
+        <meshBasicMaterial color="#fde68a" transparent opacity={0.55} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Doric temple columns in a wide semicircle behind the amphitheatre.
+ *  Twelve columns × Olympian peristyle motif. Subtle gold rim-lighting so
+ *  they read as architecture, not pillars-of-fire. */
+function TempleColonnade() {
+  const columns = useMemo(() => {
+    const out: { x: number; z: number; angle: number }[] = [];
+    const N = 13;
+    const radius = 35;
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1);
+      const angle = -Math.PI * 0.62 + t * Math.PI * 1.24;
+      out.push({
+        x: Math.sin(angle) * radius,
+        z: Math.cos(angle) * -radius + 3,
+        angle,
+      });
+    }
+    return out;
+  }, []);
+  return (
+    <group>
+      {columns.map((c) => (
+        <group key={`${c.x}-${c.z}`} position={[c.x, -1.5, c.z]}>
+          {/* Stylobate (base block) */}
+          <mesh position={[0, 0.25, 0]}>
+            <boxGeometry args={[1.6, 0.5, 1.6]} />
+            <meshStandardMaterial color="#1a2030" metalness={0.45} roughness={0.6} />
+          </mesh>
+          {/* Fluted shaft — segmented for that fluted-marble silhouette */}
+          <mesh position={[0, 4.2, 0]} castShadow>
+            <cylinderGeometry args={[0.55, 0.7, 7.4, 18, 1, false]} />
+            <meshStandardMaterial
+              color="#cbd5e1"
+              emissive="#1f2a44"
+              emissiveIntensity={0.25}
+              roughness={0.55}
+              metalness={0.35}
+            />
+          </mesh>
+          {/* Capital (top) — simple Doric square block */}
+          <mesh position={[0, 8.05, 0]}>
+            <boxGeometry args={[1.45, 0.5, 1.45]} />
+            <meshStandardMaterial
+              color="#e5e7eb"
+              emissive="#fde68a"
+              emissiveIntensity={0.18}
+              metalness={0.6}
+              roughness={0.4}
+            />
+          </mesh>
+          {/* Subtle gold rim glow at the top */}
+          <pointLight
+            position={[0, 8.6, 0]}
+            intensity={1.6}
+            color="#fde68a"
+            distance={6}
+            decay={2}
+          />
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/** Laurel wreath orbiting the champion — the victor's crown. Ten leaves
+ *  on each half, slowly spinning. */
+function LaurelWreath() {
+  const ref = useRef<THREE.Group>(null!);
+  const leaves = useMemo(() => {
+    const out: { angle: number; tilt: number; flip: number }[] = [];
+    const N = 22;
+    for (let i = 0; i < N; i++) {
+      out.push({
+        angle: (i / N) * Math.PI * 2,
+        tilt: Math.sin(i * 0.7) * 0.15,
+        flip: i % 2 === 0 ? 1 : -1,
+      });
+    }
+    return out;
+  }, []);
+  useFrame(({ clock }) => {
+    if (ref.current) {
+      ref.current.rotation.y = clock.elapsedTime * 0.18;
+    }
+  });
+  return (
+    <group ref={ref} position={[0, 1.85, 8]}>
+      {leaves.map((leaf, i) => {
+        const r = 2.05;
+        return (
+          <mesh
+            key={i}
+            position={[Math.cos(leaf.angle) * r, leaf.tilt, Math.sin(leaf.angle) * r]}
+            rotation={[leaf.flip * 0.25, -leaf.angle + Math.PI / 2, 0.35]}
+          >
+            <coneGeometry args={[0.13, 0.5, 6]} />
+            <meshStandardMaterial
+              color="#facc15"
+              emissive="#fbbf24"
+              emissiveIntensity={0.7}
+              metalness={0.7}
+              roughness={0.35}
+            />
+          </mesh>
+        );
+      })}
     </group>
   );
 }
@@ -399,31 +590,88 @@ function EmberField() {
 }
 
 function BackWall({ generation }: { generation: number }) {
-  // Subtle back-wall signage for atmosphere + generation readout.
+  // Engraved frieze + Greek dedication. The Pythia at Delphi was the
+  // priestess of Apollo — keep the wording close to what would be carved
+  // into the temple architrave.
   return (
     <group position={[0, 4.5, -26]}>
       <Text
         fontSize={2.2}
         color="#0f172a"
-        outlineColor="#1e293b"
-        outlineWidth={0.04}
+        outlineColor="#fbbf24"
+        outlineWidth={0.05}
         anchorX="center"
         anchorY="middle"
-        letterSpacing={0.45}
+        letterSpacing={0.5}
       >
-        PYTHIA · TOURNAMENT
+        ΟΡΑΚΛΟΝ ΤΟΥ ΣΜΗΝΟΥΣ
       </Text>
       <Text
-        position={[0, -1.5, 0]}
-        fontSize={0.45}
+        position={[0, -1.4, 0]}
+        fontSize={0.55}
+        color="#475569"
+        anchorX="center"
+        anchorY="middle"
+        letterSpacing={0.4}
+      >
+        ORACLE OF THE SWARM · DELPHI
+      </Text>
+      <Text
+        position={[0, -2.4, 0]}
+        fontSize={0.4}
         color="#334155"
         anchorX="center"
         anchorY="middle"
         letterSpacing={0.6}
       >
-        {`GENERATION ${generation.toString().padStart(3, "0")}`}
+        {`Γενεά ${generation.toString().padStart(3, "0")}  ·  GENERATION ${generation.toString().padStart(3, "0")}`}
       </Text>
     </group>
+  );
+}
+
+/** Constellation field high in the dome. Sparse, twinkling — Greek myths
+ *  set their heroes among the stars. Twelve named constellations, one per
+ *  Olympian, rendered as twinkling point clusters. */
+function Constellations() {
+  const ref = useRef<THREE.Points>(null!);
+  const count = 220;
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    const pos = new Float32Array(count * 3);
+    const phase = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      // Distribute on a hemisphere above the arena
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * Math.PI * 2;
+      const phi = Math.acos(2 * v - 1) * 0.5; // upper hemisphere only
+      const r = 70 + Math.random() * 8;
+      pos[i * 3] = Math.sin(phi) * Math.cos(theta) * r;
+      pos[i * 3 + 1] = Math.cos(phi) * r * 0.7 + 8;
+      pos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * r;
+      phase[i] = Math.random() * Math.PI * 2;
+    }
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    (g as THREE.BufferGeometry & { userData: { phase: Float32Array } }).userData = { phase };
+    return g;
+  }, []);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    // Subtle twinkle by rotating the whole field slowly.
+    ref.current.rotation.y = clock.elapsedTime * 0.005;
+  });
+  return (
+    <points ref={ref} geometry={geom}>
+      <pointsMaterial
+        color="#fde68a"
+        size={0.45}
+        sizeAttenuation
+        transparent
+        opacity={0.85}
+        toneMapped={false}
+      />
+    </points>
   );
 }
 
@@ -468,6 +716,9 @@ export function Arena({
   const maxAbsR = Math.max(1, ...ranked.map((a) => Math.abs(a.total_r)));
   const champion = ranked[0] ?? null;
   const introProgress = useIntro(4.5);
+  // Shared orb position/velocity map for collision resolution. Lives outside
+  // React state so per-frame mutations don't trigger re-renders.
+  const orbsRef = useRef<OrbMap>(new Map());
 
   // Give each agent a stable seedIdx so its blob spot is deterministic
   // even if ranks reshuffle mid-session.
@@ -507,12 +758,15 @@ export function Arena({
           castShadow
         />
         <EmberField />
+        <Constellations />
         <Floor />
+        <TempleColonnade />
         <BackWall generation={generation} />
         {/* Only show filaments + champion pedestal once the podium has
             materialised — hides them during the blob phase. */}
         {introProgress > 0.5 ? <EliteLinks ranked={ranked} /> : null}
         <ChampionPedestal champion={champion} introProgress={introProgress} />
+        {introProgress > 0.7 ? <LaurelWreath /> : null}
         {ranked.map((a, i) =>
           i === 0 ? null : (
             <AgentOrb
@@ -522,6 +776,7 @@ export function Arena({
               seedIdx={seeds.get(a.agent_id) ?? i}
               maxAbsR={maxAbsR}
               introProgress={introProgress}
+              orbsRef={orbsRef}
             />
           ),
         )}

@@ -129,6 +129,13 @@ pub struct PeerView {
     /// firing (e.g. mean-reverters skip trending regimes) and to scale
     /// position size (Chaotic → halve risk).
     pub regime: Option<regime::RegimeSnapshot>,
+    /// Mean realised R over the *receiving* agent's most recent N closed
+    /// trades, populated by the orchestrator before each `observe` call.
+    /// `None` until the agent has accumulated enough sample to make the
+    /// signal meaningful. SystematicAgent uses this as a self-backtest
+    /// gate: when its own recent expectancy turns negative, it abstains
+    /// unless the incoming signal is exceptionally strong.
+    pub self_recent_expectancy: Option<f64>,
 }
 
 /// The trait every agent implements.

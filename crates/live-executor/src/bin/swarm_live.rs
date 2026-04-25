@@ -185,7 +185,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
         agents.iter().map(|a| a.id().to_string()).collect(),
     ));
-    let mut swarm = Swarm::new(agents);
+    // Hand the swarm a clone of the live scoreboard so each agent's
+    // PeerView gets `self_recent_expectancy` populated — the input for
+    // the SystematicAgent self-backtest gate.
+    let mut swarm = Swarm::new(agents).with_scoreboard(scoreboard.clone());
     let pending: Arc<Mutex<HashMap<String, PendingOutcome>>> = Arc::new(Mutex::new(HashMap::new()));
     let consensus_stats = Arc::new(Mutex::new(ConsensusStats::default()));
     let cons_cfg = ConsensusCfg::default();
@@ -376,7 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = persisted.save(&population_path) {
                     warn!(?e, "failed to persist evolved population");
                 }
-                swarm = Swarm::new(next_agents);
+                swarm = Swarm::new(next_agents).with_scoreboard(scoreboard.clone());
                 info!(
                     generation = evolution.generation(),
                     population_cap = n_agents,

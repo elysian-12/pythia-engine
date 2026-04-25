@@ -21,6 +21,14 @@ const EVENT_KIND_META: Record<SimEventKind, { label: string; hint: string }> = {
     label: "Volatility breakout",
     hint: "Donchian-24 breakout. vol-breakout agents fire in breakout direction.",
   },
+  "polymarket-lead": {
+    label: "Polymarket leadership",
+    hint: "SWP-vs-mid gap with Granger-passing lead. polyedge agent rides it.",
+  },
+  fusion: {
+    label: "Confluence event",
+    hint: "≥2 of {liq, funding, vol, polymarket} aligned. polyfusion agent fires.",
+  },
 };
 
 export function EventSimulator({ onFire, lastFired }: Props) {

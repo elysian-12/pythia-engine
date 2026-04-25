@@ -1,0 +1,1 @@
+export { PythiaWordmark } from "./PythiaLogo";

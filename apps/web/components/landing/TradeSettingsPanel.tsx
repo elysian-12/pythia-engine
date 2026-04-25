@@ -81,9 +81,11 @@ export function TradeSettingsPanel() {
       window.dispatchEvent(
         new CustomEvent("pythia-config-updated", { detail: data }),
       );
-      if (data.persisted === false) {
-        setWarning("Saved locally — server is read-only on Vercel.");
-      }
+      // We intentionally don't surface `persisted: false` as a warning. On
+      // Vercel that's just the serverless filesystem being read-only; the
+      // browser localStorage copy is the source of truth for the demo, and
+      // the AutoReplay + /visualize listen to the broadcast event above.
+      // Cross-device sync would need Vercel KV — out of scope here.
       setSaved("ok");
       setTimeout(() => setSaved("idle"), 1800);
     } catch (e) {
@@ -96,19 +98,32 @@ export function TradeSettingsPanel() {
   const riskUsd = cfg.equity_usd * cfg.risk_fraction;
 
   return (
-    <section className="panel p-5 md:p-6">
+    <section
+      className="relative panel p-5 md:p-6 ring-1 ring-cyan/30 shadow-[0_0_45px_-15px_rgba(34,211,238,0.45)]"
+      style={{
+        backgroundImage:
+          "linear-gradient(135deg, rgba(34,211,238,0.06) 0%, rgba(11,15,20,0) 35%, rgba(11,15,20,0) 100%)",
+      }}
+      id="trade-settings"
+    >
+      <div className="absolute -top-3 left-5 px-3 py-0.5 bg-ink ring-1 ring-cyan/40 rounded-sm">
+        <span className="text-[0.55rem] tracking-[0.4em] text-cyan uppercase">
+          ⚙ tune your portfolio
+        </span>
+      </div>
       <div className="flex items-start justify-between flex-wrap gap-2 mb-4">
         <div>
-          <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
-            Trade settings
-          </div>
-          <h3 className="text-xl font-semibold text-slate-100 mt-1">
-            Configure once · the swarm sizes for you
+          <h3 className="text-2xl font-semibold text-slate-100 mt-1">
+            Set your size · the swarm sizes for you
           </h3>
           <p className="text-xs text-mist mt-1.5 max-w-xl">
-            These knobs drive the paper ledger and the auto-replay above.
-            When you flip to <span className="text-cyan">live preview</span>, plug
-            in a wallet — execution wiring lands in the next pass.
+            These knobs drive the auto-replay above and the trade replay on
+            <a className="text-cyan hover:underline mx-1" href="/visualize">
+              /visualize
+            </a>
+            — change them and both views update instantly. Flip to{" "}
+            <span className="text-amber">live preview</span> to plug in a
+            Hyperliquid wallet (execution wiring lands next pass).
           </p>
         </div>
         <ModeToggle mode={cfg.mode} onChange={(m) => set("mode", m)} />
@@ -322,6 +337,33 @@ function NumberField({
   prefix?: string;
   onChange: (v: number) => void;
 }) {
+  // Hold a string draft locally so the user can type intermediate values
+  // (e.g. "1" while heading toward "10000") without the parent clamping
+  // each keystroke up to `min`. We only commit a clamped numeric value
+  // on blur, Enter, or stepper buttons.
+  const [draft, setDraft] = useState<string>(String(value));
+  const [focused, setFocused] = useState(false);
+
+  // Mirror parent value into draft when not actively editing.
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [value, focused]);
+
+  const commit = () => {
+    const parsed = Number(draft.replace(/,/g, ""));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      onChange(Math.max(min, Math.min(max, parsed)));
+    } else {
+      setDraft(String(value));
+    }
+  };
+
+  const stepBy = (delta: number) => {
+    const next = Math.max(min, Math.min(max, value + delta));
+    onChange(next);
+    setDraft(String(next));
+  };
+
   return (
     <div className="rounded-sm border border-edge/60 bg-black/20 px-3 py-3">
       <div className="flex justify-between items-baseline">
@@ -336,17 +378,69 @@ function NumberField({
           <span className="text-mist text-sm num">{prefix}</span>
         ) : null}
         <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            if (Number.isFinite(v)) onChange(Math.max(min, Math.min(max, v)));
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9,]*"
+          value={draft}
+          onFocus={() => setFocused(true)}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            setFocused(false);
+            commit();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              (e.target as HTMLInputElement).blur();
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              stepBy(step);
+            } else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              stepBy(-step);
+            }
           }}
           className="flex-1 bg-black/40 border border-edge/60 rounded-sm px-2 py-1.5 text-sm num text-slate-100 outline-none focus:border-cyan/60"
         />
+        <div className="flex flex-col gap-0.5">
+          <button
+            type="button"
+            onClick={() => stepBy(step)}
+            className="px-2 py-0.5 text-[0.65rem] text-mist hover:text-cyan border border-edge/60 rounded-sm leading-none"
+            aria-label="Increase"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => stepBy(-step)}
+            className="px-2 py-0.5 text-[0.65rem] text-mist hover:text-cyan border border-edge/60 rounded-sm leading-none"
+            aria-label="Decrease"
+          >
+            −
+          </button>
+        </div>
+      </div>
+      {/* Quick presets so people don't have to scroll a numeric field */}
+      <div className="mt-2 flex flex-wrap gap-1">
+        {[500, 1000, 2000, 5000, 10000, 25000].map((preset) =>
+          preset >= min && preset <= max ? (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => {
+                onChange(preset);
+                setDraft(String(preset));
+              }}
+              className={`px-2 py-0.5 text-[0.6rem] rounded-sm border transition-colors ${
+                value === preset
+                  ? "border-cyan/60 text-cyan bg-cyan/5"
+                  : "border-edge/60 text-mist hover:text-slate-200"
+              }`}
+            >
+              ${preset.toLocaleString()}
+            </button>
+          ) : null,
+        )}
       </div>
     </div>
   );

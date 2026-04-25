@@ -20,11 +20,26 @@ function regimeFitness(
   if (meanRevert) {
     return { trending: 0.3, ranging: 1.0, chaotic: 0.5, calm: 0.7 }[regime.label] ?? 1.0;
   }
+  if (family === "polyedge") {
+    // Polymarket leadership shows up most in directional regimes — info
+    // share rises when the prediction market leads spot. Skip in calm.
+    return { trending: 1.1, ranging: 0.6, chaotic: 0.7, calm: 0.4 }[regime.label] ?? 1.0;
+  }
+  if (family === "polyfusion") {
+    // Confluence agent: balanced across regimes since it requires multiple
+    // independent signals to align before firing.
+    return { trending: 1.0, ranging: 0.8, chaotic: 0.5, calm: 0.6 }[regime.label] ?? 1.0;
+  }
   return 1.0; // LLM + other families pass through unchanged
 }
 
 export type SimAsset = "BTC" | "ETH";
-export type SimEventKind = "liq-spike" | "funding-spike" | "vol-breakout";
+export type SimEventKind =
+  | "liq-spike"
+  | "funding-spike"
+  | "vol-breakout"
+  | "polymarket-lead"
+  | "fusion";
 export type SimDirection = "long" | "short";
 
 export type SimEvent = {
@@ -114,6 +129,26 @@ export function simulateReactions(
           reacted = true;
           dir = ev.direction === "long" ? "short" : "long";
           rationale = "fade funding (arb)";
+        }
+        break;
+      case "polyedge":
+        // Fires on Polymarket leadership signals. Direction = sign of
+        // (skill-weighted-prob - mid). |z| here is the SWP-mid gap in
+        // standard deviations (a proxy for cointegration-gated lead).
+        if (ev.kind === "polymarket-lead" && ev.magnitude_z >= TRIGGER_Z) {
+          reacted = true;
+          dir = ev.direction;
+          rationale = `Polymarket lead · SWP-mid gap |z|=${ev.magnitude_z.toFixed(2)}`;
+        }
+        break;
+      case "polyfusion":
+        // Confluence agent: triggers on any large-enough event but needs
+        // a slightly stronger signal. Stand-in for the Rust agent that
+        // votes only when ≥2 of {liq, funding, vol, polymarket} agree.
+        if (ev.magnitude_z >= TRIGGER_Z + 0.4) {
+          reacted = true;
+          dir = ev.direction;
+          rationale = `confluence · ${ev.kind} · |z|=${ev.magnitude_z.toFixed(2)}`;
         }
         break;
       case "llm":

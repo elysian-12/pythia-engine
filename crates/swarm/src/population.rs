@@ -6,10 +6,19 @@
 //! parallelise across threads; at current scale a single task is fine.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use tracing::debug;
 
 use crate::agent::{AgentDecision, Event, PeerView, SwarmAgent};
+use crate::scoring::Scoreboard;
+
+/// Window length for the per-agent self-backtest gate. The orchestrator
+/// reads `Scoreboard::recent_expectancy(agent_id, RECENT_N, MIN_SAMPLE)`
+/// before each `observe()` call so agents can abstain when their own
+/// recent E[R] turns negative.
+const SELF_BACKTEST_WINDOW: usize = 30;
+const SELF_BACKTEST_MIN_SAMPLE: usize = 10;
 
 /// Convenience alias — an event-plus-wall-clock for logging.
 #[derive(Debug, Clone)]
@@ -32,6 +41,11 @@ pub struct Swarm {
     /// Latest market regime, populated by the driver from a rolling
     /// candle buffer. None until enough candles are seen.
     pub current_regime: Option<regime::RegimeSnapshot>,
+    /// Optional reference to the live scoreboard. When set, each agent's
+    /// PeerView gets a `self_recent_expectancy` populated from its own
+    /// closed-trade history — enabling the self-backtest gate. Left None
+    /// in tests / scoreboard-less drivers; gating then no-ops.
+    scoreboard: Option<Arc<Scoreboard>>,
 }
 
 impl std::fmt::Debug for Swarm {
@@ -52,7 +66,16 @@ impl Swarm {
             recent_capacity: 64,
             current_champion: None,
             current_regime: None,
+            scoreboard: None,
         }
+    }
+
+    /// Attach the live scoreboard. With this set, every `observe()` call
+    /// receives a `PeerView::self_recent_expectancy` for the receiving
+    /// agent — the input for the self-backtest gate.
+    pub fn with_scoreboard(mut self, sb: Arc<Scoreboard>) -> Self {
+        self.scoreboard = Some(sb);
+        self
     }
 
     pub fn n_agents(&self) -> usize {
@@ -65,10 +88,19 @@ impl Swarm {
 
     /// Broadcast one event, collect every agent's decision (if any).
     pub async fn broadcast(&mut self, event: &Event) -> Vec<AgentDecision> {
-        let peers = self.compute_peer_view();
+        let peers_base = self.compute_peer_view();
         let mut decisions = Vec::new();
         for agent in &mut self.agents {
-            // Non-social agents never read `peers` — cheap to pass.
+            // Per-agent peer view: clone the shared base, then layer in
+            // this agent's own recent expectancy from the scoreboard.
+            let mut peers = peers_base.clone();
+            if let Some(sb) = &self.scoreboard {
+                peers.self_recent_expectancy = sb.recent_expectancy(
+                    agent.id(),
+                    SELF_BACKTEST_WINDOW,
+                    SELF_BACKTEST_MIN_SAMPLE,
+                );
+            }
             if let Some(d) = agent.observe(event, &peers).await {
                 decisions.push(d);
             }
@@ -114,6 +146,9 @@ impl Swarm {
             long_fraction,
             champion_agreement,
             regime: self.current_regime,
+            // Per-agent self_recent_expectancy is layered in by `broadcast`
+            // before each `observe` call.
+            self_recent_expectancy: None,
         }
     }
 }
