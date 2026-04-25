@@ -29,7 +29,12 @@ async function lastClose(key: string, rawSymbol: string): Promise<number | null>
     };
     const pts = data.series?.[0]?.points ?? [];
     const last = pts[pts.length - 1]?.Point?.close;
-    return typeof last === "number" ? last : null;
+    // Treat 0 / negative / non-finite as missing — empty in-progress hours
+    // can return 0, and sizing math (notional = risk * px / stop) divides
+    // by stop_dist which is proportional to price; a zero would NaN out.
+    return typeof last === "number" && Number.isFinite(last) && last > 0
+      ? last
+      : null;
   } catch {
     return null;
   }

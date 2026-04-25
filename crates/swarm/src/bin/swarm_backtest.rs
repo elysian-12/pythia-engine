@@ -163,13 +163,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Close any still-pending at the end of data.
     close_expired(&mut pending, i64::MAX, &close_lookup, &scoreboard);
 
-    // Rank + print. Pad with zero-stat rows for agents that never fired
-    // (e.g. LLM personas in a fully deterministic mock run) so the UI
-    // renders the full population, not just the scorers.
-    let mut ranked = scoreboard.all();
+    // Build a leaderboard for the *currently active* population only —
+    // evolved generations accumulate retired agent IDs in the scoreboard,
+    // so without filtering the snapshot would balloon to hundreds of
+    // historical agents and the UI would render a stale roster.
+    let live_ids: std::collections::HashSet<String> =
+        swarm.agents().map(|a| a.id().to_string()).collect();
+    let mut ranked: Vec<swarm::AgentStats> = scoreboard
+        .all()
+        .into_iter()
+        .filter(|s| live_ids.contains(&s.agent_id))
+        .collect();
     {
         let seen: std::collections::HashSet<String> =
             ranked.iter().map(|s| s.agent_id.clone()).collect();
+        // Pad zero-stat rows for currently-live agents that never fired
+        // (e.g. LLM personas with the mock decider in deterministic runs).
         for a in swarm.agents() {
             if !seen.contains(a.id()) {
                 ranked.push(swarm::AgentStats {

@@ -80,6 +80,12 @@ impl Evolution {
     /// Tries to identify each `current` agent's parameters by probing the
     /// scoreboard for a recorded `AgentStats`. Agents without a stats
     /// entry (fresh boot) are kept unchanged.
+    ///
+    /// If no agent in `current` has reached `min_decisions` trades, the
+    /// entire population is returned verbatim — there is no signal yet to
+    /// drive selection, so wiping the floor would just throw away the seed
+    /// roster. The generation counter is still bumped so callers can see
+    /// the cycle ran.
     pub fn advance(
         &mut self,
         current: Vec<(SystematicParams, String)>, // (params, id)
@@ -95,8 +101,20 @@ impl Evolution {
             })
             .collect();
 
+        // Save the original population in case no one is eligible — we
+        // return a clone of it rather than collapsing to empty.
+        let fallback: Vec<Box<dyn SwarmAgent>> = scored
+            .iter()
+            .map(|a| {
+                Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())) as Box<dyn SwarmAgent>
+            })
+            .collect();
+
         // Elite — top N by total_R with enough decisions.
         scored.retain(|a| a.stats.wins + a.stats.losses >= self.cfg.min_decisions);
+        if scored.is_empty() {
+            return fallback;
+        }
         scored.sort_by(|a, b| {
             b.stats
                 .total_r
@@ -216,7 +234,36 @@ impl Evolution {
     fn new_id(&self, parent_id: &str) -> String {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        format!("gen{}-mut{}-{}", self.generation, n, parent_id)
+        // Strip prior gen{N}-mut{n}- ancestry so IDs stay readable across
+        // many generations. Without this an agent at gen 30 would carry
+        // 30 lineage segments and overflow the leaderboard column.
+        format!("gen{}-mut{}-{}", self.generation, n, family_root(parent_id))
+    }
+}
+
+/// Skip past any leading `gen{N}-mut{n}-` segments to recover the root
+/// family identifier (e.g. `liq-fade-v2`). Used so that mutation IDs do
+/// not stack ancestry indefinitely.
+fn family_root(id: &str) -> &str {
+    let mut s = id;
+    loop {
+        let Some((first, rest)) = s.split_once('-') else {
+            return s;
+        };
+        let is_gen = first.strip_prefix("gen")
+            .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()));
+        if !is_gen {
+            return s;
+        }
+        let Some((second, after)) = rest.split_once('-') else {
+            return s;
+        };
+        let is_mut = second.strip_prefix("mut")
+            .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()));
+        if !is_mut {
+            return s;
+        }
+        s = after;
     }
 }
 
@@ -285,5 +332,37 @@ mod tests {
             assert!(p.z_threshold >= 1.5 && p.z_threshold <= 4.0);
             assert!(p.risk_fraction >= 0.003 && p.risk_fraction <= 0.03);
         }
+    }
+
+    #[test]
+    fn advance_falls_back_when_no_agent_meets_min_decisions() {
+        // Empty scoreboard → no agent has any trades → with min_decisions=5
+        // the elite filter wipes the pool. Without the fallback, advance()
+        // would return an empty Vec and downstream Swarm::new(empty) would
+        // silently kill all firing for the rest of the run.
+        let sb = Scoreboard::new();
+        let mut e = Evolution::new(
+            EvolutionCfg {
+                population_cap: 5,
+                min_decisions: 5,
+                ..Default::default()
+            },
+            7,
+        );
+        let next = e.advance(make_current(), &sb);
+        assert_eq!(next.len(), 5, "fallback returns the original population");
+        assert_eq!(e.generation(), 1, "generation counter still bumps");
+    }
+
+    #[test]
+    fn family_root_strips_nested_lineage() {
+        assert_eq!(family_root("liq-trend-v0"), "liq-trend-v0");
+        assert_eq!(family_root("gen1-mut2-liq-trend-v0"), "liq-trend-v0");
+        assert_eq!(
+            family_root("gen11-mut115-gen7-mut74-gen6-mut61-liq-fade-v2"),
+            "liq-fade-v2"
+        );
+        // Don't strip non-numeric pseudo-prefixes.
+        assert_eq!(family_root("genome-mutation-blah"), "genome-mutation-blah");
     }
 }

@@ -24,7 +24,7 @@ import { checkTriggers, sumRealized, type PaperPosition } from "@/lib/paper";
 const COPY_LS_KEY = "pythia-copytrade-agent";
 const FEED_MAX = 25;
 const EQUITY_USD = 1000;
-const RISK_FRACTION = 0.01;
+const DEFAULT_RISK_FRACTION = 0.01;
 const DEFAULT_BTC = 77_500;
 const DEFAULT_ETH = 3_200;
 
@@ -102,15 +102,67 @@ export function TournamentClient() {
   const [marks, setMarks] = useState<{ BTC: number | null; ETH: number | null }>(
     { BTC: null, ETH: null },
   );
+  const [riskFraction, setRiskFraction] = useState<number>(DEFAULT_RISK_FRACTION);
 
+  // Refs mirror state so callbacks passed to AutoPilot stay referentially
+  // stable. Without this, `onFire` recreates each time `marks` updates and
+  // the autopilot's interval re-arm chain dies.
   const snapRef = useRef<SwarmSnapshot | null>(null);
   const copyAgentRef = useRef<string | null>(null);
+  const marksRef = useRef<{ BTC: number | null; ETH: number | null }>({
+    BTC: null,
+    ETH: null,
+  });
+  const riskFractionRef = useRef<number>(DEFAULT_RISK_FRACTION);
   useEffect(() => {
     snapRef.current = snap;
   }, [snap]);
   useEffect(() => {
     copyAgentRef.current = copyAgent;
   }, [copyAgent]);
+  useEffect(() => {
+    marksRef.current = marks;
+  }, [marks]);
+  useEffect(() => {
+    riskFractionRef.current = riskFraction;
+  }, [riskFraction]);
+
+  // Read user-configured risk fraction once on mount + whenever the
+  // SettingsForm broadcasts a save (CustomEvent for same-tab + storage
+  // event for cross-tab). Keeps the paper sizing in sync with the slider.
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const r = await fetch("/api/config", { cache: "no-store" });
+        if (!r.ok) return;
+        const c = (await r.json()) as { risk_fraction?: number };
+        if (!alive) return;
+        if (typeof c.risk_fraction === "number" && c.risk_fraction > 0) {
+          setRiskFraction(c.risk_fraction);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    refresh();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "pythia-swarm-config") refresh();
+    };
+    const onCustom = (e: Event) => {
+      const detail = (e as CustomEvent<{ risk_fraction?: number }>).detail;
+      if (detail && typeof detail.risk_fraction === "number" && detail.risk_fraction > 0) {
+        setRiskFraction(detail.risk_fraction);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("pythia-config-updated", onCustom);
+    return () => {
+      alive = false;
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pythia-config-updated", onCustom);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -153,8 +205,31 @@ export function TournamentClient() {
     }
   }, []);
 
+  // One-shot mark fetch on mount so even the first manual EventSimulator
+  // fire opens a paper position at a real price, not the DEFAULT fallback.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/marks", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { marks: { BTC: number | null; ETH: number | null } } | null) => {
+        if (!alive || !d) return;
+        setMarks((prev) => ({
+          BTC: d.marks.BTC ?? prev.BTC,
+          ETH: d.marks.ETH ?? prev.ETH,
+        }));
+      })
+      .catch(() => {
+        // ignore — fall back to DEFAULT_*
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Poll live BTC/ETH marks every 6s once we have any open positions or the
-  // autopilot is active — saves bandwidth in the idle case.
+  // autopilot is active — saves bandwidth in the idle case. Merges per-asset
+  // so that a transient one-sided null from Kiyotaka does not erase a value
+  // the other asset already had.
   useEffect(() => {
     let alive = true;
     if (!autopilotOn && openPositions.length === 0) return;
@@ -167,7 +242,10 @@ export function TournamentClient() {
           marks: { BTC: number | null; ETH: number | null };
         };
         if (!alive) return;
-        if (d.marks.BTC != null || d.marks.ETH != null) setMarks(d.marks);
+        setMarks((prev) => ({
+          BTC: d.marks.BTC ?? prev.BTC,
+          ETH: d.marks.ETH ?? prev.ETH,
+        }));
       } catch {
         // ignore
       }
@@ -241,6 +319,8 @@ export function TournamentClient() {
     setClosedPositions([]);
   }, []);
 
+  // Stable across renders — reads dynamic state from refs. AutoPilot stores
+  // this in onFireRef once and keeps polling without rebuilding its timer.
   const onFire = useCallback((ev: SimEvent) => {
     const currentSnap = snapRef.current;
     if (!currentSnap) return;
@@ -263,14 +343,15 @@ export function TournamentClient() {
     if (!mirroredId) return;
     const mirrored = currentSnap.agents.find((a) => a.agent_id === mirroredId);
     if (!mirrored) return;
-    const btcPx = marks.BTC ?? DEFAULT_BTC;
-    const ethPx = marks.ETH ?? DEFAULT_ETH;
+    const liveMarks = marksRef.current;
+    const btcPx = liveMarks.BTC ?? DEFAULT_BTC;
+    const ethPx = liveMarks.ETH ?? DEFAULT_ETH;
     const sim = simulateCopyTrade(
       mirrored,
       ev,
       rxs,
       EQUITY_USD,
-      RISK_FRACTION,
+      riskFractionRef.current,
       btcPx,
       ethPx,
     );
@@ -288,11 +369,14 @@ export function TournamentClient() {
       opened_at: ev.ts,
     };
     setOpenPositions((prev) => [...prev, pos]);
-  }, [marks]);
+  }, []);
 
   const onPrices = useCallback(
     (p: { BTC: number | null; ETH: number | null }) => {
-      if (p.BTC != null || p.ETH != null) setMarks(p);
+      setMarks((prev) => ({
+        BTC: p.BTC ?? prev.BTC,
+        ETH: p.ETH ?? prev.ETH,
+      }));
     },
     [],
   );
@@ -445,7 +529,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             selected={copyAgent}
             onSelect={setCopyAgent}
             equity_usd={EQUITY_USD}
-            risk_fraction={RISK_FRACTION}
+            risk_fraction={riskFraction}
             btc_price={marks.BTC ?? DEFAULT_BTC}
             eth_price={marks.ETH ?? DEFAULT_ETH}
             reactions={reactions}

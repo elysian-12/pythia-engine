@@ -33,6 +33,25 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
   const seenRef = useRef<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Store the latest callbacks in refs so the polling timer can call them
+  // without rebuilding the interval on every prop change. Without this, the
+  // parent's `onFire` recreates whenever `marks` updates → poll() recreates
+  // → the re-arm effect's cleanup runs, sets timerRef.current to null, and
+  // the next effect body sees null and doesn't re-arm. The autopilot would
+  // die silently the moment any upstream state moved.
+  const onFireRef = useRef(onFire);
+  const onPricesRef = useRef(onPrices);
+  const onStatusRef = useRef(onStatus);
+  useEffect(() => {
+    onFireRef.current = onFire;
+  }, [onFire]);
+  useEffect(() => {
+    onPricesRef.current = onPrices;
+  }, [onPrices]);
+  useEffect(() => {
+    onStatusRef.current = onStatus;
+  }, [onStatus]);
+
   const poll = useCallback(async () => {
     try {
       const res = await fetch("/api/signals", { cache: "no-store" });
@@ -47,8 +66,8 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       }
       setErr(null);
       setStatus("running");
-      if (data.prices && onPrices) {
-        onPrices({
+      if (data.prices && onPricesRef.current) {
+        onPricesRef.current({
           BTC: data.prices.BTC ?? null,
           ETH: data.prices.ETH ?? null,
         });
@@ -58,7 +77,7 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         seenRef.current.add(ev.id);
         setEventCount((c) => c + 1);
         setLastSignalTs(ev.ts);
-        onFire(ev);
+        onFireRef.current(ev);
       }
       // Cap the seen-set so it doesn't grow unbounded across long sessions.
       if (seenRef.current.size > 500) {
@@ -68,32 +87,38 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       setErr((e as Error).message);
       setStatus("error");
     }
-  }, [onFire, onPrices]);
+  }, []);
 
   const start = useCallback(() => {
     if (timerRef.current) return;
     setStatus("running");
-    onStatus?.(true);
-    poll();
-    timerRef.current = setInterval(poll, intervalSec * 1000);
-  }, [intervalSec, poll, onStatus]);
+    onStatusRef.current?.(true);
+    void poll();
+    timerRef.current = setInterval(() => {
+      void poll();
+    }, intervalSec * 1000);
+  }, [intervalSec, poll]);
 
   const stop = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
     setStatus("idle");
-    onStatus?.(false);
-  }, [onStatus]);
+    onStatusRef.current?.(false);
+  }, []);
 
-  // Re-arm interval when the user changes pacing while running.
+  // Re-arm interval when the pacing slider changes mid-run. Note: deps
+  // intentionally exclude `poll` (it's stable now via refs). On unmount,
+  // the cleanup tears down the timer.
   useEffect(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
-      timerRef.current = setInterval(poll, intervalSec * 1000);
+      timerRef.current = setInterval(() => {
+        void poll();
+      }, intervalSec * 1000);
     }
+    const t = timerRef.current;
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
+      if (t) clearInterval(t);
     };
   }, [intervalSec, poll]);
 
@@ -183,7 +208,7 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
           </button>
         )}
         <button
-          onClick={poll}
+          onClick={() => void poll()}
           className="chip chip-mist py-2 px-3 text-sm hover:opacity-90"
           title="Poll once now"
         >

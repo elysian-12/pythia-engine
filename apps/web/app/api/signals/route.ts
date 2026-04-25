@@ -66,7 +66,16 @@ async function fetchCandles(
       const c = p.Point?.close;
       const v = p.Point?.volume;
       const t = p.Point?.timestamp?.s;
-      if (typeof c === "number" && typeof v === "number" && typeof t === "number") {
+      // Drop empty / unfilled candles — they break log returns and pull
+      // the z-score baseline toward 0, masking real signals.
+      if (
+        typeof c === "number" &&
+        typeof v === "number" &&
+        typeof t === "number" &&
+        Number.isFinite(c) &&
+        c > 0 &&
+        v >= 0
+      ) {
         out.push({ close: c, volume: v, ts: t });
       }
     }

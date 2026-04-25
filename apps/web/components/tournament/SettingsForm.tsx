@@ -67,6 +67,12 @@ export function SettingsForm() {
       const data = (await res.json()) as SwarmConfig & { persisted?: boolean; warning?: string };
       setCfg(data);
       localStorage.setItem(LS_KEY, JSON.stringify(data));
+      // Tell same-tab listeners (TournamentClient) the risk knob changed —
+      // `storage` events do NOT fire in the originating tab, so we use a
+      // CustomEvent to bridge the gap.
+      window.dispatchEvent(
+        new CustomEvent("pythia-config-updated", { detail: data }),
+      );
       if (data.persisted === false) {
         setWarning("Saved to browser only — server is read-only (Vercel).");
       }
