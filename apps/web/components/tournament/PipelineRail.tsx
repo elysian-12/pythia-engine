@@ -123,12 +123,16 @@ export function PipelineRail({
       </div>
 
       <p className="mt-3 text-[0.65rem] text-mist leading-relaxed">
-        Every Kiyotaka tick that breaks a z-threshold — perp liquidation
-        cascade, funding spike, Donchian breakout, or a Polymarket
-        skill-weighted-probability gap that leads spot — pulses left → right
-        through the rail. Closed trades feed realized R into the scoreboard
-        and, every N events, the evolver replaces weak agents — closing the
-        loop on the next event.
+        <span className="text-slate-200">How to read this rail:</span> a
+        market shock arrives from Kiyotaka on the left — a forced
+        liquidation, a funding-rate spike, a Donchian breakout, or a
+        Polymarket prediction price that moves before spot does — and
+        sweeps right through every stage of the loop. The 27 agents vote,
+        the leaderboard picks the specialist, Hyperliquid opens a paper
+        position, and when that trade closes its realized R flows back
+        into the scoreboard. Every N events the weakest agents are
+        replaced by mutated copies of the best — so the next tick lands
+        on a slightly smarter swarm than the last one.
       </p>
     </div>
   );
