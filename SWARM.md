@@ -48,7 +48,7 @@ diagnostics, but the default live path is **champion-driven**.
 
 ### `SystematicAgent`
 
-Wraps a parameterised rule family. Five families ship:
+Wraps a parameterised rule family. Six families ship:
 
 | Family | Signal | Trade direction |
 |---|---|---|
@@ -57,11 +57,43 @@ Wraps a parameterised rule family. Five families ship:
 | `FundingZScore { trend: true }` | funding z > 2 σ | with funding sign |
 | `FundingZScore { trend: false }` | same trigger | against funding sign |
 | `VolBreakout` | Donchian-24 breakout, ATR% in band | breakout direction |
+| `PolyEdge` | Polymarket SWP Granger-leads spot AND cointegrated AND share_pm > 0.5 | sign of `swp − mid` |
 
 Parameters that vary across agents: `z_threshold`, `z_window`,
 `cooldown_bars`, `horizon_hours`, `risk_fraction`, `donchian_bars`,
-`atr_pct_min`. `SystematicBuilder::house_roster()` instantiates 20
-diverse starting points.
+`atr_pct_min`. `SystematicBuilder::house_roster()` instantiates 22
+diverse starting points (including 2 polyedge variants).
+
+#### PolyEdge — three-gate prediction-market pipeline
+
+The polyedge family runs three independent statistical tests against
+the rolling Polymarket history attached to `PeerView`:
+
+1. **Engle-Granger cointegration** (`econometrics::cointegration_test`)
+   on `(swp, mid)`. Rejects unless residuals are stationary at 5 %
+   (`adf_tau < -3.37`) — without cointegration the two series have no
+   long-run equilibrium and the rest is noise.
+2. **Granger F-test** (`econometrics::granger_f`) at lag 4: does past
+   SWP help predict next mid? Requires `p_value < 0.05`.
+3. **Hasbrouck information share** (`econometrics::information_share_proxy`):
+   the proxy must put `share_pm > 0.5` — the prediction market
+   accounts for more next-step variance than spot does.
+
+Only when all three pass does the agent fire, in the direction of the
+latest `swp − mid` gap (subject to a minimum-gap floor configurable
+via the `z_threshold` field on `SystematicParams`). This replaces the
+earlier UI-side z-magnitude proxy with the real research-grade test
+chain. Three unit tests in `systematic.rs` lock in the wiring:
+`polyedge_fires_when_pm_leads_spot`, `polyedge_abstains_on_random_pair`,
+`polyedge_abstains_without_history`.
+
+The orchestrator side: `Swarm::broadcast_timed` ingests every
+`Event::Polymarket` into a per-asset rolling `PolymarketHistory`
+(capped at 14 days hourly), which is cloned into each agent's
+`PeerView` ahead of `observe()`. Until real ingestion via
+`kiyotaka-client` lands, the swarm-backtest binary synthesizes a
+causal SWP/mid pair from past hourly returns so the gates are
+exercised end-to-end on every backtest run.
 
 ### `LlmAgent`
 

@@ -12,6 +12,7 @@ paper-trader = { path = "../paper-trader" }
 store = { path = "../store" }
 regime = { path = "../regime" }
 evaluation = { path = "../evaluation" }
+econometrics = { path = "../econometrics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

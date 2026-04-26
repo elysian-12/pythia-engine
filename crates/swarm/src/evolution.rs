@@ -55,6 +55,7 @@ pub enum RuleFamilyKind {
     FundingTrend,
     FundingArb,
     VolBreakout,
+    PolyEdge,
 }
 
 impl RuleFamilyKind {
@@ -65,6 +66,7 @@ impl RuleFamilyKind {
             (Self::FundingTrend, RuleFamily::FundingZScore { trend_follow: true }) => true,
             (Self::FundingArb, RuleFamily::FundingZScore { trend_follow: false }) => true,
             (Self::VolBreakout, RuleFamily::VolBreakout) => true,
+            (Self::PolyEdge, RuleFamily::PolyEdge) => true,
             _ => false,
         }
     }
@@ -87,6 +89,7 @@ impl Default for EvolutionCfg {
                 (RuleFamilyKind::FundingTrend, 2),
                 (RuleFamilyKind::FundingArb, 2),
                 (RuleFamilyKind::VolBreakout, 2),
+                (RuleFamilyKind::PolyEdge, 2),
             ],
         }
     }
@@ -393,6 +396,7 @@ fn family_kind(f: RuleFamily) -> RuleFamilyKind {
         RuleFamily::FundingZScore { trend_follow: true } => RuleFamilyKind::FundingTrend,
         RuleFamily::FundingZScore { trend_follow: false } => RuleFamilyKind::FundingArb,
         RuleFamily::VolBreakout => RuleFamilyKind::VolBreakout,
+        RuleFamily::PolyEdge => RuleFamilyKind::PolyEdge,
     }
 }
 
@@ -408,6 +412,7 @@ fn kind_to_family(kind: RuleFamilyKind) -> RuleFamily {
         RuleFamilyKind::FundingTrend => RuleFamily::FundingZScore { trend_follow: true },
         RuleFamilyKind::FundingArb => RuleFamily::FundingZScore { trend_follow: false },
         RuleFamilyKind::VolBreakout => RuleFamily::VolBreakout,
+        RuleFamilyKind::PolyEdge => RuleFamily::PolyEdge,
     }
 }
 
@@ -418,6 +423,7 @@ fn family_label(kind: RuleFamilyKind) -> &'static str {
         RuleFamilyKind::FundingTrend => "funding-trend",
         RuleFamilyKind::FundingArb => "funding-arb",
         RuleFamilyKind::VolBreakout => "vol-breakout",
+        RuleFamilyKind::PolyEdge => "polyedge",
     }
 }
 
@@ -432,6 +438,7 @@ fn seed_params_for(kind: RuleFamilyKind) -> SystematicParams {
         RuleFamilyKind::FundingTrend => SystematicParams::funding_trend(),
         RuleFamilyKind::FundingArb => SystematicParams::funding_arb(),
         RuleFamilyKind::VolBreakout => SystematicParams::vol_breakout(),
+        RuleFamilyKind::PolyEdge => SystematicParams::polyedge(),
     }
 }
 

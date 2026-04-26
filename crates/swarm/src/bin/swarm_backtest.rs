@@ -13,7 +13,10 @@ use domain::{
     signal::Signal,
     time::EventTs,
 };
-use evaluation::{block_bootstrap_sharpe, deflated_sharpe_ratio, probabilistic_sharpe_ratio};
+use evaluation::{
+    block_bootstrap_sharpe, deflated_sharpe_ratio, probabilistic_sharpe_ratio,
+    probability_of_backtest_overfitting,
+};
 use paper_trader::{atr, simulate, Sizing, TraderConfig};
 use store::Store;
 use swarm::{
@@ -128,9 +131,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &regime_cfg,
     );
 
-    // Merge all events chronologically.
-    let events = interleave(btc, eth);
-    tracing::info!(n_agents, n_events = events.len(), n_regimes = regime_timeline.len(), "starting replay");
+    // Synthesize a Polymarket SWP/mid series per asset so the polyedge
+    // family has data to gate on. Real Polymarket ingestion is a
+    // separate pipeline (kiyotaka-client → store → here) that hasn't
+    // shipped yet; the synthetic version is causal — `swp` is derived
+    // from past hourly returns only, and `mid` lags `swp` by 4 hours
+    // plus small noise, so the pair is cointegrated by construction
+    // and `swp` Granger-leads `mid`. Polyedge then proves the wiring
+    // end-to-end against real cointegration / Granger / Hasbrouck
+    // tests rather than a mocked branch.
+    let btc_pm = synthesize_polymarket_series(
+        market_data.candles.get(&Asset::Btc).cloned().unwrap_or_default().as_slice(),
+        0xC0FFEE,
+    );
+    let eth_pm = synthesize_polymarket_series(
+        market_data.candles.get(&Asset::Eth).cloned().unwrap_or_default().as_slice(),
+        0xBADF00D,
+    );
+
+    // Merge all events chronologically (incl. polymarket samples).
+    let events = interleave(btc, eth, &btc_pm, &eth_pm);
+    tracing::info!(
+        n_agents,
+        n_events = events.len(),
+        n_regimes = regime_timeline.len(),
+        n_pm_btc = btc_pm.len(),
+        n_pm_eth = eth_pm.len(),
+        "starting replay (with synthetic polymarket lead series)"
+    );
     let trader = TraderConfig {
         sizing: Sizing::AtrRisk {
             risk_fraction: 0.01,
@@ -305,6 +333,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut champion_sharpe_ci_hi = f64::NAN;
     let mut champion_skew = 0.0;
     let mut champion_kurtosis = 0.0;
+    // PBO (Probabilistic Backtest Overfitting, Bailey & López de Prado
+    // 2014) — the rate at which the *winning* configuration on the
+    // in-sample half ranks below median on the held-out half. <0.5 =
+    // edge generalises better than chance; closer to 0 is better. We
+    // build the trial matrix from each agent's R-history split into
+    // `pbo_splits` chunks; each agent contributes one column of length
+    // `splits × chunk_size`. Without this, the swarm's "look at how
+    // many configs we tried" exposure went unmeasured — adding it
+    // closes the multi-testing-correction loop alongside DSR.
+    let mut champion_pbo: Option<f64> = None;
+    let pbo_splits: usize = 8;
     if let Some(c) = champion {
         let r_series = scoreboard.r_history(&c.agent_id);
         let trial_sharpes: Vec<f64> = ranked
@@ -323,6 +362,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             champion_sharpe_ci_lo = ci.lo;
             champion_sharpe_ci_hi = ci.hi;
         }
+        // Build the [chunk × trial] matrix the PBO test consumes. Each
+        // column is one agent's R-history truncated + chunked into
+        // `pbo_splits` equally-sized blocks; rows are time. Need ≥6
+        // trials with enough closes to make the combinatorial split
+        // meaningful — fewer than that and PBO degrades to noise.
+        let chunk_target: usize = pbo_splits.max(2) * 4;
+        let r_histories: Vec<Vec<f64>> = ranked
+            .iter()
+            .filter(|s| s.wins + s.losses >= chunk_target)
+            .map(|s| scoreboard.r_history(&s.agent_id))
+            .filter(|h| h.len() >= chunk_target)
+            .collect();
+        if r_histories.len() >= 6 {
+            // Trim every agent's history to the same length (smallest
+            // ≥ chunk_target * pbo_splits) so the matrix is rectangular.
+            let max_per_split = r_histories
+                .iter()
+                .map(|h| h.len() / pbo_splits)
+                .min()
+                .unwrap_or(0);
+            let rows = max_per_split * pbo_splits;
+            if rows >= chunk_target {
+                let mut matrix: Vec<Vec<f64>> = Vec::with_capacity(rows);
+                for t in 0..rows {
+                    let row: Vec<f64> = r_histories.iter().map(|h| h[t]).collect();
+                    matrix.push(row);
+                }
+                let result = probability_of_backtest_overfitting(&matrix, pbo_splits);
+                champion_pbo = Some(result.pbo);
+            }
+        }
         println!(
             "\nCHAMPION: {} · total_r={:+.2} · win_rate={:.1}% · pnl=${:+.0}",
             c.agent_id,
@@ -340,6 +410,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             champion_skew,
             champion_kurtosis,
         );
+        match champion_pbo {
+            Some(pbo) => println!(
+                "           PBO={:.3} (lower is better; <0.5 = edge generalises out-of-sample)",
+                pbo
+            ),
+            None => println!("           PBO=insufficient sample for combinatorial split"),
+        }
     }
     println!(
         "\nConsensus fires: {} · directional wins: {} ({:.1}%)",
@@ -394,6 +471,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "skew": champion_skew,
             "kurtosis": champion_kurtosis,
             "n_trials": ranked.iter().filter(|s| s.wins + s.losses >= 5).count(),
+            // PBO (Bailey & López de Prado 2014). Lower is better;
+            // <0.5 means the winning configuration generalises to
+            // held-out splits more than half the time.
+            "pbo": champion_pbo,
+            "pbo_splits": pbo_splits,
         },
         "source": "backtest"
     });
@@ -588,7 +670,67 @@ impl MarketData {
     }
 }
 
-fn interleave(btc: AssetHistory, eth: AssetHistory) -> Vec<Event> {
+/// Build a causally-synthesized Polymarket SWP/mid hourly series from
+/// the asset's candle history. SWP is a sigmoid of the past 24h
+/// log-return (no peeking — the value at hour t depends only on
+/// candles at t-25..=t-1), and mid is SWP lagged 4 hours plus small
+/// Gaussian noise. Result: a pair where SWP Granger-leads mid by
+/// construction and the residuals of mid ~ swp are stationary, so
+/// the cointegration test passes. Polyedge agents then have a real
+/// statistical signal to gate on. Replace this with the real ingestion
+/// pipeline once kiyotaka-client + store land Polymarket SWP/mid feeds.
+fn synthesize_polymarket_series(candles: &[Candle], seed: u64) -> Vec<(i64, f64, f64)> {
+    if candles.len() < 30 {
+        return Vec::new();
+    }
+    // Light-weight LCG so the noise is deterministic per seed.
+    let mut state = seed | 1;
+    let mut nrand = || -> f64 {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let u = ((state >> 33) as f64) / (u32::MAX as f64);
+        (u - 0.5) * 2.0 // ~Uniform(-1, 1) — close enough for noise
+    };
+
+    // First pass: SWP from past 24h log-return only.
+    let lookback = 24usize;
+    let mut swp_series: Vec<(i64, f64)> = Vec::with_capacity(candles.len());
+    for (i, c) in candles.iter().enumerate() {
+        if i < lookback {
+            continue;
+        }
+        let prev = candles[i - lookback].close;
+        if prev <= 0.0 || c.close <= 0.0 {
+            continue;
+        }
+        let ret = (c.close / prev).ln();
+        // sigmoid scaled so a 5% return shifts SWP by ~0.2 from the
+        // 0.5 baseline. Bounded in [0, 1].
+        let z = ret / 0.05;
+        let raw = 1.0 / (1.0 + (-z).exp());
+        let jitter = 0.02 * nrand();
+        let swp = (raw + jitter).clamp(0.01, 0.99);
+        swp_series.push((c.ts.0, swp));
+    }
+
+    // Second pass: mid lags SWP by 4 hours + noise. Output triples.
+    let lag = 4usize;
+    let mut out = Vec::with_capacity(swp_series.len().saturating_sub(lag));
+    for i in lag..swp_series.len() {
+        let (ts, swp) = swp_series[i];
+        let lagged_swp = swp_series[i - lag].1;
+        let noise = 0.015 * nrand();
+        let mid = (lagged_swp + noise).clamp(0.01, 0.99);
+        out.push((ts, swp, mid));
+    }
+    out
+}
+
+fn interleave(
+    btc: AssetHistory,
+    eth: AssetHistory,
+    btc_pm: &[(i64, f64, f64)],
+    eth_pm: &[(i64, f64, f64)],
+) -> Vec<Event> {
     let mut out = Vec::new();
     for l in &btc.liquidations {
         out.push(Event::Liquidation {
@@ -632,6 +774,22 @@ fn interleave(btc: AssetHistory, eth: AssetHistory) -> Vec<Event> {
             ts: f.ts,
             asset: Asset::Eth,
             funding: f.clone(),
+        });
+    }
+    for &(ts, swp, mid) in btc_pm {
+        out.push(Event::Polymarket {
+            ts: EventTs::from_secs(ts),
+            asset: Asset::Btc,
+            swp,
+            mid,
+        });
+    }
+    for &(ts, swp, mid) in eth_pm {
+        out.push(Event::Polymarket {
+            ts: EventTs::from_secs(ts),
+            asset: Asset::Eth,
+            swp,
+            mid,
         });
     }
     out.sort_by_key(|e| e.ts().0);

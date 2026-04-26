@@ -42,6 +42,21 @@ pub enum Event {
     /// Hourly rollover marker — lets agents finalise their local
     /// aggregators without waiting for the next organic event.
     HourClose { ts: EventTs },
+    /// Polymarket price update for an asset — a paired
+    /// `(skill_weighted_probability, mid)` sample on the prediction
+    /// market that tracks the same underlying. Polyedge agents read
+    /// this through `PeerView::polymarket_history` to test whether
+    /// the prediction market currently leads spot (Granger / Hasbrouck
+    /// gates inside their decide path).
+    Polymarket {
+        ts: EventTs,
+        asset: Asset,
+        /// Skill-weighted probability ∈ [0, 1] — the consensus among
+        /// the most accurate Polymarket traders.
+        swp: f64,
+        /// Quote mid-price ∈ [0, 1] of the matching binary contract.
+        mid: f64,
+    },
 }
 
 impl Event {
@@ -51,6 +66,7 @@ impl Event {
             | Event::Candle { ts, .. }
             | Event::Funding { ts, .. }
             | Event::OpenInterest { ts, .. }
+            | Event::Polymarket { ts, .. }
             | Event::HourClose { ts } => *ts,
         }
     }
@@ -116,6 +132,35 @@ pub struct AgentProfile {
     pub social: bool,
 }
 
+/// Rolling Polymarket SWP/mid history for both assets. Populated by
+/// the orchestrator from `Event::Polymarket` ticks and handed to
+/// agents through `PeerView`. Polyedge agents call into
+/// `econometrics::cointegration_test`, `granger_f`, and
+/// `information_share_proxy` against these series to gate firing
+/// — *only fire when the prediction market actually leads spot*,
+/// rather than the earlier z-magnitude proxy.
+#[derive(Clone, Debug, Default)]
+pub struct PolymarketHistory {
+    /// (timestamp_secs, swp, mid) triples for BTC perp ↔ Polymarket binary.
+    pub btc: Vec<(i64, f64, f64)>,
+    /// Same for ETH perp ↔ Polymarket binary.
+    pub eth: Vec<(i64, f64, f64)>,
+}
+
+impl PolymarketHistory {
+    /// Returns paired (swp, mid) series for the asset, ordered chronologically.
+    /// Empty vectors mean polyedge should abstain — there is nothing to test.
+    pub fn series_for(&self, asset: domain::crypto::Asset) -> (Vec<f64>, Vec<f64>) {
+        let v = match asset {
+            domain::crypto::Asset::Btc => &self.btc,
+            domain::crypto::Asset::Eth => &self.eth,
+        };
+        let swp = v.iter().map(|(_, s, _)| *s).collect();
+        let mid = v.iter().map(|(_, _, m)| *m).collect();
+        (swp, mid)
+    }
+}
+
 /// Snapshot of recent peer decisions — the social-influence layer.
 #[derive(Clone, Debug, Default)]
 pub struct PeerView {
@@ -136,6 +181,10 @@ pub struct PeerView {
     /// gate: when its own recent expectancy turns negative, it abstains
     /// unless the incoming signal is exceptionally strong.
     pub self_recent_expectancy: Option<f64>,
+    /// Rolling Polymarket SWP/mid pairs per asset. Polyedge agents
+    /// require this to compute cointegration / Granger / Hasbrouck —
+    /// without it they abstain (no series, no statistical gate).
+    pub polymarket_history: Option<PolymarketHistory>,
 }
 
 /// The trait every agent implements.

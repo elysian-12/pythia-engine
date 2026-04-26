@@ -264,18 +264,29 @@ trusting any number — research code drifts, this list does not.
 | **Realistic execution simulation** (taker fees 5bps × 2, slippage 3bps × 2, funding cost, within-bar stop/TP, ATR R) | `paper_trader::simulate` | ✅ live | every closed trade in backtest and live-loop replay |
 | **Genetic evolution** (log-space Gaussian mutation + same-family crossover, rank-weighted parent selection, elite preservation) | `swarm::evolution::Evolution::advance` | ✅ live | every `PYTHIA_EVOLVE_EVERY` events; carries generation counter across runs via `data/swarm-population.json` |
 | **Population persistence** (id + params + stats + r_history round-trip) | `swarm::persistence::PersistedPopulation` | ✅ live | save at end of run, load at start; resume preserves prior R-history so PSR/DSR survive restarts |
-| **Granger F-statistic** (lag-4 prediction-market lead test) | `econometrics::granger_f` | ⚠️ present, **not** wired | `signal-engine` evaluates it offline; the `polyedge` agent uses a magnitude-z proxy instead. |
-| **Hasbrouck information share** | `econometrics::information_share` | ⚠️ present, **not** wired | same — `signal-engine` only |
-| **Engle-Granger cointegration gate** | `econometrics::engle_granger` | ⚠️ present, **not** wired | same — `signal-engine` only |
-| **Probabilistic Backtest Overfit (PBO)** | `evaluation::pbo` | ⚠️ wired in `strategy::ablate`, **not** in `swarm-backtest` | grid-search ablation only |
+| **Granger F-statistic** (lag-4 prediction-market lead test) | `econometrics::granger_f` | ✅ live | `polyedge` family decide path — fires only when SWP Granger-leads mid at p < 0.05 |
+| **Hasbrouck information share** | `econometrics::information_share_proxy` | ✅ live | `polyedge` family decide path — fires only when `share_pm > 0.5` |
+| **Engle-Granger cointegration gate** | `econometrics::cointegration_test` | ✅ live | `polyedge` family decide path — first gate; rejects unless residuals are stationary at 5 % |
+| **Probabilistic Backtest Overfit (PBO)** | `evaluation::probability_of_backtest_overfitting` | ✅ live | swarm-backtest certification block; surfaced in snapshot.`champion_certification.pbo` |
 
-The honest gap: `polyedge` agents currently fire on a Polymarket
-event's z-magnitude alone. The "real" PolyEdge thesis — fire when
-Granger-F passes its threshold AND Hasbrouck IS exceeds 0.5 AND the
-two series are cointegrated — needs those three calls threaded into
-`SystematicAgent::observe` for the `polyedge` family. That's the
-next-pass follow-up; everything else above is exercised on every
-event.
+The polyedge family now runs the real three-gate pipeline:
+**Engle-Granger cointegration** on `(swp, mid)` →
+**Granger F-test** at lag 4 on `mid ~ swp_lags` →
+**Hasbrouck information share** with PM dominance check. Only when
+all three pass simultaneously does the agent fire, in the direction
+of the latest `swp − mid` gap. The wiring lives in
+[`crates/swarm/src/systematic.rs`](crates/swarm/src/systematic.rs)
+under the `RuleFamily::PolyEdge` branch; the rolling SWP/mid history
+flows through `PeerView::polymarket_history` updated by
+[`Swarm::broadcast_timed`](crates/swarm/src/population.rs) on every
+`Event::Polymarket` tick.
+
+PBO joins PSR / DSR / block-bootstrap CI in the certification block.
+The matrix is built from each agent's R-history split into 8 chunks;
+columns are agents that have ≥ 32 closed trades. Result lands in
+`snapshot.champion_certification.pbo` so the UI can show it alongside
+the other significance numbers — < 0.5 means the winning config
+generalises out-of-sample more than half the time.
 
 ## What's validated
 

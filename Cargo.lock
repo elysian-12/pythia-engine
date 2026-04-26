@@ -3036,6 +3036,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "domain",
+ "econometrics",
  "evaluation",
  "futures",
  "paper-trader",

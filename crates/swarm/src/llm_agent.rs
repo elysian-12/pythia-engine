@@ -389,6 +389,9 @@ fn format_event(event: &Event) -> String {
             format!("[{}] OI {} close={:.0}", ts.0, asset.coin(), oi.close)
         }
         Event::HourClose { ts } => format!("[{}] HOUR_CLOSE", ts.0),
+        Event::Polymarket { ts, asset, swp, mid } => {
+            format!("[{}] PM {} swp={:.3} mid={:.3}", ts.0, asset.coin(), swp, mid)
+        }
     }
 }
 

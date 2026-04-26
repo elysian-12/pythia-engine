@@ -20,8 +20,15 @@ use std::time::Instant;
 use futures::future::join_all;
 use tracing::debug;
 
-use crate::agent::{AgentDecision, Event, PeerView, SwarmAgent};
+use crate::agent::{AgentDecision, Event, PeerView, PolymarketHistory, SwarmAgent};
 use crate::scoring::Scoreboard;
+
+/// Cap on per-asset Polymarket history retained for the polyedge
+/// econometric tests. ~2 weeks of hourly samples is plenty for
+/// cointegration / Granger / Hasbrouck (each only consumes the last
+/// `SystematicParams::z_window` samples), and growing unbounded would
+/// leak memory across long-running daemon sessions.
+const POLYMARKET_HISTORY_CAP: usize = 14 * 24;
 
 /// Window length for the per-agent self-backtest gate. The orchestrator
 /// reads `Scoreboard::recent_expectancy(agent_id, RECENT_N, MIN_SAMPLE)`
@@ -56,6 +63,11 @@ pub struct Swarm {
     /// closed-trade history — enabling the self-backtest gate. Left None
     /// in tests / scoreboard-less drivers; gating then no-ops.
     scoreboard: Option<Arc<Scoreboard>>,
+    /// Rolling Polymarket SWP/mid pairs per asset. Updated on every
+    /// `Event::Polymarket` and surfaced through `PeerView` so polyedge
+    /// agents can run cointegration / Granger / Hasbrouck against a
+    /// consistent series. Capped at `POLYMARKET_HISTORY_CAP` per asset.
+    polymarket_history: PolymarketHistory,
 }
 
 impl std::fmt::Debug for Swarm {
@@ -77,7 +89,15 @@ impl Swarm {
             current_champion: None,
             current_regime: None,
             scoreboard: None,
+            polymarket_history: PolymarketHistory::default(),
         }
+    }
+
+    /// Replace the rolling Polymarket history wholesale — useful for
+    /// resuming a daemon from a persisted snapshot or for tests that
+    /// pre-load a fixture.
+    pub fn set_polymarket_history(&mut self, h: PolymarketHistory) {
+        self.polymarket_history = h;
     }
 
     /// Attach the live scoreboard. With this set, every `observe()` call
@@ -110,6 +130,24 @@ impl Swarm {
         event: &Event,
     ) -> (Vec<AgentDecision>, u128) {
         let started = Instant::now();
+        // Stash any Polymarket sample into the rolling per-asset buffer
+        // *before* computing the peer view, so the polyedge agent's
+        // econometric gates see this tick when they run their tests.
+        if let Event::Polymarket { ts, asset, swp, mid } = event {
+            let bucket = match asset {
+                domain::crypto::Asset::Btc => &mut self.polymarket_history.btc,
+                domain::crypto::Asset::Eth => &mut self.polymarket_history.eth,
+            };
+            bucket.push((ts.0, *swp, *mid));
+            // Capped FIFO — drop the oldest entries when the buffer
+            // exceeds POLYMARKET_HISTORY_CAP so a long-lived daemon
+            // doesn't accumulate unbounded memory.
+            let overflow = bucket.len().saturating_sub(POLYMARKET_HISTORY_CAP);
+            if overflow > 0 {
+                bucket.drain(..overflow);
+            }
+        }
+
         // Pre-build per-agent peer views into a Vec so the futures below
         // each own their own peer view (no shared-borrow conflict). One
         // PeerView clone per agent is cheap — a few dozen recent
@@ -192,6 +230,16 @@ impl Swarm {
             // Per-agent self_recent_expectancy is layered in by `broadcast`
             // before each `observe` call.
             self_recent_expectancy: None,
+            // Cloning the polymarket history is bounded by
+            // POLYMARKET_HISTORY_CAP — at most ~336 (asset, swp, mid)
+            // tuples at hourly resolution, well under 10 KB.
+            polymarket_history: if self.polymarket_history.btc.is_empty()
+                && self.polymarket_history.eth.is_empty()
+            {
+                None
+            } else {
+                Some(self.polymarket_history.clone())
+            },
         }
     }
 }

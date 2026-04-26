@@ -19,6 +19,7 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
+use econometrics::{cointegration_test, granger_f, information_share_proxy};
 use regime::Regime;
 
 use crate::agent::{AgentDecision, AgentKind, AgentProfile, Event, PeerView, SwarmAgent};
@@ -33,6 +34,14 @@ pub enum RuleFamily {
     FundingZScore { trend_follow: bool },
     /// Fires on Donchian breakout with ATR floor.
     VolBreakout,
+    /// Fires when the Polymarket prediction series Granger-causes spot
+    /// AND the two series are cointegrated AND the Hasbrouck info-share
+    /// puts the dominant share on the prediction market. The previous
+    /// implementation in TS / synth land used a magnitude-z proxy on
+    /// `swp − mid`; this real version threads three orthogonal
+    /// statistical gates from the `econometrics` crate so the agent
+    /// only fires when the prediction market is *actually* leading.
+    PolyEdge,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,6 +107,28 @@ impl SystematicParams {
             atr_pct_min: 0.004,
             horizon_hours: 24,
             ..Self::liq_trend()
+        }
+    }
+
+    /// Polyedge agent: fires when the prediction market Granger-leads
+    /// spot AND the two series are cointegrated AND the Hasbrouck
+    /// info-share is dominated by the PM side. The `z_threshold` field
+    /// is repurposed as the *minimum |swp − mid| gap*, in probability
+    /// units, that's required on top of the statistical gates. A small
+    /// gap (< ~3 percentage points) is more likely to be quote noise
+    /// than real prediction lead. `z_window` doubles as the lookback
+    /// length used by the econometric tests.
+    pub fn polyedge() -> Self {
+        Self {
+            family: RuleFamily::PolyEdge,
+            z_threshold: 0.03,   // 3 percentage points min gap
+            z_window: 96,        // 96 paired hourly samples (4 days)
+            cooldown_bars: 4,
+            horizon_hours: 6,
+            risk_fraction: 0.01,
+            asset_filter: None,
+            donchian_bars: 24,
+            atr_pct_min: 0.0,    // unused
         }
     }
 }
@@ -298,6 +329,16 @@ impl SystematicAgent {
                 Regime::Calm => 0.7,
                 Regime::Ranging => 1.0,
             },
+            // Polyedge: prediction-market leadership shows up most
+            // clearly in directional regimes (trending / chaotic), where
+            // sentiment leads price discovery. In ranges the SWP/mid
+            // gap mostly reflects quote noise.
+            (RuleFamily::PolyEdge, r) => match r {
+                Regime::Trending => 1.1,
+                Regime::Chaotic => 0.7,
+                Regime::Calm => 0.4,
+                Regime::Ranging => 0.6,
+            },
         }
     }
 
@@ -305,9 +346,10 @@ impl SystematicAgent {
         &mut self,
         asset: Asset,
         ts: EventTs,
-        regime: Option<regime::RegimeSnapshot>,
-        self_recent_expectancy: Option<f64>,
+        peers: &PeerView,
     ) -> Option<AgentDecision> {
+        let regime = peers.regime;
+        let self_recent_expectancy = peers.self_recent_expectancy;
         let params = self.params.clone();
         // Compute fitness up-front so the borrow on `self` doesn't conflict
         // with the mutable borrow `window_mut` takes below.
@@ -354,6 +396,54 @@ impl SystematicAgent {
                     return None;
                 }
                 window.donchian_break(params.donchian_bars)?
+            }
+            RuleFamily::PolyEdge => {
+                // Polyedge gates the trade behind three independent
+                // econometric tests. The previous implementation used
+                // |swp − mid| z-score alone (the "magnitude proxy"
+                // mentioned in the public docs); replacing it with the
+                // real cointegration → Granger → Hasbrouck pipeline.
+                // All three live in the `econometrics` crate.
+                let history = peers.polymarket_history.as_ref()?;
+                let (swp, mid) = history.series_for(asset);
+                let take = params.z_window.max(40);
+                if swp.len() < take || mid.len() < take {
+                    return None;
+                }
+                let swp_w: Vec<f64> = swp[swp.len() - take..].to_vec();
+                let mid_w: Vec<f64> = mid[mid.len() - take..].to_vec();
+
+                // Gate 1: Engle-Granger cointegration. If the two
+                // series don't share a long-run equilibrium the gap
+                // is just noise — no point computing the rest.
+                let coint = cointegration_test(&swp_w, &mid_w).ok()?;
+                if !coint.cointegrated_5pct {
+                    return None;
+                }
+                // Gate 2: Granger-F at lag 4. Does past SWP help
+                // predict next mid? Significant_5pct = p_value < 0.05.
+                let granger = granger_f(&mid_w, &swp_w, 4).ok()?;
+                if !granger.significant_5pct() {
+                    return None;
+                }
+                // Gate 3: Hasbrouck info-share proxy. Of the two
+                // series' next-step variance, how much is explained
+                // by the *other* side's lags? share_pm > 0.5 means
+                // PM leads spot more than spot leads PM.
+                let info = information_share_proxy(&swp_w, &mid_w, 4).ok()?;
+                if info.share_pm < 0.5 {
+                    return None;
+                }
+                // Direction: sign of the latest gap. swp > mid means
+                // the prediction market is more bullish than spot →
+                // expect spot to catch up → Long. swp < mid → Short.
+                let last_swp = *swp_w.last()?;
+                let last_mid = *mid_w.last()?;
+                let edge = last_swp - last_mid;
+                if edge.abs() < params.z_threshold {
+                    return None;
+                }
+                if edge > 0.0 { Direction::Long } else { Direction::Short }
             }
         };
         // Fitness pre-checked at function entry — no second gate here.
@@ -402,8 +492,6 @@ impl SwarmAgent for SystematicAgent {
     }
 
     async fn observe(&mut self, event: &Event, peers: &PeerView) -> Option<AgentDecision> {
-        let regime = peers.regime;
-        let self_e = peers.self_recent_expectancy;
         match event {
             Event::Liquidation { ts, asset, side, usd_value } => {
                 if !self.passes_asset_filter(*asset) {
@@ -411,7 +499,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 if self.window_mut(*asset).push_liq(ts.0, *side, *usd_value).is_some() {
                     // a new hourly bucket just closed — evaluate
-                    return self.decide_for_asset(*asset, *ts, regime, self_e);
+                    return self.decide_for_asset(*asset, *ts, peers);
                 }
                 None
             }
@@ -421,7 +509,7 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_candle(candle.open, candle.high, candle.low, candle.close);
                 if matches!(self.params.family, RuleFamily::VolBreakout) {
-                    return self.decide_for_asset(*asset, *ts, regime, self_e);
+                    return self.decide_for_asset(*asset, *ts, peers);
                 }
                 None
             }
@@ -431,7 +519,20 @@ impl SwarmAgent for SystematicAgent {
                 }
                 self.window_mut(*asset).push_funding(funding.rate_close);
                 if matches!(self.params.family, RuleFamily::FundingZScore { .. }) {
-                    return self.decide_for_asset(*asset, *ts, regime, self_e);
+                    return self.decide_for_asset(*asset, *ts, peers);
+                }
+                None
+            }
+            Event::Polymarket { ts, asset, .. } => {
+                if !self.passes_asset_filter(*asset) {
+                    return None;
+                }
+                // Polyedge agents evaluate on every Polymarket tick; the
+                // polymarket history buffer is updated by the orchestrator
+                // before broadcast, so by the time the agent sees the
+                // event the rolling SWP/mid pair is already in PeerView.
+                if matches!(self.params.family, RuleFamily::PolyEdge) {
+                    return self.decide_for_asset(*asset, *ts, peers);
                 }
                 None
             }
@@ -498,6 +599,16 @@ impl SystematicBuilder {
             p.z_threshold = 2.5;
             p.risk_fraction = risk;
             self.specs.push((format!("liq-trend-{suffix}"), p));
+        }
+        // polyedge — 2 variants (gap/window thresholds). Real
+        // statistical gates (cointegration / Granger / Hasbrouck) live
+        // inside the family's decide path; these knobs only tune the
+        // minimum SWP↔mid gap and lookback length.
+        for (i, (gap, win)) in [(0.03, 96usize), (0.05, 144)].iter().enumerate() {
+            let mut p = SystematicParams::polyedge();
+            p.z_threshold = *gap;
+            p.z_window = *win;
+            self.specs.push((format!("polyedge-v{}", i), p));
         }
         self
     }
@@ -578,11 +689,14 @@ mod tests {
     #[tokio::test]
     async fn house_roster_builds() {
         let agents = SystematicBuilder::new().house_roster().build();
-        assert_eq!(agents.len(), 20);
+        // 4 liq-trend + 3 liq-fade + 3 funding-arb + 3 funding-trend
+        // + 3 vol-breakout + 4 risk-appetite variants + 2 polyedge.
+        assert_eq!(agents.len(), 22);
         let ids: Vec<&str> = agents.iter().map(|a| a.id()).collect();
         assert!(ids.contains(&"liq-trend-v0"));
         assert!(ids.contains(&"vol-breakout-v0"));
         assert!(ids.contains(&"liq-trend-kelly"));
+        assert!(ids.contains(&"polyedge-v0"));
     }
 
     #[tokio::test]
@@ -635,6 +749,171 @@ mod tests {
             .await;
         assert!(d.is_some());
         assert_eq!(d.unwrap().direction, Direction::Long);
+    }
+
+    /// Build a Polymarket-leads-spot fixture where:
+    ///  - swp is a stationary AR(1) signal in [0, 1] driven by larger
+    ///    random shocks (small shocks make 4-lag OLS regressors near-
+    ///    collinear → singular X'X in Granger);
+    ///  - mid[t] = swp[t-4] + observation noise, so swp Granger-leads mid
+    ///    at lag 4 and the pair is cointegrated by construction.
+    ///
+    /// The construction is a research analogue of "Polymarket binary
+    /// quote leads spot price by ~4 hours" and exercises every gate.
+    fn synth_pm_leads_pair(seed: u64, n: usize) -> Vec<(f64, f64)> {
+        let mut state = seed | 1;
+        let mut nrand = || -> f64 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 33) as f64) / (u32::MAX as f64) - 0.5
+        };
+        // Stationary AR(1) on the logit so swp lives in (0, 1) without
+        // being clamped against the bounds for long stretches.
+        let phi = 0.85;
+        let mut z = 0.0_f64;
+        let mut swp_logit = Vec::with_capacity(n);
+        for _ in 0..n {
+            z = phi * z + nrand();
+            swp_logit.push(z);
+        }
+        let sigm = |x: f64| 1.0 / (1.0 + (-x).exp());
+        let swp_full: Vec<f64> = swp_logit.iter().map(|x| sigm(*x)).collect();
+        let lag = 4usize;
+        let mut out = Vec::with_capacity(n - lag);
+        for t in lag..n {
+            let mid = (swp_full[t - lag] + 0.05 * nrand()).clamp(0.05, 0.95);
+            out.push((swp_full[t], mid));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn polyedge_gate_diagnostics() {
+        // Probe what each gate sees on the leads-spot fixture so the
+        // assertion test below has something diagnostic to fall back on.
+        let pairs = synth_pm_leads_pair(0xDEAD_BEEF, 220);
+        let take = 120;
+        let swp_w: Vec<f64> = pairs.iter().rev().take(take).map(|p| p.0).rev().collect();
+        let mid_w: Vec<f64> = pairs.iter().rev().take(take).map(|p| p.1).rev().collect();
+        let coint = cointegration_test(&swp_w, &mid_w).unwrap();
+        let granger = granger_f(&mid_w, &swp_w, 4).unwrap();
+        let info = information_share_proxy(&swp_w, &mid_w, 4).unwrap();
+        eprintln!(
+            "gate diag: coint adf_tau={:.3} (5% < {}) cointegrated={} | granger F={:.2} p={:.3} sig={} | hasbrouck share_pm={:.3} share_crypto={:.3}",
+            coint.adf_tau,
+            econometrics::coint::EG_CRITICAL_5PCT,
+            coint.cointegrated_5pct,
+            granger.f,
+            granger.p_value,
+            granger.significant_5pct(),
+            info.share_pm,
+            info.share_crypto,
+        );
+        assert!(coint.cointegrated_5pct, "coint should pass on leads-spot fixture");
+        assert!(granger.significant_5pct(), "granger should pass on leads-spot fixture");
+        assert!(info.share_pm > 0.5, "PM should dominate info share");
+    }
+
+    #[tokio::test]
+    async fn polyedge_fires_when_pm_leads_spot() {
+        let pairs = synth_pm_leads_pair(0xCAFE_BABE, 220);
+        let mut history = crate::agent::PolymarketHistory::default();
+        for (t, (swp, mid)) in pairs.iter().enumerate() {
+            history.btc.push(((t as i64) * 3600, *swp, *mid));
+        }
+
+        let mut a = SystematicAgent::new(
+            "polyedge-test",
+            SystematicParams {
+                z_threshold: 0.005,
+                z_window: 120,
+                cooldown_bars: 0,
+                ..SystematicParams::polyedge()
+            },
+        );
+        let peers = PeerView {
+            polymarket_history: Some(history),
+            ..PeerView::default()
+        };
+        let d = a
+            .observe(
+                &Event::Polymarket {
+                    ts: EventTs::from_secs(((pairs.len() + 1) as i64) * 3600),
+                    asset: Asset::Btc,
+                    swp: 0.6,
+                    mid: 0.55,
+                },
+                &peers,
+            )
+            .await;
+        assert!(d.is_some(), "polyedge should fire when PM Granger-leads spot");
+    }
+
+    #[tokio::test]
+    async fn polyedge_abstains_on_random_pair() {
+        // Two independent pseudo-random-walks → no cointegration, no
+        // Granger relationship. Polyedge must abstain.
+        let mut state_a = 0xDEAD_BEEF_u64;
+        let mut state_b = 0x1234_5678_u64;
+        let mut nrand = |s: &mut u64| -> f64 {
+            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((*s >> 33) as f64) / (u32::MAX as f64) - 0.5
+        };
+        let mut history = crate::agent::PolymarketHistory::default();
+        let (mut s, mut m) = (0.5, 0.5);
+        for t in 0..150i64 {
+            s = (s + 0.02 * nrand(&mut state_a)).clamp(0.05, 0.95);
+            m = (m + 0.02 * nrand(&mut state_b)).clamp(0.05, 0.95);
+            history.btc.push((t * 3600, s, m));
+        }
+        let mut a = SystematicAgent::new(
+            "polyedge-rand",
+            SystematicParams {
+                z_threshold: 0.01,
+                z_window: 96,
+                cooldown_bars: 0,
+                ..SystematicParams::polyedge()
+            },
+        );
+        let peers = PeerView {
+            polymarket_history: Some(history),
+            ..PeerView::default()
+        };
+        let d = a
+            .observe(
+                &Event::Polymarket {
+                    ts: EventTs::from_secs(150 * 3600),
+                    asset: Asset::Btc,
+                    swp: 0.6,
+                    mid: 0.4,
+                },
+                &peers,
+            )
+            .await;
+        // Independent random walks must not pass all three gates.
+        assert!(d.is_none(), "polyedge must abstain on independent series");
+    }
+
+    #[tokio::test]
+    async fn polyedge_abstains_without_history() {
+        // PeerView has no polymarket_history → polyedge must
+        // abstain (no series, no statistical gate).
+        let mut a = SystematicAgent::new(
+            "polyedge-empty",
+            SystematicParams::polyedge(),
+        );
+        let peers = PeerView::default();
+        let d = a
+            .observe(
+                &Event::Polymarket {
+                    ts: EventTs::from_secs(3600),
+                    asset: Asset::Btc,
+                    swp: 0.6,
+                    mid: 0.4,
+                },
+                &peers,
+            )
+            .await;
+        assert!(d.is_none());
     }
 
     #[allow(dead_code)]

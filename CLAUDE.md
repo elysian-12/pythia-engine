@@ -36,8 +36,9 @@ Binance WS ──────▶ live-executor ───────────
 | Paper-trader | `paper-trader` | ATR-risk sizing, fees, funding, slippage |
 | Risk metrics (Sharpe etc.) | `backtest::metrics` | Also used by strategy |
 | Walk-forward runner | `backtest` | `run`, `run_signal_stream`, `_compound` |
-| PSR / DSR / PBO / bootstrap | `evaluation` | Quant-grade significance tests |
+| PSR / DSR / PBO / bootstrap | `evaluation` | Quant-grade significance tests; PBO is wired into `swarm-backtest` certification (matrix from agent R-histories ÷ 8 splits) |
 | Grid search, ablations | `strategy` | Calls `backtest` + `evaluation` |
+| Cointegration, Granger F, Hasbrouck IS | `econometrics` | Wired into `RuleFamily::PolyEdge` — `decide_for_asset` runs `cointegration_test` → `granger_f` → `information_share_proxy` against `PeerView::polymarket_history` before firing |
 | Agent roster, scoreboard, evolution | `swarm` | The tournament runtime — `Evolution::advance` ranks elites by `recent_expectancy_r × √n_recent` (NOT lifetime `total_r`), so long-running seeds don't permanently lock the elite slot |
 | WS + HL execution | `live-executor`, `exchange-hyperliquid` | `swarm_live.rs` binary is canonical |
 | HTTP API for the UI | `api` (axum) | `/overview`, `/markets`, `/rate` |
