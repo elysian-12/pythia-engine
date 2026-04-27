@@ -124,6 +124,51 @@ in the diff). Group related changes into a single commit.
   Once the live executor gets a real HL key, the same rules port to
   Rust as `crates/portfolio/src/meta.rs` with identical semantics.
 
+## Tournament page layout (apps/web/components/tournament/TournamentClient.tsx)
+
+The `/tournament` page is a chart-style trading dashboard, modeled
+after GeckoTerminal / TradingView panel layouts. **Globe is the
+dominant visual** — same emphasis as a price chart in those tools.
+Don't push it below the fold with a giant hero title.
+
+Desktop (md+, 768px+) — `md:grid-cols-12` with explicit
+`md:col-start` / `md:row-start` placement:
+
+```
+┌──── compact top strip: title · live · regime · time ────┐
+├────── 3 ──────┬─────── 6 ───────┬────── 3 ──────┐
+│ description   │  GLOBE (big)    │ settings      │
+│ autopilot     │  champion card  │ portfolio     │
+│ simulator     │  pipeline rail  │ copy trader   │
+├───────────────┴─────────────────┴───────────────┤
+│  trade feed (6)        │   scoreboard (6)       │
+└────────────────────────┴────────────────────────┘
+```
+
+Rules:
+- **Top strip**: one row, `text-sm` to `text-lg` title, NEVER
+  `text-3xl`+. Goal: badges + title fit in a single horizontal
+  band so the globe is in the user's eyeline immediately.
+- **Center column 6/12**: globe → champion card (compact, below
+  globe) → pipeline rail. Globe owns the page's visual weight.
+- **Sidebars 3/12 each**: left for inputs/explainer, right for
+  trade settings + paper portfolio.
+- **Bottom row full-width 2-col**: trade feed (left) | scoreboard
+  (right) at `md:row-start-2`.
+- **Mobile order** (via `order-N` classes; desktop ignores them
+  because explicit grid placement wins):
+  1. center column (globe + champion + pipeline)
+  2. scoreboard
+  3. trade feed
+  4. right sidebar (settings + portfolio + copy)
+  5. left sidebar (description + autopilot + simulator)
+- **Don't replace the lineage globe** with a different
+  visualization without confirming. The orb is the page's identity.
+
+Reference screenshot: GeckoTerminal token detail view (chart-centric
+layout with narrow left nav, dominant chart, and right info panel).
+The tournament page must read the same way at a glance.
+
 ## Adding a new feature
 
 Checklist for the AI assistant:

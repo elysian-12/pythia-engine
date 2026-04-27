@@ -946,153 +946,139 @@ export function TournamentClient() {
     </div>
   );
 
-  // Layout (desktop, md+):
+  // Layout philosophy (see CLAUDE.md "Tournament page layout"):
+  // GeckoTerminal/TradingView-style — globe is the visual centerpiece,
+  // not the title. Compact top strip + globe-dominant 3/6/3 columns +
+  // full-width bottom row for trade feed and scoreboard.
   //
-  //   ┌──────── 3 ────────┐ ┌──────── 5 ────────┐ ┌──────── 4 ────────┐
-  //   │ description       │ │ hero / title       │ │ trade & risk      │
-  //   │ live event poller │ │ globe (chart-size) │ │ portfolio (HL)    │
-  //   │ what-if simulator │ │ champion details   │ │ copy trader       │
-  //   │                   │ │ closed-loop rail   │ │                   │
-  //   └───────────────────┘ └────────────────────┘ └───────────────────┘
-  //   ┌──────────── 6 ────────────┐ ┌──────────── 6 ────────────┐
-  //   │ trade feed (LiveTradeFeed) │ │ scoreboard (Leaderboard)  │
-  //   └───────────────────────────┘ └───────────────────────────┘
+  // Desktop (md+):
   //
-  // Mobile (below md) collapses to a single column; the order classes
-  // step the children through:
-  //   1. hero + globe + champion + closed-loop rail
+  //   ┌──── compact top strip: title · live · regime · time ────┐
+  //   ├────── 3 ──────┬─────── 6 ───────┬────── 3 ──────┐
+  //   │ description   │  GLOBE (big)    │ settings      │
+  //   │ autopilot     │  champion card  │ portfolio     │
+  //   │ simulator     │  pipeline rail  │ copy trader   │
+  //   ├───────────────┴─────────────────┴───────────────┤
+  //   │  trade feed (6)        │   scoreboard (6)       │
+  //   └────────────────────────┴────────────────────────┘
+  //
+  // Mobile (single col) order:
+  //   1. globe + champion + pipeline
   //   2. scoreboard
   //   3. trade feed
   //   4. settings + portfolio + copy
   //   5. description + autopilot + simulator
-  //
-  // All five row blocks below set explicit md:col-start / md:row-start
-  // so CSS Grid places them correctly regardless of the order classes.
   return (
-    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 items-start">
-      {/* HERO + GLOBE + CHAMPION + RAIL — middle top column. The centre
-          of gravity of the page. Mobile order 1. */}
-      <main
-        className="space-y-4 sm:space-y-5 min-w-0
-          order-1
-          md:col-span-5 md:col-start-4 md:row-start-1"
-      >
-        <section className="space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem]">
-                <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
-                Live
-              </span>
-              <span className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.4em] text-purple-300 uppercase">
-                Pythia tournament
-              </span>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap text-[0.65rem] text-mist">
-              <KiyotakaBadge />
-              <SourceBadge source={snap.source} />
-              <PhaseBadge phase={phase} />
-            </div>
-          </div>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-semibold text-slate-100 tracking-tight leading-tight">
+    <div className="space-y-3 md:space-y-4">
+      {/* COMPACT TOP STRIP — title + status badges in one row. Title is
+          intentionally small so the globe remains the centerpiece. */}
+      <header className="flex items-center justify-between gap-3 flex-wrap pb-2 border-b border-edge/40">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
+          <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem] shrink-0">
+            <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
+            Live
+          </span>
+          <h2 className="text-sm sm:text-base lg:text-lg font-semibold text-slate-100 tracking-tight">
             Events → Swarm → Champion → Your trade
           </h2>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-[0.7rem] text-mist max-w-xl">
-              Live decision loop on real Kiyotaka events. The leaderboard
-              re-ranks the moment an agent fires — page is dynamic, not a
-              static snapshot.
-            </p>
-            <div className="flex items-center gap-3 flex-wrap text-[0.65rem] text-mist num">
-              <RegimeBadge regime={snap.regime} />
-              <span>{fmt(snap.generated_at)}</span>
-            </div>
-          </div>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap text-[0.65rem] text-mist shrink-0">
+          <KiyotakaBadge />
+          <SourceBadge source={snap.source} />
+          <RegimeBadge regime={snap.regime} />
+          <PhaseBadge phase={phase} />
+          <span className="num">{fmt(snap.generated_at)}</span>
+        </div>
+      </header>
+
+      {/* MAIN GRID — 3/6/3 at md+, single col at mobile. Bottom row
+          (trade feed + scoreboard) spans full width below the three
+          sidebar columns. */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-start">
+        {/* CENTER — globe (dominant), champion, pipeline. Mobile order 1. */}
+        <main
+          className="space-y-3 md:space-y-4 min-w-0
+            order-1
+            md:col-span-6 md:col-start-4 md:row-start-1"
+        >
+          <AgentLineageGraph
+            agents={snap.agents}
+            championId={champ?.agent_id ?? null}
+            generation={snap.generation ?? 0}
+          />
+          {championCard}
+          <PipelineRail
+            pulseKey={pulseKey}
+            autopilotOn={autopilotOn}
+            openCount={openPositions.length}
+            realizedPnl={sumRealized(closedPositions)}
+            generation={snap.generation ?? 0}
+            championId={champ?.agent_id ?? null}
+            lastLatencyMs={lastLatencyMs}
+          />
+        </main>
+
+        {/* SCOREBOARD — bottom row right half on desktop, mobile order 2. */}
+        <section
+          className="min-w-0
+            order-2
+            md:col-span-6 md:col-start-7 md:row-start-2"
+        >
+          <Leaderboard agents={snap.agents} />
         </section>
 
-        <AgentLineageGraph
-          agents={snap.agents}
-          championId={champ?.agent_id ?? null}
-          generation={snap.generation ?? 0}
-        />
+        {/* TRADE FEED — bottom row left half on desktop, mobile order 3. */}
+        <section
+          className="min-w-0
+            order-3
+            md:col-span-6 md:col-start-1 md:row-start-2"
+        >
+          <LiveTradeFeed entries={feed} />
+        </section>
 
-        {championCard}
+        {/* RIGHT SIDEBAR — settings + portfolio + copy. Mobile order 4. */}
+        <aside
+          className="space-y-3 md:space-y-4 min-w-0
+            order-4
+            md:col-span-3 md:col-start-10 md:row-start-1"
+        >
+          <SettingsForm />
+          <HyperliquidPanel
+            open={openPositions}
+            closed={closedPositions}
+            marks={marks}
+            equity_usd={EQUITY_USD}
+            onClose={handleClosePosition}
+            onReset={handleReset}
+          />
+          <CopyTradePanel
+            agents={snap.agents}
+            selected={copyAgent}
+            onSelect={setCopyAgent}
+            equity_usd={EQUITY_USD}
+            risk_fraction={riskFraction}
+            btc_price={marks.BTC ?? DEFAULT_BTC}
+            eth_price={marks.ETH ?? DEFAULT_ETH}
+            reactions={reactions}
+            lastEvent={lastEvent}
+          />
+        </aside>
 
-        <PipelineRail
-          pulseKey={pulseKey}
-          autopilotOn={autopilotOn}
-          openCount={openPositions.length}
-          realizedPnl={sumRealized(closedPositions)}
-          generation={snap.generation ?? 0}
-          championId={champ?.agent_id ?? null}
-          lastLatencyMs={lastLatencyMs}
-        />
-      </main>
-
-      {/* SCOREBOARD — full-width bottom row, left half on desktop.
-          Mobile order 2. */}
-      <section
-        className="min-w-0
-          order-2
-          md:col-span-6 md:col-start-7 md:row-start-2"
-      >
-        <Leaderboard agents={snap.agents} />
-      </section>
-
-      {/* TRADE FEED — full-width bottom row, right half on desktop.
-          Mobile order 3 (after scoreboard, per user request). */}
-      <section
-        className="min-w-0
-          order-3
-          md:col-span-6 md:col-start-1 md:row-start-2"
-      >
-        <LiveTradeFeed entries={feed} />
-      </section>
-
-      {/* SETTINGS + PORTFOLIO + COPY — right top column. Mobile order 4. */}
-      <aside
-        className="space-y-4 sm:space-y-5 min-w-0
-          order-4
-          md:col-span-4 md:col-start-9 md:row-start-1"
-      >
-        <SettingsForm />
-        <HyperliquidPanel
-          open={openPositions}
-          closed={closedPositions}
-          marks={marks}
-          equity_usd={EQUITY_USD}
-          onClose={handleClosePosition}
-          onReset={handleReset}
-        />
-        <CopyTradePanel
-          agents={snap.agents}
-          selected={copyAgent}
-          onSelect={setCopyAgent}
-          equity_usd={EQUITY_USD}
-          risk_fraction={riskFraction}
-          btc_price={marks.BTC ?? DEFAULT_BTC}
-          eth_price={marks.ETH ?? DEFAULT_ETH}
-          reactions={reactions}
-          lastEvent={lastEvent}
-        />
-      </aside>
-
-      {/* DESCRIPTION + AUTOPILOT + SIMULATOR — left top column.
-          Mobile order 5 (last, since the user prioritises the trading
-          surface above the explanatory + input panels on mobile). */}
-      <aside
-        className="space-y-4 sm:space-y-5
-          order-5
-          md:col-span-3 md:col-start-1 md:row-start-1"
-      >
-        {descriptionPanel}
-        <AutoPilot
-          onFire={onFire}
-          onPrices={onPrices}
-          onStatus={setAutopilotOn}
-        />
-        <EventSimulator onFire={onFire} lastFired={lastEvent} />
-      </aside>
+        {/* LEFT SIDEBAR — description + autopilot + simulator. Mobile order 5. */}
+        <aside
+          className="space-y-3 md:space-y-4
+            order-5
+            md:col-span-3 md:col-start-1 md:row-start-1"
+        >
+          {descriptionPanel}
+          <AutoPilot
+            onFire={onFire}
+            onPrices={onPrices}
+            onStatus={setAutopilotOn}
+          />
+          <EventSimulator onFire={onFire} lastFired={lastEvent} />
+        </aside>
+      </div>
     </div>
   );
 }

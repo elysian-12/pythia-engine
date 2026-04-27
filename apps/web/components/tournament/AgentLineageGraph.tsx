@@ -685,6 +685,7 @@ export function AgentLineageGraph({
                     onPointerLeave={() =>
                       setHoveredId((cur) => (cur === n.id ? null : cur))
                     }
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {n.isChampion ? (
                       <>
