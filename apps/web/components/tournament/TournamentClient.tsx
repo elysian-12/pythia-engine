@@ -1027,12 +1027,22 @@ export function TournamentClient() {
         </div>
       </header>
 
+      {/* CHAMPION BANNER — full-width strip below the top header so
+          the champion's stat block sits in the user's eyeline before
+          the grid. Moving it out of the centre column also closes the
+          cross-column visual gap that appeared when one sidebar was
+          taller than the centre. */}
+      {championCard}
+
       {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Bottom row
           (trade feed + scoreboard) spans full width below the three
           sidebar columns. Center column is 7/12 (~58%) so the globe
           dominates the page like a price chart. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-start">
-        {/* CENTER — globe (dominant), champion, pipeline. Mobile order 1. */}
+        {/* CENTER — globe + pipeline. Champion card now lives at the
+            top as a full-width banner (see above the grid) so it
+            covers the cross-column gap that used to appear when one
+            sidebar was taller than this main column. Mobile order 1. */}
         <main
           className="space-y-3 md:space-y-4 min-w-0
             order-1
@@ -1043,7 +1053,6 @@ export function TournamentClient() {
             championId={champ?.agent_id ?? null}
             generation={snap.generation ?? 0}
           />
-          {championCard}
           <PipelineRail
             pulseKey={pulseKey}
             autopilotOn={autopilotOn}

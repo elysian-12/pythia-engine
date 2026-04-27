@@ -258,6 +258,44 @@ function CertBlock({ snap }: { snap: SwarmSnapshot }) {
                 }
                 help="Rolling Sharpe of per-trade R. Becomes a certified PSR/DSR once the trade history supports a block-bootstrap CI."
               />
+              <CertCard
+                label="E[R] / trade"
+                value={`${(champ.expectancy_r ?? 0) >= 0 ? "+" : ""}${(champ.expectancy_r ?? 0).toFixed(3)}`}
+                tone={(champ.expectancy_r ?? 0) >= 0 ? "pos" : "neg"}
+                help="Expectancy — average R-multiple per trade. > 0 means each trade is positive in expectation."
+              />
+              <CertCard
+                label="Profit factor"
+                value={
+                  champ.profit_factor != null && Number.isFinite(champ.profit_factor)
+                    ? champ.profit_factor.toFixed(2)
+                    : "—"
+                }
+                tone={
+                  (champ.profit_factor ?? 0) >= 1.5
+                    ? "pos"
+                    : (champ.profit_factor ?? 0) >= 1
+                      ? "amber"
+                      : "neg"
+                }
+                help="Gross win R / gross loss R. ≥ 1.5 is the systematic-strategy bar."
+              />
+              <CertCard
+                label="Max drawdown"
+                value={
+                  champ.max_drawdown_r != null
+                    ? `-${champ.max_drawdown_r.toFixed(2)}R`
+                    : "—"
+                }
+                tone={
+                  champ.max_drawdown_r != null && champ.max_drawdown_r < 5
+                    ? "pos"
+                    : champ.max_drawdown_r != null && champ.max_drawdown_r < 10
+                      ? "amber"
+                      : "neg"
+                }
+                help="Largest peak-to-trough drop in cumulative R. Measures how deep the system went underwater before recovering."
+              />
             </div>
           </>
         ) : (

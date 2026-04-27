@@ -54,7 +54,7 @@ function TickerCell({ label, px }: { label: string; px: number | null }) {
 function MiniSpark({ points }: { points: EquityPoint[] }) {
   if (points.length < 2) return null;
   const w = 600;
-  const h = 110;
+  const h = 160;
   const xs = points.map((p) => p.ts);
   const ys = points.map((p) => p.equity);
   const xMin = Math.min(...xs);
@@ -79,7 +79,7 @@ function MiniSpark({ points }: { points: EquityPoint[] }) {
     <svg
       viewBox={`0 0 ${w} ${h}`}
       preserveAspectRatio="none"
-      className="w-full h-[110px] block"
+      className="w-full h-[160px] block"
     >
       <defs>
         <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
@@ -228,7 +228,7 @@ export function LandingDashboard() {
               "linear-gradient(90deg, transparent, rgba(245,158,11,0.6), rgba(126,34,206,0.6), rgba(34,211,238,0.6), transparent)",
           }}
         />
-        <div className="relative">
+        <div className="relative max-w-6xl mx-auto">
           <div className="flex items-start justify-between flex-wrap gap-6">
             <div className="flex items-start gap-5 max-w-3xl">
               <PythiaLogo size={72} className="hidden md:block mt-1" />
@@ -278,8 +278,9 @@ export function LandingDashboard() {
             </div>
           </div>
 
-          {/* Headline numbers */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-4">
+          {/* Headline numbers — 2x2 on desktop so the hero feels
+              vertical rather than a single stretched row. */}
+          <div className="grid grid-cols-2 lg:grid-cols-2 gap-2 sm:gap-3 mt-4 max-w-2xl">
             <Stat
               label="365-day backtest"
               value={fmtUsd(STARTING_EQUITY)}
@@ -337,11 +338,17 @@ export function LandingDashboard() {
         </div>
       </section>
 
-      {/* User settings — drives sizing in the auto-replay below */}
-      <TradeSettingsPanel />
-
-      {/* Auto-replay live demo loop */}
-      <AutoReplay snap={snap} />
+      {/* TradeSettings ⇄ AutoReplay — side-by-side at 3/9 split on
+          desktop so the small input widget hugs the left edge while
+          the demo loop fills the rest of the row. Stacks on mobile. */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 items-start">
+        <div className="lg:col-span-3">
+          <TradeSettingsPanel />
+        </div>
+        <div className="lg:col-span-9">
+          <AutoReplay snap={snap} />
+        </div>
+      </div>
 
       {/* Champion + agent leaderboard */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
