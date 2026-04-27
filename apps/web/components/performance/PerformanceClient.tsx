@@ -51,7 +51,7 @@ export function PerformanceClient() {
   return (
     <div className="max-w-[110rem] mx-auto space-y-3 sm:space-y-4">
       <Header snap={snap} />
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-stretch">
         <div className="lg:col-span-7">
           <CertBlock snap={snap} />
         </div>
@@ -79,7 +79,7 @@ function Header({ snap }: { snap: SwarmSnapshot }) {
     0,
   );
   return (
-    <section className="panel p-3 sm:p-4">
+    <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="flex items-baseline gap-3 flex-wrap mb-1.5">
         <span className="chip chip-cyan text-[0.6rem]">
           deployed snapshot
@@ -183,7 +183,7 @@ function CertBlock({ snap }: { snap: SwarmSnapshot }) {
     const CERT_THRESHOLD = 60;
     const pct = Math.min(100, (trades / CERT_THRESHOLD) * 100);
     return (
-      <section className="panel p-3 sm:p-4">
+      <section className="panel p-3 sm:p-4 h-full flex flex-col">
         <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
           <div className="text-xs uppercase tracking-[0.3em] text-mist">
             Track record
@@ -320,7 +320,7 @@ function CertBlock({ snap }: { snap: SwarmSnapshot }) {
   const ciCleared =
     cert.sharpe_ci_lo != null && cert.sharpe_ci_lo > 0;
   return (
-    <section className="panel p-3 sm:p-4">
+    <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
           Statistical certification
@@ -420,7 +420,7 @@ function FamilyRollup({ agents }: { agents: AgentStats[] }) {
   }, [agents]);
   const maxR = Math.max(1, ...fams.map((f) => Math.abs(f.r)));
   return (
-    <section className="panel p-3 sm:p-4">
+    <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Per-family contribution
       </div>
@@ -485,7 +485,7 @@ function TopAgentsScatter({ agents }: { agents: AgentStats[] }) {
   }
   const maxTrades = Math.max(...eligible.map((a) => a.wins + a.losses));
   return (
-    <section className="panel p-3 sm:p-4">
+    <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Top 24 agents · skill scatter
       </div>
@@ -549,7 +549,7 @@ function RDistribution({ agents }: { agents: AgentStats[] }) {
     .slice(0, 12);
   if (rows.length === 0) return null;
   return (
-    <section className="panel p-3 sm:p-4">
+    <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Win/loss R balance · top 12
       </div>

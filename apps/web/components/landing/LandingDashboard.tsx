@@ -228,11 +228,17 @@ export function LandingDashboard() {
               "linear-gradient(90deg, transparent, rgba(245,158,11,0.6), rgba(126,34,206,0.6), rgba(34,211,238,0.6), transparent)",
           }}
         />
-        <div className="relative max-w-6xl mx-auto">
-          <div className="flex items-start justify-between flex-wrap gap-6">
-            <div className="flex items-start gap-5 max-w-3xl">
-              <PythiaLogo size={72} className="hidden md:block mt-1" />
-              <div>
+        <div className="relative">
+          {/* Hero is now a 12-col grid that fills the panel: title +
+              description on the left (cols 1-7), then stats 2x2 +
+              ticker + CTAs stacked on the right (cols 8-12). The
+              equity chart stretches full-width below. No more empty
+              right half on a wide monitor. */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
+            {/* LEFT — title block */}
+            <div className="lg:col-span-7 flex items-start gap-5">
+              <PythiaLogo size={72} className="hidden md:block mt-1 shrink-0" />
+              <div className="min-w-0">
                 <div className="flex items-center gap-3 text-[0.6rem] tracking-[0.4em] uppercase">
                   <span className="text-amber-300">Pythia</span>
                   <span className="text-mist/60">·</span>
@@ -250,7 +256,7 @@ export function LandingDashboard() {
                     Every Kiyotaka event becomes a trade.
                   </span>
                 </h2>
-                <p className="mt-2 text-xs md:text-sm text-mist max-w-2xl leading-relaxed">
+                <p className="mt-2 text-xs md:text-sm text-mist leading-relaxed">
                   Liquidations, funding, hourly candles, volume, and Polymarket
                   leadership all stream from Kiyotaka into the swarm. Each
                   agent votes; the scoreboard picks the champion; the champion
@@ -259,28 +265,29 @@ export function LandingDashboard() {
                 </p>
               </div>
             </div>
-            <div className="space-y-3 text-right">
-              <MarkTicker marks={marks} />
-              <Link
-                href="/tournament"
-                className="inline-flex items-center gap-1.5 chip chip-cyan hover:opacity-80 transition-opacity"
-              >
-                Open tournament →
-              </Link>
-              <div>
-                <Link
-                  href="/performance"
-                  className="inline-block text-[0.65rem] text-mist tracking-widest uppercase hover:text-slate-200"
-                >
-                  Performance audit →
-                </Link>
-              </div>
-            </div>
-          </div>
 
-          {/* Headline numbers — 2x2 on desktop so the hero feels
-              vertical rather than a single stretched row. */}
-          <div className="grid grid-cols-2 lg:grid-cols-2 gap-2 sm:gap-3 mt-4 max-w-2xl">
+            {/* RIGHT — ticker, CTAs, stats. Fills the right half of
+                the hero so it doesn't read as one wide column with a
+                bare wall on the right. */}
+            <div className="lg:col-span-5 space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <MarkTicker marks={marks} />
+                <div className="flex items-center gap-3">
+                  <Link
+                    href="/tournament"
+                    className="inline-flex items-center gap-1.5 chip chip-cyan hover:opacity-80 transition-opacity"
+                  >
+                    Open tournament →
+                  </Link>
+                  <Link
+                    href="/performance"
+                    className="text-[0.65rem] text-mist tracking-widest uppercase hover:text-slate-200"
+                  >
+                    Audit →
+                  </Link>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Stat
               label="365-day backtest"
               value={fmtUsd(STARTING_EQUITY)}
@@ -321,6 +328,8 @@ export function LandingDashboard() {
               }
               tone="cyan"
             />
+              </div>
+            </div>
           </div>
 
           {/* Equity curve */}

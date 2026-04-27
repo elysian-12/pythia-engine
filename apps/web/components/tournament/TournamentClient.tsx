@@ -1035,16 +1035,15 @@ export function TournamentClient() {
       {championCard}
 
       {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Trade feed
-          and scoreboard live INSIDE the center column as a nested
-          2-col grid; this kills the L-shape gap that used to appear
-          when one sidebar ran taller than the centre and a separate
-          full-width row 2 had to wait for the tallest column. */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-start">
-        {/* CENTER — globe → pipeline → (scoreboard | trade feed).
-            Tallest column on the page; sidebars sit alongside without
-            forcing a separate bottom row. Mobile order 1. */}
+          + scoreboard span the full page width below the 3 sidebar
+          columns. Sidebars use h-full + flex flex-col with the last
+          panel growing to fill remaining height — that closes the
+          L-shape gap that used to appear below a short sidebar
+          before row 2 began. */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-stretch">
+        {/* CENTER — globe + pipeline. Mobile order 1. */}
         <main
-          className="space-y-3 md:space-y-4 min-w-0
+          className="space-y-3 md:space-y-4 min-w-0 h-full flex flex-col
             order-1
             md:col-span-7 md:col-start-3 md:row-start-1"
         >
@@ -1062,15 +1061,25 @@ export function TournamentClient() {
             championId={champ?.agent_id ?? null}
             lastLatencyMs={lastLatencyMs}
           />
-          {/* Bottom feed row — nested 2-col so they sit side-by-side
-              on md+ but stack on mobile. DOM order is scoreboard,
-              trade feed so mobile shows scoreboard first per the
-              user's preference. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-            <Leaderboard agents={snap.agents} />
-            <LiveTradeFeed entries={feed} />
-          </div>
         </main>
+
+        {/* SCOREBOARD — full-width bottom row, left half. Mobile order 4. */}
+        <section
+          className="min-w-0
+            order-4
+            md:col-span-6 md:col-start-1 md:row-start-2"
+        >
+          <Leaderboard agents={snap.agents} />
+        </section>
+
+        {/* TRADE FEED — full-width bottom row, right half. Mobile order 5. */}
+        <section
+          className="min-w-0
+            order-5
+            md:col-span-6 md:col-start-7 md:row-start-2"
+        >
+          <LiveTradeFeed entries={feed} />
+        </section>
 
         {/* RIGHT SIDEBAR — settings/portfolio tabs + copy. Mobile order 2.
             The two tabs share the cell so the user never has both at

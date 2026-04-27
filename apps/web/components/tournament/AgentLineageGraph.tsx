@@ -58,7 +58,7 @@ const CENTER_Y = HEIGHT / 2;
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 4;
 const TAP_VS_DRAG_THRESHOLD = 8;
-const PARTICLE_COUNT = 220;
+const PARTICLE_COUNT = 360;
 
 // Family colors used to tint the background particle cloud. Excludes
 // "other" so the cloud stays vivid (no slate/grey particles).
@@ -203,12 +203,18 @@ export function AgentLineageGraph({
       const family = PARTICLE_FAMILIES[
         Math.floor(rng() * PARTICLE_FAMILIES.length)
       ];
+      // rOffset spans 0.4 to 1.55 of the sphere radius — about a
+      // third of the cloud sits inside the orb, the rest forms an
+      // outer halo so the brain feels three-dimensional rather than
+      // shrink-wrapped to the surface.
+      const inner = rng();
+      const rOffset = inner < 0.35 ? 0.4 + rng() * 0.45 : 1.0 + rng() * 0.55;
       list.push({
         lon: (rng() - 0.5) * 2 * Math.PI,
         lat: (rng() - 0.5) * Math.PI,
-        rOffset: 0.6 + rng() * 0.5,
+        rOffset,
         color: FAMILY_COLORS[family],
-        size: 0.5 + rng() * 1.6,
+        size: 0.5 + rng() * 1.8,
         phase: rng() * Math.PI * 2,
       });
     }
