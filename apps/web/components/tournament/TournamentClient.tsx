@@ -667,53 +667,55 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* HERO Arena */}
-      <section className="relative rounded-2xl overflow-hidden h-[60vh] -mx-6 md:mx-0 border border-edge/60">
+      <section className="relative rounded-2xl overflow-hidden h-[55vh] sm:h-[60vh] -mx-4 sm:-mx-6 md:mx-0 border border-edge/60">
         <Arena agents={snap.agents} generation={snap.generation ?? 0} />
-        <div className="pointer-events-none absolute top-0 left-0 right-0 p-5 flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2">
+        <div className="pointer-events-none absolute top-0 left-0 right-0 p-3 sm:p-5 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem]">
                 <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
                 Live
               </span>
-              <span className="text-[0.65rem] tracking-[0.4em] text-purple-300 uppercase">
+              <span className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.4em] text-purple-300 uppercase">
                 Pythia tournament
               </span>
             </div>
-            <h2 className="text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight">
+            <h2 className="text-xl sm:text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight leading-tight">
               Events → Swarm → Champion → Your trade
             </h2>
-            <p className="mt-2 text-[0.7rem] text-mist max-w-xl">
+            <p className="hidden sm:block mt-2 text-[0.7rem] text-mist max-w-xl">
               Live decision loop on real Kiyotaka events. The leaderboard
               re-ranks the moment an agent fires — page is dynamic, not a
               static snapshot.
             </p>
           </div>
-          <div className="text-right space-y-1 pointer-events-auto">
+          <div className="text-right space-y-1 pointer-events-auto shrink-0">
             <KiyotakaBadge />
-            <SourceBadge source={snap.source} />
+            <div className="hidden sm:block">
+              <SourceBadge source={snap.source} />
+            </div>
             <RegimeBadge regime={snap.regime} />
-            <div className="text-[0.65rem] text-mist num">
+            <div className="hidden sm:block text-[0.65rem] text-mist num">
               {fmt(snap.generated_at)}
             </div>
-            <div>
+            <div className="hidden md:block">
               <PhaseBadge phase={phase} />
             </div>
           </div>
         </div>
 
         {champ ? (
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-5 flex items-end justify-between">
-            <div className="panel px-4 py-3 pointer-events-auto backdrop-blur-sm bg-black/30">
-              <div className="text-[0.65rem] tracking-[0.4em] text-amber uppercase">
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-3 sm:p-5 flex items-end justify-between">
+            <div className="panel px-3 py-2 sm:px-4 sm:py-3 pointer-events-auto backdrop-blur-sm bg-black/40 max-w-[92%] sm:max-w-none overflow-hidden">
+              <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
                 Current champion
               </div>
-              <div className="mt-1 text-lg font-mono text-slate-100">
+              <div className="mt-1 text-sm sm:text-lg font-mono text-slate-100 truncate">
                 {champ.agent_id}
               </div>
-              <div className="grid grid-cols-4 gap-x-5 gap-y-1 text-xs mt-2 num">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-2 num">
                 <span>
                   <span className="text-mist">Σ R</span>{" "}
                   <span
@@ -743,7 +745,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                       : "—"}
                   </span>
                 </span>
-                <span title="Profit factor — gross win R / gross loss R">
+                <span className="hidden sm:inline" title="Profit factor — gross win R / gross loss R">
                   <span className="text-mist">PF</span>{" "}
                   <span
                     className={
@@ -759,7 +761,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                       : "—"}
                   </span>
                 </span>
-                <span title="Sharpe of per-trade R + 95% block-bootstrap CI">
+                <span className="hidden sm:inline" title="Sharpe of per-trade R + 95% block-bootstrap CI">
                   <span className="text-mist">Sharpe</span>{" "}
                   <span
                     className={
@@ -782,7 +784,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 </span>
                 {snap.champion_certification ? (
                   <>
-                    <span title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
+                    <span className="hidden sm:inline" title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
                       <span className="text-mist">PSR</span>{" "}
                       <span
                         className={
@@ -796,7 +798,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                         {snap.champion_certification.psr.toFixed(2)}
                       </span>
                     </span>
-                    <span title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias across the swarm">
+                    <span className="hidden sm:inline" title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias across the swarm">
                       <span className="text-mist">DSR</span>{" "}
                       <span
                         className={
@@ -814,12 +816,12 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 ) : null}
               </div>
               {snap.champion_certification ? (
-                <div className="mt-2">
+                <div className="mt-2 hidden sm:block">
                   <CertificationBadge cert={snap.champion_certification} />
                 </div>
               ) : null}
             </div>
-            <div className="flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[380px]">
+            <div className="hidden md:flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[380px]">
               {Object.entries(FAMILY_COLORS)
                 .filter(
                   ([k]) =>
@@ -861,7 +863,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           and have no entry point. */}
       <section
         aria-label="Quick start"
-        className="rounded-md border border-royal/30 bg-royal/5 px-4 py-3 flex items-center flex-wrap gap-x-6 gap-y-2 text-[0.75rem]"
+        className="rounded-md border border-royal/30 bg-royal/5 px-3 sm:px-4 py-3 flex items-start sm:items-center flex-wrap gap-x-4 sm:gap-x-6 gap-y-2 text-[0.7rem] sm:text-[0.75rem]"
       >
         <span className="text-[0.6rem] tracking-[0.4em] uppercase text-purple-300">
           Start here
@@ -888,7 +890,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           visitor knows what each column is for at a glance. Order chosen
           to match the natural left-to-right reading flow: configure →
           observe positions → review history. */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-start">
         {/* CONTROLS */}
         <section
           id="zone-controls"

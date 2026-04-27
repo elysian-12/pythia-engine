@@ -84,8 +84,18 @@ export type SimReaction = {
  *
  *  This is a coarse model of the real Rust SystematicAgent set — individual
  *  agents have varying calibrated thresholds (2.0…3.0). The simulator
- *  averages those into a single trip-point per family. */
-const TRIGGER_Z = 2.0;
+ *  averages those into a single trip-point per family.
+ *
+ *  Lowered from 2.0 → 1.5 in tandem with the /api/signals threshold
+ *  drops (liq-spike rz ≥ 1.7, funding ≥ 1.7, real liqs ≥ 1.8). The
+ *  prior 2.0 trigger meant real Kiyotaka events at z=1.7-1.9 fired the
+ *  rail but produced *zero* reacted agents — leaderboard, peer-view,
+ *  and router all saw an empty reaction set, so the page looked
+ *  unresponsive even though detection was working. The Rust systematic
+ *  agents apply their own per-family z_threshold inside decide(),
+ *  which is the actual gate; this UI mirror just needs to be
+ *  permissive enough that the rail visibly responds. */
+const TRIGGER_Z = 1.5;
 
 export function simulateReactions(
   ev: SimEvent,

@@ -8,12 +8,14 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-3">
         Scoreboard · ranked by Σ R
       </div>
-      <div className="max-h-[520px] overflow-auto">
+      <div className="max-h-[520px] overflow-auto -mx-1 px-1">
         <table className="w-full text-xs">
           <caption className="sr-only">
             Pythia agent scoreboard, ranked by total R-multiple (Σ R).
             Columns: trades, win rate, Σ R, expectancy E[R], profit
-            factor, Sharpe, max drawdown, PnL in dollars.
+            factor, Sharpe, max drawdown, PnL in dollars. Secondary
+            stats (E[R], PF, Sharpe, Max DD, PnL$) are hidden on
+            mobile to keep the table within ~360 px viewports.
           </caption>
           <thead className="text-[0.65rem] text-mist uppercase sticky top-0 bg-panel">
             <tr>
@@ -30,33 +32,33 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
               <th scope="col" className="text-right py-2 pr-2" title="Σ R-multiple">Σ R</th>
               <th
                 scope="col"
-                className="text-right py-2 pr-2"
+                className="hidden md:table-cell text-right py-2 pr-2"
                 title="Average R per trade (Van Tharp expectancy)"
               >
                 E[R]
               </th>
               <th
                 scope="col"
-                className="text-right py-2 pr-2"
+                className="hidden md:table-cell text-right py-2 pr-2"
                 title="Profit factor = gross win R / gross loss R"
               >
                 PF
               </th>
               <th
                 scope="col"
-                className="text-right py-2 pr-2"
+                className="hidden md:table-cell text-right py-2 pr-2"
                 title="Sharpe of per-trade R-multiples"
               >
                 Sharpe
               </th>
               <th
                 scope="col"
-                className="text-right py-2 pr-2"
+                className="hidden md:table-cell text-right py-2 pr-2"
                 title="Max drawdown in cumulative R"
               >
                 Max DD
               </th>
-              <th scope="col" className="text-right py-2">PnL $</th>
+              <th scope="col" className="hidden sm:table-cell text-right py-2">PnL $</th>
             </tr>
           </thead>
           <tbody className="num">
@@ -104,7 +106,7 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                     {a.total_r.toFixed(2)}
                   </td>
                   <td
-                    className={`py-1.5 pr-2 text-right ${
+                    className={`hidden md:table-cell py-1.5 pr-2 text-right ${
                       (a.expectancy_r ?? 0) > 0
                         ? "text-green"
                         : (a.expectancy_r ?? 0) < 0
@@ -117,7 +119,7 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                       : "—"}
                   </td>
                   <td
-                    className={`py-1.5 pr-2 text-right ${
+                    className={`hidden md:table-cell py-1.5 pr-2 text-right ${
                       (a.profit_factor ?? 0) >= 1.5
                         ? "text-green"
                         : (a.profit_factor ?? 0) >= 1.0
@@ -134,7 +136,7 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                         : "∞"}
                   </td>
                   <td
-                    className={`py-1.5 pr-2 text-right ${
+                    className={`hidden md:table-cell py-1.5 pr-2 text-right ${
                       a.rolling_sharpe > 0.5
                         ? "text-green"
                         : a.rolling_sharpe > 0
@@ -148,12 +150,12 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
                       ? a.rolling_sharpe.toFixed(2)
                       : "—"}
                   </td>
-                  <td className="py-1.5 pr-2 text-right text-mist">
+                  <td className="hidden md:table-cell py-1.5 pr-2 text-right text-mist">
                     {a.max_drawdown_r !== undefined
                       ? `-${a.max_drawdown_r.toFixed(2)}`
                       : "—"}
                   </td>
-                  <td className={`py-1.5 text-right ${rClass}`}>
+                  <td className={`hidden sm:table-cell py-1.5 text-right ${rClass}`}>
                     {a.total_pnl_usd >= 0 ? "+" : ""}
                     {a.total_pnl_usd.toFixed(0)}
                   </td>
