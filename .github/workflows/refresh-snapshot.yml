@@ -1,13 +1,14 @@
 name: Refresh swarm snapshot
 
 on:
-  # 2-hour cadence: 12 runs/day, ~24 runner-min/day after the cache
-  # is warm. Cheap, gets the snapshot reasonably fresh for demos
-  # without filling the Actions UI with hundreds of run rows. Bump
-  # back to '*/30 * * * *' if you want minute-fresh evolution; switch
-  # to a Railway/Fly.io daemon ($5/mo) for continuous evolution.
+  # Hourly cadence: 24 runs/day, ~48 runner-min/day after the cache is
+  # warm. Balanced for demo + research use — fresh enough that the
+  # leaderboard shifts visibly between sessions, light enough that the
+  # Actions UI stays scannable. Bump to '*/30 * * * *' for minute-fresh
+  # evolution; switch to a Railway/Fly.io daemon ($5/mo) for true
+  # continuous evolution without the commit churn.
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
