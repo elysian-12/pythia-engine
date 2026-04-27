@@ -225,21 +225,27 @@ self-backtest gate; threading the same per-kind expectancy table into
 `Scoreboard::champion_for_kind()` is the next-pass migration so the
 live executor can use the same policy without TS-side mirroring.
 
-### Portfolio meta-agent — knowing when to sell
+### Portfolio meta-agent — exits + portfolio balancing
 
-The router decides which specialist to follow on entry. The portfolio
+The router decides which specialist to follow on entry. The
 meta-agent in [`apps/web/lib/portfolio.ts`](apps/web/lib/portfolio.ts)
-manages everything else: caps simultaneous positions
-(`max_open_positions`), refuses entries below `min_conviction`, closes
-opposite positions on reversal signals, trails the stop to break-even
-once unrealized R clears `trail_after_r`, force-exits stale positions
-at `time_stop_hours`, and closes existing exposure when the swarm
-votes opposite at ≥ `swarm_flip_conviction`. Closes carry distinct
-chips (`stop` / `take profit` / `trail` / `time` / `reverse` / `swarm
-flip` / `manual`) so a session log shows whether the loop is closing
-in profit or being walked out by risk-management exits. All five
-thresholds are user-configurable in the Settings panel and persist
-through `/api/config`. Detailed rules in [SWARM.md](SWARM.md#portfolio-meta-agent--exits--position-management).
+handles everything *after* — both exits and portfolio-level risk:
+
+- **Exits** — stepped trailing stop (1R→BE, 2R→+1R, 3R→+2R, 4R→+3R,
+  6R→+5R), `time_stop_hours` force-exit, swarm-flip close when the
+  swarm votes opposite at ≥ `swarm_flip_conviction`, plus a
+  `min_hold_minutes` floor so fresh entries can't be cut at $0.
+- **Balancing** — `max_open_positions` cap; `min_conviction` floor on
+  entries; correlation-aware sizing (BTC and ETH ≈ 0.7-correlated
+  → second-asset notional × `correlation_size_factor`); session
+  drawdown circuit-breaker that halts new entries below
+  `−max_session_dd_pct × equity` (reversals still allowed).
+
+Closes carry distinct chips (`stop` / `take profit` / `trail` /
+`time` / `reverse` / `swarm flip` / `manual`) so the session log
+shows whether the loop is closing in profit or being walked out.
+Every threshold is exposed in Settings and persists through
+`/api/config`. Detailed rules in [SWARM.md](SWARM.md#portfolio-meta-agent--exits--position-management).
 
 ### Verification — the steps in the UI actually do what they say
 
