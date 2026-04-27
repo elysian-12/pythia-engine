@@ -97,6 +97,25 @@ function familyColorOrFallback(agentId: string): THREE.Color {
   return new THREE.Color(hex);
 }
 
+/** Lighten a hex color by blending toward white. Used both inside
+ *  the WebGL scene (for satellite materials) and in the HTML legend
+ *  so the swatch chips match what the user sees on the canvas.
+ *  amount = 0 returns the original color; 1 returns pure white. */
+function pastelHex(hex: string, amount = 0.55): string {
+  const h = hex.replace("#", "");
+  if (h.length !== 6) return hex;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const mix = (c: number) => Math.round(c + (255 - c) * amount);
+  const toHex = (c: number) => c.toString(16).padStart(2, "0");
+  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`;
+}
+
+function pastelColor(hex: string, amount = 0.55): THREE.Color {
+  return new THREE.Color(pastelHex(hex, amount));
+}
+
 function softSprite(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = c.height = 64;
@@ -131,6 +150,11 @@ type AgentRecord = {
   isChampion: boolean;
   r: number;
   theta: number;
+  /** Multiplier on particle omega — always < 1 so satellites trail
+   *  the dust. Scales 0.4 (weakest R) → 0.85 (strongest R) inside
+   *  the live snapshot, so high-R agents catch up to the dust faster
+   *  than the laggards. */
+  omegaScale: number;
   group: THREE.Group;
   planet: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   halo: THREE.Sprite;
@@ -342,15 +366,36 @@ export function AgentLineageGraph({
 
     function buildAgents(list: AgentStats[], champion: string | null) {
       clearAgents();
+      // Tag the sun with the champion's id so the raycaster can pick
+      // it just like a satellite. Cleared when there's no champion.
+      const championId = champion ?? "";
+      sunCore.userData.agentId = championId;
+      sunGlow.userData.agentId = championId;
+
       // Sort by total_r so the strongest agents sit on the inner arms,
       // weakest on the rim — reads as a pecking order around the sun.
       const ranked = [...list]
         .filter((a) => a.agent_id !== champion)
         .sort((a, b) => b.total_r - a.total_r);
       const N = ranked.length;
+      // Normalize total_r across the live snapshot so the strongest
+      // agents tick at ~0.85x particle speed and the weakest at
+      // ~0.4x. All satellites trail the dust per the user's brief.
+      const rs = ranked.map((a) => a.total_r);
+      const minR = rs.length > 0 ? Math.min(...rs) : 0;
+      const maxR = rs.length > 0 ? Math.max(...rs) : 1;
+      const range = Math.max(1e-3, maxR - minR);
       ranked.forEach((a, i) => {
         const fam = agentFamily(a.agent_id);
-        const baseColor = familyColorOrFallback(a.agent_id);
+        const familyHex =
+          (FAMILY_COLORS as Record<string, string>)[fam] ?? "#94a3b8";
+        const baseColor = new THREE.Color(familyHex);
+        // Pastel-shifted version for the planet body + halo + ring so
+        // satellites read as soft accents rather than hard primaries
+        // that fight the warm core / purple rim of the galaxy.
+        const pastel = pastelColor(familyHex, 0.55);
+        const planetColor = pastelColor(familyHex, 0.7); // even softer
+
         // Distribute across mid → outer arms, skip the very core.
         const rNorm = N <= 1 ? 0.6 : 0.32 + (i / (N - 1)) * 0.62;
         const r = rNorm * GALAXY_RADIUS;
@@ -362,23 +407,25 @@ export function AgentLineageGraph({
         const group = new THREE.Group();
         const planet = new THREE.Mesh(
           new THREE.SphereGeometry(0.07, 16, 16),
-          new THREE.MeshBasicMaterial({ color: 0xffffff }),
+          new THREE.MeshBasicMaterial({ color: planetColor }),
         );
         group.add(planet);
         const haloMat = new THREE.SpriteMaterial({
           map: sprite,
-          color: baseColor,
+          color: pastel,
           transparent: true,
-          opacity: 0.6,
+          // Soft halo — opacity steps up on hover/select via the
+          // animation loop, so the resting state can be very subtle.
+          opacity: 0.32,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
         const halo = new THREE.Sprite(haloMat);
-        halo.scale.set(0.4, 0.4, 1);
+        halo.scale.set(0.5, 0.5, 1);
         group.add(halo);
 
         const ringMat = new THREE.MeshBasicMaterial({
-          color: baseColor,
+          color: pastel,
           transparent: true,
           opacity: 0,
           depthWrite: false,
@@ -399,6 +446,11 @@ export function AgentLineageGraph({
 
         agentGroup.add(group);
 
+        const normR = Math.max(0, Math.min(1, (a.total_r - minR) / range));
+        // 0.4 (weakest R) → 0.85 (strongest R). Both bounds < 1.0
+        // so every satellite trails the particle dust.
+        const omegaScale = 0.4 + 0.45 * normR;
+
         records.push({
           id: a.agent_id,
           family: fam,
@@ -406,6 +458,7 @@ export function AgentLineageGraph({
           isChampion: false,
           r,
           theta,
+          omegaScale,
           group,
           planet,
           halo,
@@ -512,15 +565,18 @@ export function AgentLineageGraph({
       ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
-      // Build a flat list of pickable meshes with userData.
-      const candidates: THREE.Object3D[] = [];
+      // Build a flat list of pickable meshes with userData. The sun
+      // (champion) is tagged by buildAgents with the champion's
+      // agent_id; including it here lets the user tap the centre to
+      // open the champion's details panel.
+      const candidates: THREE.Object3D[] = [sunCore, sunGlow];
       for (const r of records) {
         candidates.push(r.planet, r.halo);
       }
       const hits = raycaster.intersectObjects(candidates, false);
       for (const h of hits) {
         const id = h.object.userData?.agentId;
-        if (typeof id === "string") return id;
+        if (typeof id === "string" && id.length > 0) return id;
       }
       return null;
     }
@@ -581,9 +637,11 @@ export function AgentLineageGraph({
       sunGlowMat.opacity = 0.85 + 0.1 * Math.sin(t * 1.1);
 
       // Decay activity and reposition each satellite along its arm.
+      // omegaScale (0.4–0.85) keeps satellites slower than the
+      // particle dust, with high-R agents catching up faster.
       for (const rec of records) {
         rec.activity *= 0.93;
-        const ang = rec.theta + t * omegaAt(rec.r);
+        const ang = rec.theta + t * omegaAt(rec.r) * rec.omegaScale;
         rec.group.position.set(
           Math.cos(ang) * rec.r,
           0,
@@ -846,7 +904,11 @@ export function AgentLineageGraph({
         ) : null}
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-3 text-[0.6rem] text-mist">
+      {/* Family legend — pastel swatches matching the soft satellite
+          colors on the canvas, plus a live count of agents in each
+          family from the current snapshot. Hover any chip for the
+          family's full description (FAMILY_LABEL). */}
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1 text-[0.6rem] text-mist">
         {(
           [
             "liq-trend",
@@ -858,17 +920,34 @@ export function AgentLineageGraph({
             "polyfusion",
             "llm",
           ] as const
-        ).map((f) => (
-          <span key={f} className="inline-flex items-center gap-1.5">
+        ).map((f) => {
+          const hex = (FAMILY_COLORS as Record<string, string>)[f];
+          const pastel = pastelHex(hex, 0.55);
+          const count = frozenAgents.filter(
+            (a) => agentFamily(a.agent_id) === f,
+          ).length;
+          return (
             <span
-              className="inline-block w-2 h-2 rounded-full"
-              style={{
-                background: (FAMILY_COLORS as Record<string, string>)[f],
-              }}
-            />
-            <span className="font-mono uppercase tracking-widest">{f}</span>
-          </span>
-        ))}
+              key={f}
+              className="inline-flex items-center gap-1.5"
+              title={FAMILY_LABEL[f]}
+            >
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                style={{
+                  background: pastel,
+                  boxShadow: `0 0 6px ${pastel}`,
+                }}
+              />
+              <span className="font-mono uppercase tracking-widest truncate">
+                {f}
+              </span>
+              {count > 0 ? (
+                <span className="num text-mist/60 shrink-0">{count}</span>
+              ) : null}
+            </span>
+          );
+        })}
       </div>
     </section>
   );
