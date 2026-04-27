@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-snapshot.yml'
+      - 'crates/swarm/**'
+      - 'crates/ingest/**'
+      - 'apps/web/scripts/bundle-snapshot.mjs'
 
 concurrency:
   group: refresh-snapshot
