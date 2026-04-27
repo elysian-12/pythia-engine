@@ -12,7 +12,7 @@ type SignalsResponse = {
   partial?: { btc: string | null; eth: string | null } | null;
 };
 
-type Status = "idle" | "running" | "error";
+type Status = "running" | "paused" | "error";
 
 type Props = {
   onFire: (ev: SimEvent) => void;
@@ -20,19 +20,34 @@ type Props = {
   onStatus?: (running: boolean) => void;
 };
 
+// Live-feed cadence presets. Default lands on 30s — long enough that
+// Kiyotaka's per-IP rate limit (~10 req/s, 600 req/min) never bites
+// even with the parallel funding/candles fan-out, short enough that a
+// fresh visitor sees the rail pulse within half a minute.
 const INTERVALS = [15, 30, 60, 120, 300] as const;
 type IntervalSec = (typeof INTERVALS)[number];
+const DEFAULT_INTERVAL_SEC: IntervalSec = 30;
 
 export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
-  const [status, setStatus] = useState<Status>("idle");
-  const [intervalSec, setIntervalSec] = useState<IntervalSec>(30);
+  // Live by default — no manual start. The cron is a self-managing
+  // setInterval that wakes up every `intervalSec` seconds, calls
+  // `/api/signals`, and dispatches new SimEvents downstream. Users can
+  // tap Pause if they want to freeze the page (e.g. for a screenshot)
+  // but the friction-free path is "open the page → swarm is already
+  // working". The schedule UI was confusing visitors and the manual
+  // Start button was effectively a "make this page actually do
+  // something" prompt — neither is needed once the loop self-arms.
+  const [status, setStatus] = useState<Status>("running");
+  const [intervalSec, setIntervalSec] = useState<IntervalSec>(DEFAULT_INTERVAL_SEC);
   const [lastPollTs, setLastPollTs] = useState<number | null>(null);
   const [lastSignalTs, setLastSignalTs] = useState<number | null>(null);
   const [eventCount, setEventCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const seenRef = useRef<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const errStreakRef = useRef(0);
 
   // Store the latest callbacks in refs so the polling timer can call them
   // without rebuilding the interval on every prop change. Without this, the
@@ -61,10 +76,12 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       setPollCount((c) => c + 1);
       setLastPollTs(data.ts);
       if (!data.ok) {
+        errStreakRef.current += 1;
         setErr(data.reason ?? "detector error");
         setStatus("error");
         return;
       }
+      errStreakRef.current = 0;
       // Partial outage on one asset is degraded but not broken — show
       // the warning, keep running on the asset that is still up.
       if (data.partial) {
@@ -94,43 +111,65 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         seenRef.current = new Set(Array.from(seenRef.current).slice(-200));
       }
     } catch (e) {
+      errStreakRef.current += 1;
       setErr((e as Error).message);
       setStatus("error");
     }
   }, []);
+
+  const armTimer = useCallback(
+    (sec: number) => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = setInterval(() => {
+        void poll();
+      }, sec * 1000);
+    },
+    [poll],
+  );
 
   const start = useCallback(() => {
     if (timerRef.current) return;
     setStatus("running");
     onStatusRef.current?.(true);
     void poll();
-    timerRef.current = setInterval(() => {
-      void poll();
-    }, intervalSec * 1000);
-  }, [intervalSec, poll]);
+    armTimer(intervalSec);
+  }, [intervalSec, poll, armTimer]);
 
   const stop = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
-    setStatus("idle");
+    setStatus("paused");
     onStatusRef.current?.(false);
   }, []);
 
-  // Re-arm interval when the pacing slider changes mid-run. Note: deps
-  // intentionally exclude `poll` (it's stable now via refs). On unmount,
-  // the cleanup tears down the timer.
+  const togglePaused = useCallback(() => {
+    if (timerRef.current) stop();
+    else start();
+  }, [start, stop]);
+
+  // Auto-arm on mount — the live feed runs with zero user interaction.
+  // Strict-mode-safe: the cleanup tears down whatever the second mount
+  // started. A live page should be a live page.
+  useEffect(() => {
+    void poll();
+    armTimer(intervalSec);
+    onStatusRef.current?.(true);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+    };
+    // intentionally only on mount — the interval-change effect below
+    // re-arms when `intervalSec` updates so we don't double-tick here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-arm interval when the pacing chip changes mid-run. Polls keep
+  // flowing, just at the new cadence.
   useEffect(() => {
     if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = setInterval(() => {
-        void poll();
-      }, intervalSec * 1000);
+      armTimer(intervalSec);
     }
-    const t = timerRef.current;
-    return () => {
-      if (t) clearInterval(t);
-    };
-  }, [intervalSec, poll]);
+  }, [intervalSec, armTimer]);
 
   const running = status === "running";
   const dotColor =
@@ -138,11 +177,20 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       ? "bg-green animate-pulse"
       : status === "error"
         ? "bg-red"
-        : "bg-mist";
+        : "bg-amber";
+
+  const statusLabel =
+    status === "running"
+      ? `Live · polling every ${fmtInterval(intervalSec)}`
+      : status === "error"
+        ? `Reconnecting (${errStreakRef.current} fail${errStreakRef.current === 1 ? "" : "s"})`
+        : "Paused";
 
   return (
     <div className="panel p-5 relative overflow-hidden">
-      {/* top-right glow when running */}
+      {/* Top-right glow when polling. Doubles as a "this page is live"
+          visual cue — visitors see motion without needing to read the
+          status text. */}
       {running ? (
         <div
           className="pointer-events-none absolute -top-10 -right-10 w-40 h-40 rounded-full opacity-20 blur-3xl"
@@ -150,23 +198,33 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         />
       ) : null}
 
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
-          <div className="text-xs uppercase tracking-[0.3em] text-mist">
-            Autopilot
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+          <div className="text-xs uppercase tracking-[0.3em] text-mist truncate">
+            Live feed
           </div>
         </div>
-        <span className="text-[0.65rem] text-mist num">
-          {running ? "Detecting…" : status === "error" ? "Error" : "Stopped"}
+        <span
+          className={`text-[0.65rem] num truncate ${
+            status === "running"
+              ? "text-green"
+              : status === "error"
+                ? "text-red"
+                : "text-amber"
+          }`}
+        >
+          {statusLabel}
         </span>
       </div>
 
       <p className="text-[0.7rem] text-mist mb-4 leading-relaxed">
-        Polls <span className="font-mono text-cyan">api.kiyotaka.ai</span>{" "}
-        for BTC + ETH candles, z-scores the latest return and volume, emits
-        events when <span className="font-mono">|z| ≥ 2</span>. Each event
-        is fed into the swarm → champion → paper trade loop below.
+        Auto-pulling{" "}
+        <span className="font-mono text-cyan">api.kiyotaka.ai</span> for
+        BTC + ETH candles + funding. The detector z-scores the latest
+        bar, emits a SimEvent when <span className="font-mono">|z| ≥ 2</span>,
+        and the swarm reacts on the rail above. Nothing to start —
+        polling runs the moment this page loads.
       </p>
 
       <div className="grid grid-cols-2 gap-2 mb-4 text-[0.7rem] num">
@@ -174,7 +232,7 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         <Stat label="Events detected" value={eventCount.toString()} />
         <Stat
           label="Last poll"
-          value={lastPollTs ? fmtAgo(lastPollTs) : "—"}
+          value={lastPollTs ? fmtAgo(lastPollTs) : "warming…"}
         />
         <Stat
           label="Last signal"
@@ -182,55 +240,71 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         />
       </div>
 
-      <label className="text-[0.7rem] text-mist block mb-1">
-        Poll interval
-      </label>
-      <div className="flex gap-1 mb-4">
-        {INTERVALS.map((i) => (
-          <button
-            key={i}
-            onClick={() => setIntervalSec(i)}
-            className={`px-2.5 py-1 text-[0.7rem] font-mono rounded-sm border transition-colors ${
-              intervalSec === i
-                ? "bg-cyan text-ink border-cyan"
-                : "border-edge text-slate-300 hover:bg-edge/60"
-            }`}
-          >
-            {i < 60 ? `${i}s` : `${i / 60}m`}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex gap-2">
-        {!running ? (
-          <button
-            onClick={start}
-            className="flex-1 chip chip-cyan py-2 text-sm hover:opacity-90"
-          >
-            Start autopilot
-          </button>
-        ) : (
-          <button
-            onClick={stop}
-            className="flex-1 chip chip-red py-2 text-sm hover:opacity-90"
-          >
-            Stop
-          </button>
-        )}
+      <div className="flex items-center gap-2 text-[0.7rem]">
+        <button
+          onClick={togglePaused}
+          className={`chip py-1.5 px-3 hover:opacity-90 ${
+            running ? "chip-mist" : "chip-cyan"
+          }`}
+          title={running ? "Pause the live feed (e.g. for a screenshot)" : "Resume live feed"}
+        >
+          {running ? "Pause" : "Resume"}
+        </button>
         <button
           onClick={() => void poll()}
-          className="chip chip-mist py-2 px-3 text-sm hover:opacity-90"
-          title="Poll once now"
+          className="chip chip-mist py-1.5 px-3 hover:opacity-90"
+          title="Pull once right now"
         >
           Poll now
         </button>
+        <span className="grow" />
+        <button
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-[0.65rem] text-mist hover:text-slate-100 underline-offset-2 hover:underline"
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced ? "hide cadence" : "cadence"}
+        </button>
       </div>
+
+      {showAdvanced ? (
+        <div className="mt-3 pt-3 border-t border-edge/40">
+          <div className="text-[0.6rem] uppercase tracking-[0.3em] text-mist mb-2">
+            Poll interval
+          </div>
+          <div className="flex gap-1">
+            {INTERVALS.map((i) => (
+              <button
+                key={i}
+                onClick={() => setIntervalSec(i)}
+                className={`px-2.5 py-1 text-[0.7rem] font-mono rounded-sm border transition-colors ${
+                  intervalSec === i
+                    ? "bg-cyan text-ink border-cyan"
+                    : "border-edge text-slate-300 hover:bg-edge/60"
+                }`}
+              >
+                {fmtInterval(i)}
+              </button>
+            ))}
+          </div>
+          <p className="text-[0.6rem] text-mist mt-2 leading-relaxed">
+            30 s is the default — Kiyotaka rate-limits at ~10 req/s per
+            IP, and the page already fans out four parallel calls per
+            poll. Faster cadences won't surface more events; the
+            detector's z-score threshold is the binding constraint.
+          </p>
+        </div>
+      ) : null}
 
       {err ? (
         <p className="mt-3 text-[0.7rem] text-red">⚠ {err}</p>
       ) : null}
     </div>
   );
+}
+
+function fmtInterval(sec: number): string {
+  return sec < 60 ? `${sec}s` : `${sec / 60}m`;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

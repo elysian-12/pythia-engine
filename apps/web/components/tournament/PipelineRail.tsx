@@ -68,9 +68,9 @@ export function PipelineRail({
         </div>
         <div className="flex items-center gap-3 text-[0.65rem] text-mist num">
           <span>
-            Autopilot:{" "}
-            <span className={autopilotOn ? "text-green" : "text-mist"}>
-              {autopilotOn ? "ON" : "OFF"}
+            Live feed:{" "}
+            <span className={autopilotOn ? "text-green" : "text-amber"}>
+              {autopilotOn ? "polling" : "paused"}
             </span>
           </span>
           <span>Gen {generation}</span>

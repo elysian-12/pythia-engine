@@ -872,7 +872,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
         </a>
         <a href="#zone-controls" className="hover:text-cyan flex items-center gap-2">
           <span className="num text-purple-300">2.</span>
-          Start autopilot or fire a synthetic event
+          Watch the live feed (or fire a synthetic event)
         </a>
         <a href="#zone-trading" className="hover:text-cyan flex items-center gap-2">
           <span className="num text-purple-300">3.</span>
