@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Arena } from "./Arena";
+import { AgentLineageGraph } from "./AgentLineageGraph";
 import { Leaderboard } from "./Leaderboard";
 import { SettingsForm } from "./SettingsForm";
 import { EventSimulator } from "./EventSimulator";
@@ -186,7 +186,41 @@ export function TournamentClient() {
   }, [openPositions]);
   useEffect(() => {
     closedPositionsRef.current = closedPositions;
+    // Persist closed positions to localStorage so /performance can
+    // replay the meta-agent's full trade history across page loads.
+    // Cap at 500 trades — that's months of typical session activity
+    // at the live polling cadence, well under the localStorage 5MB
+    // ceiling. Older trades drop off the front (FIFO).
+    if (typeof window === "undefined") return;
+    try {
+      const trimmed = closedPositions.slice(-500);
+      window.localStorage.setItem(
+        "pythia-closed-positions",
+        JSON.stringify(trimmed),
+      );
+    } catch {
+      // localStorage full / disabled — fail silently; the live
+      // ledger still works in-memory.
+    }
   }, [closedPositions]);
+
+  // Hydrate from localStorage on mount so a fresh page-load picks up
+  // the prior session's closed positions and the realized-pnl line
+  // doesn't reset to zero. Stops the "every reload looks like a
+  // brand-new account" UX.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem("pythia-closed-positions");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as PaperPosition[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setClosedPositions(parsed);
+      }
+    } catch {
+      // ignore corrupt LS payload
+    }
+  }, []);
 
   // Read user-configured risk fraction + portfolio rules once on mount
   // and whenever the SettingsForm broadcasts a save (CustomEvent for
@@ -704,10 +738,11 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* HERO Arena */}
-      <section className="relative rounded-2xl overflow-hidden h-[55vh] sm:h-[60vh] -mx-4 sm:-mx-6 md:mx-0 border border-edge/60">
-        <Arena agents={snap.agents} generation={snap.generation ?? 0} />
-        <div className="pointer-events-none absolute top-0 left-0 right-0 p-3 sm:p-5 flex items-start justify-between gap-3">
+      {/* HERO header — flat (the 3D arena was retired in favour of the
+          force-directed lineage graph below; that view shows real
+          mutation/evolution structure instead of a decorative scene). */}
+      <section className="space-y-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem]">
@@ -721,164 +756,145 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
             <h2 className="text-xl sm:text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight leading-tight">
               Events → Swarm → Champion → Your trade
             </h2>
-            <p className="hidden sm:block mt-2 text-[0.7rem] text-mist max-w-xl">
+            <p className="mt-2 text-[0.7rem] text-mist max-w-xl">
               Live decision loop on real Kiyotaka events. The leaderboard
               re-ranks the moment an agent fires — page is dynamic, not a
               static snapshot.
             </p>
           </div>
-          <div className="text-right space-y-1 pointer-events-auto shrink-0">
+          <div className="text-right space-y-1 shrink-0">
             <KiyotakaBadge />
-            <div className="hidden sm:block">
-              <SourceBadge source={snap.source} />
-            </div>
+            <SourceBadge source={snap.source} />
             <RegimeBadge regime={snap.regime} />
-            <div className="hidden sm:block text-[0.65rem] text-mist num">
+            <div className="text-[0.65rem] text-mist num">
               {fmt(snap.generated_at)}
             </div>
-            <div className="hidden md:block">
-              <PhaseBadge phase={phase} />
-            </div>
+            <PhaseBadge phase={phase} />
           </div>
         </div>
 
         {champ ? (
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-3 sm:p-5 flex items-end justify-between">
-            <div className="panel px-3 py-2 sm:px-4 sm:py-3 pointer-events-auto backdrop-blur-sm bg-black/40 max-w-[92%] sm:max-w-none overflow-hidden">
-              <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
-                Current champion
-              </div>
-              <div className="mt-1 text-sm sm:text-lg font-mono text-slate-100 truncate">
-                {champ.agent_id}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-2 num">
-                <span>
-                  <span className="text-mist">Σ R</span>{" "}
-                  <span
-                    className={champ.total_r >= 0 ? "text-green" : "text-red"}
-                  >
-                    {champ.total_r >= 0 ? "+" : ""}
-                    {champ.total_r.toFixed(2)}
-                  </span>
-                </span>
-                <span>
-                  <span className="text-mist">WR</span>{" "}
-                  {(champ.win_rate * 100).toFixed(1)}%
-                </span>
-                <span>
-                  <span className="text-mist">Trades</span>{" "}
-                  {champ.wins + champ.losses}
-                </span>
-                <span title="Average R per trade">
-                  <span className="text-mist">E[R]</span>{" "}
-                  <span
-                    className={
-                      (champ.expectancy_r ?? 0) >= 0 ? "text-green" : "text-red"
-                    }
-                  >
-                    {champ.expectancy_r !== undefined
-                      ? (champ.expectancy_r >= 0 ? "+" : "") + champ.expectancy_r.toFixed(2)
-                      : "—"}
-                  </span>
-                </span>
-                <span className="hidden sm:inline" title="Profit factor — gross win R / gross loss R">
-                  <span className="text-mist">PF</span>{" "}
-                  <span
-                    className={
-                      (champ.profit_factor ?? 0) >= 1.5
-                        ? "text-green"
-                        : (champ.profit_factor ?? 0) >= 1
-                          ? "text-amber"
-                          : "text-red"
-                    }
-                  >
-                    {champ.profit_factor !== undefined && Number.isFinite(champ.profit_factor)
-                      ? champ.profit_factor.toFixed(2)
-                      : "—"}
-                  </span>
-                </span>
-                <span className="hidden sm:inline" title="Sharpe of per-trade R + 95% block-bootstrap CI">
-                  <span className="text-mist">Sharpe</span>{" "}
-                  <span
-                    className={
-                      champ.rolling_sharpe > 0.5
-                        ? "text-green"
-                        : champ.rolling_sharpe > 0
-                          ? "text-amber"
-                          : "text-red"
-                    }
-                  >
-                    {champ.rolling_sharpe.toFixed(2)}
-                  </span>
-                  {snap.champion_certification?.sharpe_ci_lo != null &&
-                  snap.champion_certification?.sharpe_ci_hi != null ? (
-                    <span className="text-[0.55rem] text-mist ml-1">
-                      [{snap.champion_certification.sharpe_ci_lo.toFixed(2)},{" "}
-                      {snap.champion_certification.sharpe_ci_hi.toFixed(2)}]
-                    </span>
-                  ) : null}
-                </span>
-                {snap.champion_certification ? (
-                  <>
-                    <span className="hidden sm:inline" title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
-                      <span className="text-mist">PSR</span>{" "}
-                      <span
-                        className={
-                          snap.champion_certification.psr >= 0.95
-                            ? "text-green"
-                            : snap.champion_certification.psr >= 0.5
-                              ? "text-amber"
-                              : "text-red"
-                        }
-                      >
-                        {snap.champion_certification.psr.toFixed(2)}
-                      </span>
-                    </span>
-                    <span className="hidden sm:inline" title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias across the swarm">
-                      <span className="text-mist">DSR</span>{" "}
-                      <span
-                        className={
-                          snap.champion_certification.dsr >= 0.95
-                            ? "text-green"
-                            : snap.champion_certification.dsr >= 0.5
-                              ? "text-amber"
-                              : "text-red"
-                        }
-                      >
-                        {snap.champion_certification.dsr.toFixed(2)}
-                      </span>
-                    </span>
-                  </>
-                ) : null}
+          <div className="panel p-3 sm:p-4 backdrop-blur-sm bg-black/30">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
+                  Current champion
+                </div>
+                <div className="mt-1 text-base sm:text-lg font-mono text-slate-100 truncate">
+                  {champ.agent_id}
+                </div>
               </div>
               {snap.champion_certification ? (
-                <div className="mt-2 hidden sm:block">
-                  <CertificationBadge cert={snap.champion_certification} />
-                </div>
+                <CertificationBadge cert={snap.champion_certification} />
               ) : null}
             </div>
-            <div className="hidden md:flex flex-wrap gap-3 items-center text-[0.65rem] text-mist pointer-events-auto justify-end max-w-[380px]">
-              {Object.entries(FAMILY_COLORS)
-                .filter(
-                  ([k]) =>
-                    k !== "other" &&
-                    familiesActive.includes(k as (typeof familiesActive)[number]),
-                )
-                .map(([k, v]) => (
-                  <span key={k} className="flex items-center gap-1.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-3 num">
+              <span>
+                <span className="text-mist">Σ R</span>{" "}
+                <span className={champ.total_r >= 0 ? "text-green" : "text-red"}>
+                  {champ.total_r >= 0 ? "+" : ""}
+                  {champ.total_r.toFixed(2)}
+                </span>
+              </span>
+              <span>
+                <span className="text-mist">WR</span>{" "}
+                {(champ.win_rate * 100).toFixed(1)}%
+              </span>
+              <span>
+                <span className="text-mist">Trades</span>{" "}
+                {champ.wins + champ.losses}
+              </span>
+              <span title="Average R per trade">
+                <span className="text-mist">E[R]</span>{" "}
+                <span className={(champ.expectancy_r ?? 0) >= 0 ? "text-green" : "text-red"}>
+                  {champ.expectancy_r !== undefined
+                    ? (champ.expectancy_r >= 0 ? "+" : "") + champ.expectancy_r.toFixed(2)
+                    : "—"}
+                </span>
+              </span>
+              <span title="Profit factor — gross win R / gross loss R">
+                <span className="text-mist">PF</span>{" "}
+                <span
+                  className={
+                    (champ.profit_factor ?? 0) >= 1.5
+                      ? "text-green"
+                      : (champ.profit_factor ?? 0) >= 1
+                        ? "text-amber"
+                        : "text-red"
+                  }
+                >
+                  {champ.profit_factor !== undefined && Number.isFinite(champ.profit_factor)
+                    ? champ.profit_factor.toFixed(2)
+                    : "—"}
+                </span>
+              </span>
+              <span title="Sharpe of per-trade R + 95% block-bootstrap CI">
+                <span className="text-mist">Sharpe</span>{" "}
+                <span
+                  className={
+                    champ.rolling_sharpe > 0.5
+                      ? "text-green"
+                      : champ.rolling_sharpe > 0
+                        ? "text-amber"
+                        : "text-red"
+                  }
+                >
+                  {champ.rolling_sharpe.toFixed(2)}
+                </span>
+                {snap.champion_certification?.sharpe_ci_lo != null &&
+                snap.champion_certification?.sharpe_ci_hi != null ? (
+                  <span className="text-[0.55rem] text-mist ml-1">
+                    [{snap.champion_certification.sharpe_ci_lo.toFixed(2)},{" "}
+                    {snap.champion_certification.sharpe_ci_hi.toFixed(2)}]
+                  </span>
+                ) : null}
+              </span>
+              {snap.champion_certification ? (
+                <>
+                  <span title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
+                    <span className="text-mist">PSR</span>{" "}
                     <span
-                      className="inline-block w-2 h-2 rounded-full"
-                      style={{ background: v, boxShadow: `0 0 8px ${v}` }}
-                    />
-                    <span className="font-mono uppercase tracking-widest">
-                      {k}
+                      className={
+                        snap.champion_certification.psr >= 0.95
+                          ? "text-green"
+                          : snap.champion_certification.psr >= 0.5
+                            ? "text-amber"
+                            : "text-red"
+                      }
+                    >
+                      {snap.champion_certification.psr.toFixed(2)}
                     </span>
                   </span>
-                ))}
+                  <span title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias">
+                    <span className="text-mist">DSR</span>{" "}
+                    <span
+                      className={
+                        snap.champion_certification.dsr >= 0.95
+                          ? "text-green"
+                          : snap.champion_certification.dsr >= 0.5
+                            ? "text-amber"
+                            : "text-red"
+                      }
+                    >
+                      {snap.champion_certification.dsr.toFixed(2)}
+                    </span>
+                  </span>
+                </>
+              ) : null}
             </div>
           </div>
         ) : null}
       </section>
+
+      {/* Force-directed lineage graph — interactive replacement for
+          the prior 3D arena. Updates with each cron-driven snapshot
+          refresh; champion glows gold, families colour-coded, edges
+          encode mutation/revive lineage. */}
+      <AgentLineageGraph
+        agents={snap.agents}
+        championId={champ?.agent_id ?? null}
+        generation={snap.generation ?? 0}
+      />
 
       {/* Closed-loop pipeline visualizer */}
       <section>
