@@ -116,6 +116,33 @@ jobs:
           set -e
           node scripts/bundle-snapshot.mjs
 
+      - name: Prune old reports (TTL keeps last N)
+        # Each cron tick writes a fresh `reports/swarm/<unix-ts>/`
+        # directory containing swarm.md, swarm.json, and snapshot.json.
+        # At hourly cadence that's 720 dirs / month → ~36 MB of git
+        # bloat / month if we never prune. Keep the most recent 168
+        # (one week of hourly runs) and remove the rest. The bundler
+        # only ever reads the latest one, so older dirs are
+        # historical record only.
+        run: |
+          set -e
+          mkdir -p reports/swarm
+          KEEP=168
+          # Portable "drop oldest, keep last KEEP" via awk slicing.
+          all=$(ls -1 reports/swarm 2>/dev/null | grep -E '^[0-9]+$' | sort -n)
+          total=$(echo "$all" | grep -c . || true)
+          drop=$(( total - KEEP ))
+          if [ "$drop" -le 0 ]; then
+            echo "no old reports to prune (have $total <= $KEEP)"
+          else
+            to_del=$(echo "$all" | awk -v n="$drop" 'NR<=n')
+            echo "pruning $drop report dirs older than the latest $KEEP"
+            echo "$to_del" | while read d; do
+              [ -n "$d" ] || continue
+              git rm -rf "reports/swarm/$d" 2>/dev/null || rm -rf "reports/swarm/$d"
+            done
+          fi
+
       - name: Commit and push if changed
         run: |
           set -e

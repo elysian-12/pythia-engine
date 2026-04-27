@@ -68,11 +68,23 @@ struct Inner {
     pending: HashMap<String, (AgentDecision, Vec<f64>)>,
     /// Last `R_HISTORY_CAP` realised R values per agent — used by the
     /// evaluation crate (DSR/PSR/block-bootstrap CI). Capped to keep
-    /// memory bounded across hundreds of evolved generations.
+    /// memory bounded across hundreds of evolved generations and to
+    /// keep the persisted `swarm-population.json` file small enough
+    /// for git diffs to stay readable across cron-driven commits.
     r_history: HashMap<String, std::collections::VecDeque<f64>>,
 }
 
-const R_HISTORY_CAP: usize = 2_000;
+/// 500 is plenty for the statistical tests:
+///   - PSR / DSR want ≥10 samples for a stable answer; 500 gives them
+///     50× headroom.
+///   - Block-bootstrap CI uses block size 7 → 500/7 ≈ 71 effective
+///     resampling units, well above the 30-block rule of thumb.
+///   - `recent_expectancy(n=50)` reads the last 50; 500 → 10 windows.
+///
+/// At 25 agents × 500 R-values × 8 bytes/f64 = ~100 KB max for the
+/// persisted population file. Was 2000 → max ~400 KB; the prototype
+/// doesn't need that much history sitting in git for every cron run.
+const R_HISTORY_CAP: usize = 500;
 
 impl Default for Scoreboard {
     fn default() -> Self {
@@ -234,9 +246,15 @@ impl Scoreboard {
     /// Seed an agent's per-trade R history from a persisted run so the
     /// evaluation crate's significance tests have a sample population
     /// from event 1 (otherwise PSR/DSR see only the new run's trades).
+    /// Trims to `R_HISTORY_CAP` on load — without this, a population
+    /// file written under an older (larger) cap would never shrink
+    /// even after we tightened the cap.
     pub fn seed_r_history(&self, agent_id: String, history: Vec<f64>) {
         let mut g = self.inner.lock();
-        let buf: std::collections::VecDeque<f64> = history.into_iter().collect();
+        let mut buf: std::collections::VecDeque<f64> = history.into_iter().collect();
+        while buf.len() > R_HISTORY_CAP {
+            buf.pop_front();
+        }
         g.r_history.insert(agent_id, buf);
     }
 
