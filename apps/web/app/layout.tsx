@@ -40,6 +40,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               >
                 Tournament
               </a>
+              <a
+                className="chip chip-mist hover:opacity-80 transition-opacity"
+                href="/performance"
+              >
+                Performance
+              </a>
               <span className="num text-mist hidden sm:inline">v0.3.0</span>
             </nav>
           </header>

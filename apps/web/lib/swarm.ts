@@ -37,6 +37,12 @@ export type ChampionCertification = {
   skew: number;
   kurtosis: number;
   n_trials: number;
+  /** Probability of Backtest Overfitting (Bailey & López de Prado).
+   * Lower is better; < 0.5 = winning configuration generalises out
+   * of sample more than half the time. Optional because older
+   * snapshots predate the PBO wiring. */
+  pbo?: number | null;
+  pbo_splits?: number;
 };
 
 export type SwarmSnapshot = {

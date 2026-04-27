@@ -267,6 +267,14 @@ export function LandingDashboard() {
               >
                 Open tournament →
               </Link>
+              <div>
+                <Link
+                  href="/performance"
+                  className="inline-block text-[0.65rem] text-mist tracking-widest uppercase hover:text-slate-200"
+                >
+                  Performance audit →
+                </Link>
+              </div>
             </div>
           </div>
 
