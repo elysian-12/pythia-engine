@@ -7,6 +7,8 @@ import {
   forceManyBody,
   forceCenter,
   forceCollide,
+  forceX,
+  forceY,
   type Simulation,
   type SimulationNodeDatum,
   type SimulationLinkDatum,
@@ -129,8 +131,20 @@ export function AgentLineageGraph({
     return { nodes: [...liveNodes, ...seedNodes], links: linksOut };
   }, [agents, championId]);
 
-  // Set up + tick the d3-force simulation. Stop after `MAX_TICKS` to
-  // keep CPU use bounded; drag re-energises briefly via alphaTarget.
+  // Set up + tick the d3-force simulation.
+  //
+  // Stability tuning (the prior config let the graph "explode" off-
+  // screen):
+  //   - charge strength dropped from -220 to -90 so nodes don't shove
+  //     each other into the next county
+  //   - forceCenter still pulls toward the middle, but we add gentle
+  //     forceX/forceY anchors so a single hub-and-spoke seed doesn't
+  //     drag the whole cluster off centre
+  //   - clamp x/y to viewport bounds inside the tick handler — d3
+  //     doesn't do this natively, and a single bad config is enough
+  //     to launch a node into oblivion. Belt + suspenders
+  //   - velocityDecay bumped to 0.45 (default 0.4) so nodes settle
+  //     a touch quicker once forces equalise
   useEffect(() => {
     if (nodes.length === 0) return;
     const sim = forceSimulation<GraphNode>(nodes)
@@ -141,24 +155,38 @@ export function AgentLineageGraph({
           .distance((l) => {
             const s = l.source as GraphNode;
             const t = l.target as GraphNode;
-            return s.family === t.family ? 50 : 90;
+            return s.family === t.family ? 55 : 95;
           })
-          .strength(0.15),
+          .strength(0.2),
       )
-      .force("charge", forceManyBody<GraphNode>().strength(-220))
+      .force("charge", forceManyBody<GraphNode>().strength(-90))
       .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
+      .force("anchorX", forceX<GraphNode>(WIDTH / 2).strength(0.05))
+      .force("anchorY", forceY<GraphNode>(HEIGHT / 2).strength(0.05))
       .force(
         "collide",
         forceCollide<GraphNode>()
-          .radius((d) => d.size + 2)
-          .strength(0.85),
+          .radius((d) => d.size + 3)
+          .strength(0.9),
       )
+      .velocityDecay(0.45)
       .alpha(1)
-      .alphaDecay(0.025);
+      .alphaDecay(0.03);
 
     let frame = 0;
+    const margin = 8;
     const onTick = () => {
       frame++;
+      // Hard-clamp every node to viewport bounds. Without this any
+      // transient over-correction (e.g. a single hub edge) can yeet
+      // a leaf node off the canvas before the dampening catches up.
+      for (const n of nodes) {
+        const r = n.size + margin;
+        if (n.x == null) n.x = WIDTH / 2;
+        if (n.y == null) n.y = HEIGHT / 2;
+        n.x = Math.max(r, Math.min(WIDTH - r, n.x));
+        n.y = Math.max(r, Math.min(HEIGHT - r, n.y));
+      }
       // Throttle re-renders — every other tick is plenty for 60fps.
       if (frame % 2 === 0) setTick((t) => t + 1);
     };
@@ -170,38 +198,61 @@ export function AgentLineageGraph({
     };
   }, [nodes, links]);
 
-  // Pointer drag — pin the node while held, restart simulation softly
-  // so neighbours rearrange.
+  // Drag handlers — `setPointerCapture` was the bug in the prior
+  // version: it redirected pointermove to the captured circle so the
+  // svg-level handler never fired. Now drags are tracked through a
+  // window-level pointermove/pointerup pair, which works even if the
+  // cursor leaves the svg viewport mid-drag.
+  const screenToSvg = (clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    return pt.matrixTransform(ctm.inverse());
+  };
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const n = draggingRef.current;
+      if (!n) return;
+      const local = screenToSvg(e.clientX, e.clientY);
+      if (!local) return;
+      n.fx = local.x;
+      n.fy = local.y;
+      // Keep the sim warm so neighbours respond to the drag.
+      if (simRef.current) simRef.current.alphaTarget(0.3);
+    };
+    const onUp = () => {
+      const n = draggingRef.current;
+      if (!n) return;
+      n.fx = null;
+      n.fy = null;
+      draggingRef.current = null;
+      if (simRef.current) simRef.current.alphaTarget(0);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
   const onPointerDownNode = (e: React.PointerEvent, n: GraphNode) => {
     e.stopPropagation();
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    e.preventDefault();
     draggingRef.current = n;
-    n.fx = n.x;
-    n.fy = n.y;
+    // Pin to the node's current position immediately so the first
+    // move doesn't snap from (null,null).
+    n.fx = n.x ?? WIDTH / 2;
+    n.fy = n.y ?? HEIGHT / 2;
     if (simRef.current) {
       simRef.current.alphaTarget(0.3).restart();
-    }
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const n = draggingRef.current;
-    if (!n || !svgRef.current) return;
-    const pt = svgRef.current.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const ctm = svgRef.current.getScreenCTM();
-    if (!ctm) return;
-    const local = pt.matrixTransform(ctm.inverse());
-    n.fx = local.x;
-    n.fy = local.y;
-  };
-  const onPointerUp = () => {
-    const n = draggingRef.current;
-    if (!n) return;
-    n.fx = null;
-    n.fy = null;
-    draggingRef.current = null;
-    if (simRef.current) {
-      simRef.current.alphaTarget(0);
     }
   };
 
@@ -229,10 +280,7 @@ export function AgentLineageGraph({
         <svg
           ref={svgRef}
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          className="w-full h-auto rounded-sm bg-black/40 border border-edge/40 select-none"
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
+          className="w-full h-auto rounded-sm bg-black/40 border border-edge/40 select-none touch-none"
           aria-label={`Force-directed lineage graph: ${nodes.filter((n) => !n.isSeed).length} agents linked by mutation`}
         >
           {/* Edges */}
