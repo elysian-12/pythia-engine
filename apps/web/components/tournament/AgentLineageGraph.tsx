@@ -59,6 +59,7 @@ const MIN_SCALE = 0.6;
 const MAX_SCALE = 4;
 const TAP_VS_DRAG_THRESHOLD = 8;
 const PARTICLE_COUNT = 360;
+const SMOKE_COUNT = 600;
 
 // Family colors used to tint the background particle cloud. Excludes
 // "other" so the cloud stays vivid (no slate/grey particles).
@@ -87,6 +88,22 @@ type Particle = {
   size: number;
   /** Phase offset so each particle pulses on its own schedule. */
   phase: number;
+};
+
+/** Tiny white "smoke" particle. Acts as a soft background layer
+ *  densest at the sphere surface and thinning outward, so the orb
+ *  looks like a brain wreathed in mist rather than a hard ball. */
+type Smoke = {
+  lon: number;
+  lat: number;
+  rOffset: number;
+  size: number;
+  /** Drift velocity in radians/sec — gives the cloud gentle motion
+   *  even when the camera is still. */
+  dLon: number;
+  dLat: number;
+  phase: number;
+  baseOp: number;
 };
 
 /** Tiny seeded PRNG so the particle field is deterministic across
@@ -191,6 +208,34 @@ export function AgentLineageGraph({
   >(null);
 
   const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
+
+  // White smoke layer — tiny background particles densest right at
+  // the sphere surface and tapering outward, so the orb sits inside
+  // a soft mist instead of a vacuum. Slow drift gives the cloud a
+  // life of its own even when the camera isn't moving.
+  const smoke = useMemo<Smoke[]>(() => {
+    const rng = mulberry32(0xb0b0);
+    const list: Smoke[] = [];
+    for (let i = 0; i < SMOKE_COUNT; i++) {
+      const r = rng();
+      let rOffset: number;
+      // 60% surface-hugging, 30% mid-halo, 10% far halo.
+      if (r < 0.6) rOffset = 0.95 + rng() * 0.15;
+      else if (r < 0.9) rOffset = 1.1 + rng() * 0.3;
+      else rOffset = 1.4 + rng() * 0.5;
+      list.push({
+        lon: (rng() - 0.5) * 2 * Math.PI,
+        lat: (rng() - 0.5) * Math.PI,
+        rOffset,
+        size: 0.25 + rng() * 0.45,
+        dLon: (rng() - 0.5) * 0.04,
+        dLat: (rng() - 0.5) * 0.025,
+        phase: rng() * Math.PI * 2,
+        baseOp: 0.18 + rng() * 0.32,
+      });
+    }
+    return list;
+  }, []);
 
   // Background particle cloud — multi-colored dots distributed near
   // the sphere surface so the orb reads as a luminous brain rather
@@ -678,6 +723,51 @@ export function AgentLineageGraph({
               r={SPHERE_RADIUS + 12}
               fill="url(#globe-glow)"
             />
+            {/* White smoke layer — drawn first so it sits behind
+                every other element. Densest at rOffset ≈ 1.0 and
+                fades outward, with a slow lon/lat drift so the
+                cloud feels alive even when the camera is still. */}
+            <g style={{ pointerEvents: "none" }}>
+              {smoke.map((p, i) => {
+                const t = performance.now() / 1000;
+                const lon = p.lon + p.dLon * t;
+                const lat = p.lat + p.dLat * t;
+                const cy = Math.cos(lat + pitch);
+                const sx_sphere =
+                  cy * Math.sin(lon + yaw) * p.rOffset;
+                const sy_sphere = Math.sin(lat + pitch) * p.rOffset;
+                const sz_sphere =
+                  cy * Math.cos(lon + yaw) * p.rOffset;
+                const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
+                const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
+                // Smoke fades the further it sits from the surface.
+                const haloFade = Math.max(
+                  0.15,
+                  1 - Math.abs(p.rOffset - 1) * 1.0,
+                );
+                // Subtle flicker — slower than the colored particles
+                // so the smoke breathes calmly.
+                const flicker = 0.85 + 0.15 * Math.sin(t * 0.45 + p.phase);
+                // Back-of-globe dim.
+                const depthFade =
+                  sz_sphere >= 0
+                    ? 1
+                    : Math.max(0.35, 1 + sz_sphere * 0.6);
+                const opacity = p.baseOp * haloFade * flicker * depthFade;
+                if (opacity < 0.02) return null;
+                return (
+                  <circle
+                    key={`s${i}`}
+                    cx={sx}
+                    cy={sy}
+                    r={p.size}
+                    fill="#e2e8f0"
+                    opacity={opacity}
+                  />
+                );
+              })}
+            </g>
+
             {/* Particle cloud — multi-colored dots distributed near
                 the sphere surface so the orb reads as a luminous
                 brain rather than a wireframe globe. Each particle

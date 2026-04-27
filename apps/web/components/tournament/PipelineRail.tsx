@@ -47,24 +47,60 @@ export function PipelineRail({
   lastLatencyMs,
 }: Props) {
   const [active, setActive] = useState<Stage | null>(null);
+  const [flash, setFlash] = useState(false);
+  // Visible counter — increments every time a pulse fires. Helps the
+  // user confirm events are arriving even when the sweep sweep is too
+  // fast to catch.
+  const [pulses, setPulses] = useState(0);
 
   useEffect(() => {
     if (pulseKey === 0) return;
-    // sweep a glow left→right over ~1.5s
-    const ids: Stage[] = ["kiyotaka", "event", "swarm", "champion", "hl", "feedback"];
+    setPulses((p) => p + 1);
+    setFlash(true);
+    // sweep a glow left→right over ~2.1 s — slower than before so the
+    // animation actually registers visually instead of blinking by.
+    const ids: Stage[] = [
+      "kiyotaka",
+      "event",
+      "swarm",
+      "champion",
+      "hl",
+      "feedback",
+    ];
+    const STEP_MS = 350;
     const timers: ReturnType<typeof setTimeout>[] = [];
     ids.forEach((id, i) => {
-      timers.push(setTimeout(() => setActive(id), i * 220));
+      timers.push(setTimeout(() => setActive(id), i * STEP_MS));
     });
-    timers.push(setTimeout(() => setActive(null), ids.length * 220 + 400));
+    timers.push(
+      setTimeout(() => setActive(null), ids.length * STEP_MS + 500),
+    );
+    timers.push(setTimeout(() => setFlash(false), 600));
     return () => timers.forEach(clearTimeout);
   }, [pulseKey]);
 
   return (
-    <div className="panel p-4 relative overflow-hidden">
+    <div
+      className={`panel p-4 relative overflow-hidden transition-all duration-500 ${
+        flash ? "ring-2 ring-cyan/60 shadow-[0_0_30px_-5px_rgba(34,211,238,0.5)]" : ""
+      }`}
+    >
+      {/* Flash banner — appears for ~0.6 s when an event arrives so
+          the user gets unmissable confirmation that the loop fired,
+          even if the per-stage sweep is too quick to catch. */}
+      {flash ? (
+        <div className="absolute top-2 right-2 z-10 px-2 py-0.5 rounded-sm bg-cyan/20 border border-cyan/60 text-[0.6rem] uppercase tracking-[0.3em] text-cyan animate-pulse">
+          ⚡ event firing
+        </div>
+      ) : null}
       <div className="flex items-center justify-between mb-3">
-        <div className="text-xs uppercase tracking-[0.3em] text-mist">
+        <div className="text-xs uppercase tracking-[0.3em] text-mist flex items-center gap-2">
           Closed-loop pipeline
+          {pulses > 0 ? (
+            <span className="text-[0.55rem] tracking-widest text-cyan/80 num">
+              · {pulses} {pulses === 1 ? "pulse" : "pulses"}
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-3 text-[0.65rem] text-mist num">
           <span>
@@ -159,10 +195,10 @@ function Node({
       style={{ transition: "transform 0.2s ease" }}
     >
       <div
-        className={`w-10 h-10 rounded-full border flex items-center justify-center text-[0.65rem] font-mono transition-all duration-300 ${
+        className={`w-12 h-12 rounded-full border-2 flex items-center justify-center text-sm font-mono transition-all duration-300 ${
           active
-            ? "border-cyan bg-cyan/20 text-cyan shadow-[0_0_18px_rgba(34,211,238,0.6)] scale-110"
-            : "border-edge bg-black/40 text-mist"
+            ? "border-cyan bg-cyan/30 text-cyan shadow-[0_0_28px_rgba(34,211,238,0.85)] scale-125 font-bold"
+            : "border-edge bg-black/40 text-mist scale-100"
         }`}
       >
         {idx + 1}
