@@ -154,16 +154,21 @@ export function agentFamily(id: string): AgentFam {
   return "other";
 }
 
+// Palette borrowed from Project Hail Mary — astrophage teal, Tau
+// Ceti amber, Petrova magenta, Eridian copper-green, Hail Mary
+// hull silver. Each family gets a distinct slot in the spectrum so
+// the lineage orb reads as a starfield of related but separable
+// strategies.
 export const FAMILY_COLORS: Record<AgentFam, string> = {
-  "liq-trend": "#34d399",
-  "liq-fade": "#f87171",
-  "vol-breakout": "#fbbf24",
-  "funding-trend": "#60a5fa",
-  "funding-arb": "#c084fc",
-  polyedge: "#f472b6",
-  polyfusion: "#fde68a",
-  llm: "#f0abfc",
-  other: "#94a3b8",
+  "liq-trend": "#14b8a6", // astrophage teal — the alien glow
+  "liq-fade": "#ef4444", // emergency scarlet
+  "vol-breakout": "#fb923c", // Tau Ceti amber
+  "funding-trend": "#3b82f6", // navigation blue
+  "funding-arb": "#d946ef", // Petrova magenta
+  polyedge: "#a855f7", // Adrian violet (prediction-market signal)
+  polyfusion: "#cbd5e1", // Hail Mary hull chrome
+  llm: "#84cc16", // Eridian ammonia green
+  other: "#64748b",
 };
 
 export const FAMILY_LABEL: Record<AgentFam, string> = {

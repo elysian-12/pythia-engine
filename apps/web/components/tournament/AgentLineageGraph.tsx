@@ -560,7 +560,7 @@ export function AgentLineageGraph({
       <p className="text-[0.65rem] text-mist mb-3 max-w-2xl leading-relaxed">
         Drag the marble to turn it · pinch / scroll / +− to zoom ·
         two-finger drag to pan · tap any node for the agent&apos;s
-        record. The laureate stays wreathed in gold.
+        record. Champion glows gold and stays on top.
       </p>
       <div className="relative">
         <svg
@@ -752,7 +752,7 @@ export function AgentLineageGraph({
                           filter: "drop-shadow(0 0 4px #000)",
                         }}
                       >
-                        🌿 LAUREATE
+                        👑 CHAMPION
                       </text>
                     ) : null}
                   </g>
@@ -798,7 +798,7 @@ export function AgentLineageGraph({
                         fill="#fde68a"
                         fontWeight={600}
                       >
-                        🌿 LAUREATE
+                        👑 CHAMPION
                       </text>
                       <text
                         x={sx}
@@ -872,7 +872,7 @@ export function AgentLineageGraph({
           >
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-                {selected.isChampion ? "🌿 " : ""}
+                {selected.isChampion ? "👑 " : ""}
                 {selected.id.replace(/^gen\d+-mut\d+-/, "")}
               </div>
               <button
@@ -948,7 +948,7 @@ export function AgentLineageGraph({
           // pointerleave dismisses it.
           <div className="hidden sm:block absolute top-3 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40 z-10">
             <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-              {hovered.isChampion ? "🌿 " : ""}
+              {hovered.isChampion ? "👑 " : ""}
               {hovered.id.replace(/^gen\d+-mut\d+-/, "")}
             </div>
             <div className="text-[0.55rem] text-mist mt-0.5 mb-1.5">
