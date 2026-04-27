@@ -1034,15 +1034,15 @@ export function TournamentClient() {
           taller than the centre. */}
       {championCard}
 
-      {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Bottom row
-          (trade feed + scoreboard) spans full width below the three
-          sidebar columns. Center column is 7/12 (~58%) so the globe
-          dominates the page like a price chart. */}
+      {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Trade feed
+          and scoreboard live INSIDE the center column as a nested
+          2-col grid; this kills the L-shape gap that used to appear
+          when one sidebar ran taller than the centre and a separate
+          full-width row 2 had to wait for the tallest column. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-start">
-        {/* CENTER — globe + pipeline. Champion card now lives at the
-            top as a full-width banner (see above the grid) so it
-            covers the cross-column gap that used to appear when one
-            sidebar was taller than this main column. Mobile order 1. */}
+        {/* CENTER — globe → pipeline → (scoreboard | trade feed).
+            Tallest column on the page; sidebars sit alongside without
+            forcing a separate bottom row. Mobile order 1. */}
         <main
           className="space-y-3 md:space-y-4 min-w-0
             order-1
@@ -1062,34 +1062,24 @@ export function TournamentClient() {
             championId={champ?.agent_id ?? null}
             lastLatencyMs={lastLatencyMs}
           />
+          {/* Bottom feed row — nested 2-col so they sit side-by-side
+              on md+ but stack on mobile. DOM order is scoreboard,
+              trade feed so mobile shows scoreboard first per the
+              user's preference. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+            <Leaderboard agents={snap.agents} />
+            <LiveTradeFeed entries={feed} />
+          </div>
         </main>
 
-        {/* SCOREBOARD — bottom row right half on desktop, mobile order 2. */}
-        <section
-          className="min-w-0
-            order-2
-            md:col-span-6 md:col-start-7 md:row-start-2"
-        >
-          <Leaderboard agents={snap.agents} />
-        </section>
-
-        {/* TRADE FEED — bottom row left half on desktop, mobile order 3. */}
-        <section
-          className="min-w-0
-            order-3
-            md:col-span-6 md:col-start-1 md:row-start-2"
-        >
-          <LiveTradeFeed entries={feed} />
-        </section>
-
-        {/* RIGHT SIDEBAR — settings/portfolio tabs + copy. Mobile order 4.
+        {/* RIGHT SIDEBAR — settings/portfolio tabs + copy. Mobile order 2.
             The two tabs share the cell so the user never has both at
             once — toggling between them is the explicit way to switch
             context. Active tab gets a solid cyan slab so the change
             is unmissable; the inactive label is dim. */}
         <aside
           className="space-y-3 md:space-y-4 min-w-0
-            order-4
+            order-2
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
           <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
@@ -1145,10 +1135,10 @@ export function TournamentClient() {
           />
         </aside>
 
-        {/* LEFT SIDEBAR — description + autopilot + simulator. Mobile order 5. */}
+        {/* LEFT SIDEBAR — description + autopilot + simulator. Mobile order 3. */}
         <aside
           className="space-y-3 md:space-y-4
-            order-5
+            order-3
             md:col-span-2 md:col-start-1 md:row-start-1"
         >
           {descriptionPanel}

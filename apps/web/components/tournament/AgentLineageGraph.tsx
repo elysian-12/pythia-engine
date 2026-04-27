@@ -58,6 +58,48 @@ const CENTER_Y = HEIGHT / 2;
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 4;
 const TAP_VS_DRAG_THRESHOLD = 8;
+const PARTICLE_COUNT = 220;
+
+// Family colors used to tint the background particle cloud. Excludes
+// "other" so the cloud stays vivid (no slate/grey particles).
+const PARTICLE_FAMILIES = [
+  "liq-trend",
+  "liq-fade",
+  "vol-breakout",
+  "funding-trend",
+  "funding-arb",
+  "polyedge",
+  "polyfusion",
+  "llm",
+] as const;
+
+type Particle = {
+  /** Spherical longitude in [-π, π]. */
+  lon: number;
+  /** Spherical latitude in [-π/2, π/2]. */
+  lat: number;
+  /** Radial offset as a multiple of SPHERE_RADIUS. Range ~0.6–1.05
+   *  so most particles hug the surface, with some slightly inside or
+   *  outside to give the cloud depth. */
+  rOffset: number;
+  color: string;
+  /** Pixel radius of the particle when drawn. */
+  size: number;
+  /** Phase offset so each particle pulses on its own schedule. */
+  phase: number;
+};
+
+/** Tiny seeded PRNG so the particle field is deterministic across
+ *  re-renders. mulberry32 is plenty for visual jitter. */
+function mulberry32(seed: number): () => number {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6d2b79f5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function peelOneLevel(id: string): string | null {
   const m = id.match(/^gen\d+(?:-mut\d+)?-(.+)$/);
@@ -149,6 +191,29 @@ export function AgentLineageGraph({
   >(null);
 
   const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
+
+  // Background particle cloud — multi-colored dots distributed near
+  // the sphere surface so the orb reads as a luminous brain rather
+  // than a wireframe globe. Generated once with a fixed seed; each
+  // particle picks a family color from the swarm palette.
+  const particles = useMemo<Particle[]>(() => {
+    const rng = mulberry32(0xa10c);
+    const list: Particle[] = [];
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const family = PARTICLE_FAMILIES[
+        Math.floor(rng() * PARTICLE_FAMILIES.length)
+      ];
+      list.push({
+        lon: (rng() - 0.5) * 2 * Math.PI,
+        lat: (rng() - 0.5) * Math.PI,
+        rOffset: 0.6 + rng() * 0.5,
+        color: FAMILY_COLORS[family],
+        size: 0.5 + rng() * 1.6,
+        phase: rng() * Math.PI * 2,
+      });
+    }
+    return list;
+  }, []);
 
   useEffect(() => {
     const isInteracting =
@@ -607,6 +672,44 @@ export function AgentLineageGraph({
               r={SPHERE_RADIUS + 12}
               fill="url(#globe-glow)"
             />
+            {/* Particle cloud — multi-colored dots distributed near
+                the sphere surface so the orb reads as a luminous
+                brain rather than a wireframe globe. Each particle
+                rotates with the camera and pulses on its own phase.
+                Drawn before the sphere outline + edges + nodes so it
+                sits in the background. */}
+            <g style={{ pointerEvents: "none" }}>
+              {particles.map((p, i) => {
+                const cy = Math.cos(p.lat + pitch);
+                const sx_sphere =
+                  cy * Math.sin(p.lon + yaw) * p.rOffset;
+                const sy_sphere = Math.sin(p.lat + pitch) * p.rOffset;
+                const sz_sphere =
+                  cy * Math.cos(p.lon + yaw) * p.rOffset;
+                const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
+                const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
+                // Front-of-globe (depth ≈ +1) glows bright; back fades
+                // away. Pulse oscillates at 0.7–1.0 with a per-particle
+                // phase offset so the cloud breathes asynchronously.
+                const depth = sz_sphere;
+                const depthBase = 0.08 + (Math.max(0, depth + 1) / 2) * 0.55;
+                const t = performance.now() / 1000;
+                const pulse = 0.72 + 0.28 * Math.sin(t * 0.7 + p.phase);
+                const opacity = depthBase * pulse;
+                if (opacity < 0.02) return null;
+                return (
+                  <circle
+                    key={i}
+                    cx={sx}
+                    cy={sy}
+                    r={p.size}
+                    fill={p.color}
+                    opacity={opacity}
+                  />
+                );
+              })}
+            </g>
+
             {/* Bronze horizon — subtle dashed circle frames the marble. */}
             <circle
               cx={CENTER_X}
@@ -614,7 +717,7 @@ export function AgentLineageGraph({
               r={SPHERE_RADIUS}
               fill="none"
               stroke="#a16207"
-              strokeOpacity={0.35}
+              strokeOpacity={0.18}
               strokeWidth={1}
               strokeDasharray="2 4"
             />
