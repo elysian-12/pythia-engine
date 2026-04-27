@@ -118,6 +118,17 @@ Risk + sizing settings entered in `/tournament` POST to `/api/config`
 and land at `data/swarm-config.json`, which `pythia-swarm-live`
 reloads every 15 s — so you can tune live.
 
+### Hourly auto-refresh of the deployed snapshot
+
+GitHub Actions' native `schedule:` cron is lossy under load and
+Vercel Hobby's cron is daily-only. The reliable free path is
+**cron-job.org → GitHub `repository_dispatch` → workflow → commit →
+Vercel auto-redeploy**. Setup walkthrough in
+[docs/CRON_SETUP.md](docs/CRON_SETUP.md). Each run takes ~2-3 min
+warm and produces an evolved snapshot that's bundled into the next
+deploy. Gen counter in `/api/swarm` increments after each successful
+refresh — that's the externally-visible heartbeat.
+
 ## Architecture
 
 Six layers — see [ARCHITECTURE.md](ARCHITECTURE.md) for details.

@@ -161,9 +161,34 @@ PYTHIA_EVOLVE_EVERY=500                          # evolution cadence
 
 - Root Directory = `apps/web`
 - Build Command = default (`next build`; `prebuild` bundles the snapshot)
-- Env vars: `KIYOTAKA_API_KEY` (required for the live badges to go green)
+- Env vars: `KIYOTAKA_API_KEY` (required for the live badges to go green),
+  optional `GITHUB_DISPATCH_PAT` + `CRON_SECRET` if you use the relay
+  route at `/api/cron/refresh`.
 - The repo-root `data/swarm-snapshot.json` is NOT available on Vercel — the
   bundler script copies it into `apps/web/public/` at build time.
+
+## Hourly snapshot refresh (production)
+
+The deployed snapshot stays fresh via cron-job.org → GitHub's
+`repository_dispatch` endpoint → `.github/workflows/refresh-snapshot.yml`.
+Workflow runs `swarm-backtest`, bundles, prunes
+`reports/swarm/<ts>/` older than the last 168, commits, Vercel
+auto-redeploys. Runtime ~2-3 min warm. **The PAT must have `Contents:
+Read and write`** — `Actions: Write` alone returns `403 Forbidden`
+(the GitHub docs at the top of the dispatch endpoint say "must have
+admin access" but the actual fine-grained scope is `contents=write`,
+visible in the response's `x-accepted-github-permissions` header).
+Full walkthrough + troubleshooting in [docs/CRON_SETUP.md](docs/CRON_SETUP.md).
+
+## Persistent state TTL
+
+- `r_history` per agent capped at `R_HISTORY_CAP = 500` in
+  `crates/swarm/src/scoring.rs`. Keeps `swarm-population.json` ≤ ~100 KB.
+- `reports/swarm/<ts>/` pruned to the last 168 (one week of hourly runs)
+  by the workflow's "Prune old reports" step. Local helper:
+  `scripts/prune-reports.sh --keep N --dry-run`.
+- `localStorage["pythia-closed-positions"]` capped at 500 trades in
+  `apps/web/components/tournament/TournamentClient.tsx`.
 
 ## Known pitfalls
 
