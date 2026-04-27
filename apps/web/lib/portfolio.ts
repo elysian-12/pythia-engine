@@ -64,17 +64,26 @@ type EntryInputs = {
 };
 
 /** Decide whether a fresh router signal should open a new position,
- *  close an opposite one first, or be skipped. Pure — no side effects. */
+ *  close an opposite one first, or be skipped. Pure — no side effects.
+ *
+ *  NB: `conviction` from `routeTrade` is *signed* — `+1` = unanimous
+ *  long, `-1` = unanimous short, `0` = split. The strength threshold
+ *  must therefore compare the *magnitude*; direction is in the
+ *  `direction` field already. The earlier implementation compared the
+ *  signed conviction directly, which meant strong-short signals
+ *  (conviction ≤ -0.5) always failed `conviction < min_conviction`
+ *  and the meta-agent skipped every short trade. */
 export function decideEntry(inp: EntryInputs): EntryAction {
   const { asset, direction, conviction, open, config } = inp;
+  const strength = Math.abs(conviction);
 
   if (!direction) {
     return { kind: "skip", reason: "router stayed flat" };
   }
-  if (conviction < config.min_conviction) {
+  if (strength < config.min_conviction) {
     return {
       kind: "skip",
-      reason: `conviction ${conviction.toFixed(2)} below floor ${config.min_conviction.toFixed(2)}`,
+      reason: `conviction ${strength.toFixed(2)} below floor ${config.min_conviction.toFixed(2)}`,
     };
   }
 
@@ -200,11 +209,13 @@ type EventPolicyInputs = {
 /** When a fresh ensemble vote on an asset runs *opposite* the side of
  *  an open position with high enough conviction, close the position.
  *  Returns the ids that should be flattened — caller closes them at
- *  the latest mark. */
+ *  the latest mark. Same signed-vs-magnitude trap as `decideEntry`:
+ *  conviction is `[-1, +1]` (sign = direction), so the threshold check
+ *  must compare against the magnitude. */
 export function manageOnEvent(inp: EventPolicyInputs): string[] {
   const { asset, vote_direction, conviction, positions, config } = inp;
   if (vote_direction === "flat") return [];
-  if (conviction < config.swarm_flip_conviction) return [];
+  if (Math.abs(conviction) < config.swarm_flip_conviction) return [];
   return positions
     .filter((p) => p.asset === asset && p.side !== vote_direction)
     .map((p) => p.id);

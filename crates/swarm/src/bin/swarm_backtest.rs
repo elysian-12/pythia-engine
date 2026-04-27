@@ -485,6 +485,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_dir.join("swarm-snapshot.json"),
         serde_json::to_vec_pretty(&snapshot)?,
     )?;
+    // Also drop the full enriched snapshot under the report dir so the
+    // Vercel bundler can read it. `data/` is gitignored — bundle-snapshot.mjs
+    // only sees the report dir on hosted builds, and reports/<ts>/swarm.json
+    // is just the agents array (no generation, no regime, no cert). Without
+    // this, every Vercel deploy produced a snapshot with generation=0
+    // regardless of how many evolution cycles had run.
+    std::fs::write(
+        dir.join("snapshot.json"),
+        serde_json::to_vec_pretty(&snapshot)?,
+    )?;
     println!("snapshot: data/swarm-snapshot.json → /tournament will render this run");
 
     // Persist the live systematic population + their lifetime stats so

@@ -216,7 +216,7 @@ impl Evolution {
         // Full ranked list (elite + non-elite) — we draw from this when
         // a family quota isn't met by the elite alone, so the family
         // doesn't go extinct before getting a fair sample.
-        let ranked_all: Vec<ScoredAgent> = scored;
+        let _ranked_all: Vec<ScoredAgent> = scored;
 
         let mut next: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(self.cfg.population_cap);
         let mut family_counts: HashMap<RuleFamilyKind, usize> = HashMap::new();

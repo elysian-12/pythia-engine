@@ -30,8 +30,15 @@ async function latestBacktest() {
     .filter((n) => /^\d+$/.test(n))
     .sort((a, b) => Number(b) - Number(a));
   for (const d of dirs) {
-    const p = path.join(base, d, "swarm.json");
-    if (existsSync(p)) return p;
+    // Prefer the enriched snapshot.json (full snapshot shape with
+    // generation, regime, certification) over swarm.json (raw agents
+    // array). Without this preference the bundler bakes
+    // `generation: 0` into the deployed snapshot every time it's
+    // forced to fall back to swarm.json.
+    const snapshotP = path.join(base, d, "snapshot.json");
+    if (existsSync(snapshotP)) return snapshotP;
+    const swarmP = path.join(base, d, "swarm.json");
+    if (existsSync(swarmP)) return swarmP;
   }
   return null;
 }

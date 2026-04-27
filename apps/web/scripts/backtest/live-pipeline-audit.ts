@@ -214,7 +214,7 @@ async function main() {
   reports.push(step6);
   log(
     step6,
-    `vote: direction=${route.vote.direction}, conviction=${route.vote.conviction.toFixed(2)}, fired=${route.vote.fired_count}/${reactions.length}`,
+    `vote: direction=${route.vote.direction}, conviction=${route.vote.conviction.toFixed(2)} (|x|=${Math.abs(route.vote.conviction).toFixed(2)}), fired=${route.vote.fired_count}/${reactions.length}`,
   );
   log(
     step6,
@@ -281,7 +281,11 @@ async function main() {
   const open: PaperPosition[] = [];
   const closed: PaperPosition[] = [];
 
-  // 8a) decideEntry decides what to do
+  // 8a) decideEntry decides what to do. NB: pass the *signed* conviction
+  // — decideEntry takes Math.abs internally so strong-short signals
+  // (conviction ≤ -0.30) aren't silently filtered by the conviction
+  // floor. Used to be the production bug: every short event made it
+  // into the trade feed but never opened a paper position.
   const action = decideEntry({
     asset: probeEvent.asset,
     direction: route.decision.direction,
