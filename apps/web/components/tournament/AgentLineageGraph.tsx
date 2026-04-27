@@ -1,1059 +1,715 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
 import {
-  forceSimulation,
-  forceLink,
-  forceManyBody,
-  forceCenter,
-  forceCollide,
-  forceX,
-  forceY,
-  type Simulation,
-  type SimulationNodeDatum,
-  type SimulationLinkDatum,
-} from "d3-force";
-import { agentFamily, FAMILY_COLORS, type AgentStats } from "@/lib/swarm";
+  agentFamily,
+  FAMILY_COLORS,
+  FAMILY_LABEL,
+  type AgentStats,
+} from "@/lib/swarm";
 
-// Force-directed lineage graph projected onto a Pythian orb — the
-// agora of the swarm. SVG only; orthographic sphere projection plus
-// per-node depth scaling + dim-back-of-orb fading sells the 3D feel
-// without three.js. Visual theme is classical Greek: laurel-gold
-// laureate, bronze horizon, ochre haze.
+// ───────────────────────────────────────────────────────────────────
+// Galaxy field — Three.js spiral disc inspired by Bruno Simon's
+// galaxy lesson. Particles spawn on N branches with a power-law
+// radial jitter and the vertex shader winds them into spirals via
+// differential rotation (`uTime / sqrt(distance)`). Champion lives
+// as a glowing sun at the centre; the other agents sit as planets
+// along the outer arms and orbit at the matching shader rotation.
 //
-// Gestures (mouse, trackpad, touch all work):
-//   - 1-finger drag empty space  → rotate globe (yaw + pitch)
-//   - 2-finger pinch             → zoom around the pinch midpoint
-//   - 2-finger drag              → pan
-//   - Scroll wheel / trackpad    → zoom around cursor
-//   - +/− / ⟲ buttons (top-left) → discrete zoom + reset
-//   - Drag a node                → reposition it; sphere reflows
-//   - Tap any node               → pin a stats panel for that agent
-//                                  (works on touch where hover doesn't
-//                                  fire)
-//   - Tap empty space            → clear selection
+// Production differences from the design prototype:
+//   - Family-color palette is the Hail Mary set in lib/swarm.ts
+//     (astrophage teal, Tau Ceti amber, Petrova magenta, etc.)
+//   - Particle count scales with viewport so phones don't melt.
+//   - Pulse trigger comes from the parent (pulseKey) — no internal
+//     auto-event timer, since production events arrive from the
+//     AutoPilot poller / EventSimulator already.
+//   - HTML overlay handles the agent details panel and the family
+//     legend, layered over the WebGL canvas.
+//
+// Gestures:
+//   - Drag empty space        → orbit yaw / pitch
+//   - Shift-drag (or right)   → pan
+//   - Scroll wheel            → zoom
+//   - Tap a satellite         → pin its details panel
+//   - Tap empty space         → clear selection
 
 type Props = {
   agents: AgentStats[];
   championId?: string | null;
   generation?: number;
+  /** Increments on every event the parent fires; the galaxy uses
+   *  the change to pulse the matching specialist agent (or a
+   *  random one if no specialist is provided). */
+  pulseKey?: number;
+  /** Optional agent ID of the most recent event's specialist —
+   *  used to pick which planet to pulse on a pulseKey bump. */
+  pulseAgentId?: string | null;
 };
 
-type GraphNode = SimulationNodeDatum & {
+const GALAXY_RADIUS = 4.1;
+const BRANCHES = 5;
+const SPIN = 1.1;
+const RANDOMNESS = 0.22;
+const RANDOMNESS_POWER = 3.0;
+const INSIDE_COLOR = new THREE.Color("#ed7b4d"); // warm core
+const OUTSIDE_COLOR = new THREE.Color("#4657de"); // purple rim
+
+const VERT = /* glsl */ `
+uniform float uTime;
+uniform float uSize;
+attribute float aScale;
+attribute vec3 aColor;
+varying vec3 vColor;
+void main() {
+  vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+  float distanceToCenter = length(modelPosition.xz);
+  float angle = atan(modelPosition.x, modelPosition.z);
+  float angleOffset = (1.0 / max(distanceToCenter, 0.1)) * uTime * 0.05;
+  angle += angleOffset;
+  modelPosition.x = cos(angle) * distanceToCenter;
+  modelPosition.z = sin(angle) * distanceToCenter;
+  vec4 viewPosition = viewMatrix * modelPosition;
+  vec4 projectedPosition = projectionMatrix * viewPosition;
+  gl_Position = projectedPosition;
+  gl_PointSize = uSize * aScale;
+  gl_PointSize *= (1.0 / -viewPosition.z);
+  vColor = aColor;
+}
+`;
+
+const FRAG = /* glsl */ `
+varying vec3 vColor;
+void main() {
+  float d = distance(gl_PointCoord, vec2(0.5));
+  float strength = 1.0 - smoothstep(0.0, 0.5, d);
+  gl_FragColor = vec4(vColor * strength, strength);
+}
+`;
+
+function omegaAt(r: number): number {
+  return 0.05 / Math.max(0.1, r);
+}
+
+function familyColorOrFallback(agentId: string): THREE.Color {
+  const fam = agentFamily(agentId);
+  const hex = (FAMILY_COLORS as Record<string, string>)[fam] ?? "#94a3b8";
+  return new THREE.Color(hex);
+}
+
+function softSprite(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    const grd = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, "rgba(255,255,255,1)");
+    grd.addColorStop(0.3, "rgba(255,255,255,0.7)");
+    grd.addColorStop(0.6, "rgba(255,255,255,0.18)");
+    grd.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Particle count scales with viewport — phones get a thinner cloud
+// so the canvas hits 60 fps without melting battery, desktops get
+// the full Bruno-Simon-density experience.
+function particleCountFor(width: number): number {
+  if (width < 640) return 25_000;
+  if (width < 1024) return 50_000;
+  return 80_000;
+}
+
+type AgentRecord = {
   id: string;
   family: ReturnType<typeof agentFamily>;
-  agent?: AgentStats;
+  agent: AgentStats;
   isChampion: boolean;
-  isSeed: boolean;
-  size: number;
+  r: number;
+  theta: number;
+  group: THREE.Group;
+  planet: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  halo: THREE.Sprite;
+  haloMat: THREE.SpriteMaterial;
+  ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  ringMat: THREE.MeshBasicMaterial;
+  baseColor: THREE.Color;
+  activity: number;
 };
-
-type GraphLink = SimulationLinkDatum<GraphNode>;
-
-const WIDTH = 900;
-const HEIGHT = 560;
-const SPHERE_RADIUS = Math.min(WIDTH, HEIGHT) * 0.42;
-const CENTER_X = WIDTH / 2;
-const CENTER_Y = HEIGHT / 2;
-const MIN_SCALE = 0.6;
-const MAX_SCALE = 4;
-const TAP_VS_DRAG_THRESHOLD = 8;
-const PARTICLE_COUNT = 360;
-const SMOKE_COUNT = 600;
-
-// Family colors used to tint the background particle cloud. Excludes
-// "other" so the cloud stays vivid (no slate/grey particles).
-const PARTICLE_FAMILIES = [
-  "liq-trend",
-  "liq-fade",
-  "vol-breakout",
-  "funding-trend",
-  "funding-arb",
-  "polyedge",
-  "polyfusion",
-  "llm",
-] as const;
-
-type Particle = {
-  /** Spherical longitude in [-π, π]. */
-  lon: number;
-  /** Spherical latitude in [-π/2, π/2]. */
-  lat: number;
-  /** Radial offset as a multiple of SPHERE_RADIUS. Range ~0.6–1.05
-   *  so most particles hug the surface, with some slightly inside or
-   *  outside to give the cloud depth. */
-  rOffset: number;
-  color: string;
-  /** Pixel radius of the particle when drawn. */
-  size: number;
-  /** Phase offset so each particle pulses on its own schedule. */
-  phase: number;
-};
-
-/** Tiny white "smoke" particle. Acts as a soft background layer
- *  densest at the sphere surface and thinning outward, so the orb
- *  looks like a brain wreathed in mist rather than a hard ball. */
-type Smoke = {
-  lon: number;
-  lat: number;
-  rOffset: number;
-  size: number;
-  /** Drift velocity in radians/sec — gives the cloud gentle motion
-   *  even when the camera is still. */
-  dLon: number;
-  dLat: number;
-  phase: number;
-  baseOp: number;
-};
-
-/** Tiny seeded PRNG so the particle field is deterministic across
- *  re-renders. mulberry32 is plenty for visual jitter. */
-function mulberry32(seed: number): () => number {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6d2b79f5) >>> 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function peelOneLevel(id: string): string | null {
-  const m = id.match(/^gen\d+(?:-mut\d+)?-(.+)$/);
-  return m ? m[1] : null;
-}
-
-function resolveParent(id: string, liveIds: Set<string>): string | null {
-  let cursor: string | null = peelOneLevel(id);
-  while (cursor) {
-    if (liveIds.has(cursor)) return cursor;
-    const next = peelOneLevel(cursor);
-    if (!next) return cursor;
-    cursor = next;
-  }
-  return null;
-}
-
-/** Map 2D layout (x ∈ [0, W], y ∈ [0, H]) to lon/lat, rotate by
- *  yaw/pitch, orthographic-project to viewBox space. Pan + zoom are
- *  applied via the wrapping <g transform>, not here. */
-function project(
-  x2d: number,
-  y2d: number,
-  yaw: number,
-  pitch: number,
-): { sx: number; sy: number; depth: number } {
-  const lon = ((x2d - CENTER_X) / CENTER_X) * Math.PI;
-  const lat = ((y2d - CENTER_Y) / CENTER_Y) * (Math.PI / 2);
-  const adjLon = lon + yaw;
-  const adjLat = lat + pitch;
-  const cy = Math.cos(adjLat);
-  const sx_sphere = cy * Math.sin(adjLon);
-  const sy_sphere = Math.sin(adjLat);
-  const sz_sphere = cy * Math.cos(adjLon);
-  const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
-  const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
-  return { sx, sy, depth: sz_sphere };
-}
 
 export function AgentLineageGraph({
   agents,
   championId = null,
   generation = 0,
+  pulseKey = 0,
+  pulseAgentId = null,
 }: Props) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const [, forceRerender] = useState(0);
-  const tickCount = useRef(0);
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  // React-side state for the HTML overlay.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Frozen view of the agents prop. We only sync to the latest snapshot
-  // when the user isn't interacting (no selection, no live drag, tab is
-  // visible). Stops layout reshuffles from yanking the cursor target
-  // mid-study after an hourly cron refresh.
+  // Frozen agents — we only sync the latest snapshot when the user
+  // isn't actively studying a selection. Otherwise the snapshot
+  // refresh would yank planets out from under the cursor.
   const [frozenAgents, setFrozenAgents] = useState(agents);
 
-  // Camera state: rotation + zoom + pan. Refs so updates during a
-  // gesture don't trigger React re-renders for every move event;
-  // the rAF loop drives the visual update.
-  const yawRef = useRef(0);
-  const pitchRef = useRef(0);
-  const scaleRef = useRef(1);
-  const panXRef = useRef(0);
-  const panYRef = useRef(0);
-
-  // All currently-down pointers on the SVG (mouse, touch fingers, pen).
-  // Two simultaneous → pinch/pan gesture; one → single drag (camera or
-  // node depending on what was hit).
-  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const pinchRef = useRef<{
-    startDist: number;
-    startScale: number;
-    startCenterVB: { x: number; y: number };
-    startPanX: number;
-    startPanY: number;
-  } | null>(null);
-
-  const dragRef = useRef<
-    | {
-        mode: "node";
-        pointerId: number;
-        node: GraphNode;
-        startX: number;
-        startY: number;
-        moved: boolean;
-      }
-    | { mode: "camera"; pointerId: number; lastX: number; lastY: number }
-    | null
-  >(null);
-
-  const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
-
-  // White smoke layer — tiny background particles densest right at
-  // the sphere surface and tapering outward, so the orb sits inside
-  // a soft mist instead of a vacuum. Slow drift gives the cloud a
-  // life of its own even when the camera isn't moving.
-  const smoke = useMemo<Smoke[]>(() => {
-    const rng = mulberry32(0xb0b0);
-    const list: Smoke[] = [];
-    for (let i = 0; i < SMOKE_COUNT; i++) {
-      const r = rng();
-      let rOffset: number;
-      // 60% surface-hugging, 30% mid-halo, 10% far halo.
-      if (r < 0.6) rOffset = 0.95 + rng() * 0.15;
-      else if (r < 0.9) rOffset = 1.1 + rng() * 0.3;
-      else rOffset = 1.4 + rng() * 0.5;
-      list.push({
-        lon: (rng() - 0.5) * 2 * Math.PI,
-        lat: (rng() - 0.5) * Math.PI,
-        rOffset,
-        size: 0.25 + rng() * 0.45,
-        dLon: (rng() - 0.5) * 0.04,
-        dLat: (rng() - 0.5) * 0.025,
-        phase: rng() * Math.PI * 2,
-        baseOp: 0.18 + rng() * 0.32,
-      });
-    }
-    return list;
-  }, []);
-
-  // Background particle cloud — multi-colored dots distributed near
-  // the sphere surface so the orb reads as a luminous brain rather
-  // than a wireframe globe. Generated once with a fixed seed; each
-  // particle picks a family color from the swarm palette.
-  const particles = useMemo<Particle[]>(() => {
-    const rng = mulberry32(0xa10c);
-    const list: Particle[] = [];
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const family = PARTICLE_FAMILIES[
-        Math.floor(rng() * PARTICLE_FAMILIES.length)
-      ];
-      // rOffset spans 0.4 to 1.55 of the sphere radius — about a
-      // third of the cloud sits inside the orb, the rest forms an
-      // outer halo so the brain feels three-dimensional rather than
-      // shrink-wrapped to the surface.
-      const inner = rng();
-      const rOffset = inner < 0.35 ? 0.4 + rng() * 0.45 : 1.0 + rng() * 0.55;
-      list.push({
-        lon: (rng() - 0.5) * 2 * Math.PI,
-        lat: (rng() - 0.5) * Math.PI,
-        rOffset,
-        color: FAMILY_COLORS[family],
-        size: 0.5 + rng() * 1.8,
-        phase: rng() * Math.PI * 2,
-      });
-    }
-    return list;
-  }, []);
-
+  // Stash the latest props on a ref so the long-lived rAF loop reads
+  // them without us having to tear down the scene on every prop change.
+  type SceneState = {
+    updateAgents: (a: AgentStats[], champion: string | null) => void;
+    pulse: (agentId: string | null) => void;
+    resetView: () => void;
+    pickAgentAt: (clientX: number, clientY: number) => string | null;
+  };
+  const sceneRef = useRef<SceneState | null>(null);
+  // Latest selection state, mirrored to a ref so the animate loop
+  // can read without re-mounting the scene.
+  const selectedRef = useRef<string | null>(null);
+  const hoveredRef = useRef<string | null>(null);
   useEffect(() => {
-    const isInteracting =
-      selectedId !== null ||
-      dragRef.current !== null ||
-      pointersRef.current.size > 0;
-    const tabHidden = typeof document !== "undefined" && document.hidden;
-    if (!isInteracting && !tabHidden) {
+    selectedRef.current = selectedId;
+  }, [selectedId]);
+  useEffect(() => {
+    hoveredRef.current = hoveredId;
+  }, [hoveredId]);
+
+  // Sync frozen agents when the user isn't interacting.
+  useEffect(() => {
+    if (selectedId === null) {
       setFrozenAgents(agents);
     }
   }, [agents, selectedId]);
 
+  // On tab return, catch up to whatever's freshest (the snapshot
+  // probably refreshed while the user was away).
   useEffect(() => {
     if (typeof document === "undefined") return;
     const onVisibility = () => {
-      if (
-        !document.hidden &&
-        selectedId === null &&
-        dragRef.current === null
-      ) {
+      if (!document.hidden && selectedId === null) {
         setFrozenAgents(agents);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibility);
   }, [agents, selectedId]);
 
-  const { nodes, links } = useMemo(() => {
-    if (frozenAgents.length === 0) {
-      return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
-    }
-    const liveIds = new Set(frozenAgents.map((a) => a.agent_id));
-    const maxR = Math.max(1, ...frozenAgents.map((a) => Math.abs(a.total_r)));
-    const liveNodes: GraphNode[] = frozenAgents.map((a) => ({
-      id: a.agent_id,
-      family: agentFamily(a.agent_id),
-      agent: a,
-      isChampion: a.agent_id === championId,
-      isSeed: false,
-      size: 7 + (Math.abs(a.total_r) / maxR) * 13,
-    }));
+  // ── Scene mount (one-shot)
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
 
-    const linksOut: GraphLink[] = [];
-    const seedNodes: GraphNode[] = [];
-    const seenSeeds = new Set<string>();
-    for (const n of liveNodes) {
-      const parent = resolveParent(n.id, liveIds);
-      if (!parent) continue;
-      if (liveIds.has(parent)) {
-        linksOut.push({ source: n.id, target: parent });
-      } else {
-        if (!seenSeeds.has(parent)) {
-          seenSeeds.add(parent);
-          seedNodes.push({
-            id: parent,
-            family: agentFamily(parent),
-            isChampion: false,
-            isSeed: true,
-            size: 4.5,
-          });
+    const W = mount.clientWidth;
+    const H = mount.clientHeight;
+    const PARTICLE_COUNT = particleCountFor(W);
+
+    const scene = new THREE.Scene();
+    scene.background = null; // transparent over the panel
+
+    const camera = new THREE.PerspectiveCamera(45, W / H, 0.05, 200);
+    const DEFAULT_VIEW = { yaw: 0.4, pitch: 0.7, dist: 7.0, panX: 0, panZ: 0 };
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(W, H);
+    renderer.setClearColor(0x000000, 0);
+    mount.appendChild(renderer.domElement);
+
+    // ── Particle field — branch-based spiral with a soft bulge in
+    // the centre and tighter, defined arms toward the rim.
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const aColor = new Float32Array(PARTICLE_COUNT * 3);
+    const aScale = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const ix = i * 3;
+      const rNorm = Math.pow(Math.random(), 2.4);
+      const r = rNorm * GALAXY_RADIUS;
+      const branchAngle = ((i % BRANCHES) / BRANCHES) * Math.PI * 2;
+      const spinAngle = r * SPIN;
+      const theta = branchAngle + spinAngle;
+
+      // High randomness near the centre (soft bulge), low at the rim
+      // (sharp lanes). Wider bulge: slow exp falloff.
+      const coreBlend = Math.exp(-rNorm * 3.2);
+      const armCrisp = 0.22;
+      const rJ = RANDOMNESS * r * (armCrisp + 8 * coreBlend);
+      const sgn = () => (Math.random() < 0.5 ? 1 : -1);
+      const rx =
+        Math.pow(Math.random(), RANDOMNESS_POWER) * sgn() * rJ;
+      const ry =
+        Math.pow(Math.random(), RANDOMNESS_POWER) * sgn() * rJ * 0.35;
+      const rz =
+        Math.pow(Math.random(), RANDOMNESS_POWER) * sgn() * rJ;
+
+      positions[ix] = Math.cos(theta) * r + rx;
+      positions[ix + 1] = ry;
+      positions[ix + 2] = Math.sin(theta) * r + rz;
+
+      const tColor = Math.min(1, r / GALAXY_RADIUS);
+      const mixed = INSIDE_COLOR.clone().lerp(OUTSIDE_COLOR, tColor);
+      const corePunch = Math.max(0, 1 - r / (GALAXY_RADIUS * 0.42));
+      mixed.r = Math.min(1, mixed.r + corePunch * 0.55);
+      mixed.g = Math.min(1, mixed.g + corePunch * 0.42);
+      mixed.b = Math.min(1, mixed.b + corePunch * 0.28);
+      const jitter = 0.85 + Math.random() * 0.3;
+      aColor[ix] = mixed.r * jitter;
+      aColor[ix + 1] = mixed.g * jitter;
+      aColor[ix + 2] = mixed.b * jitter;
+
+      aScale[i] = 0.5 + Math.random() * 0.8;
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute("aColor", new THREE.BufferAttribute(aColor, 3));
+    geom.setAttribute("aScale", new THREE.BufferAttribute(aScale, 1));
+
+    const uniforms: { uTime: { value: number }; uSize: { value: number } } = {
+      uTime: { value: 0 },
+      uSize: { value: 12 * renderer.getPixelRatio() },
+    };
+    const pMat = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const points = new THREE.Points(geom, pMat);
+    scene.add(points);
+
+    const sprite = softSprite();
+
+    // ── Champion sun at the galactic centre.
+    const sunGroup = new THREE.Group();
+    scene.add(sunGroup);
+    const sunCore = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 32, 32),
+      new THREE.MeshBasicMaterial({ color: 0xfff1c8 }),
+    );
+    sunGroup.add(sunCore);
+    const sunGlowMat = new THREE.SpriteMaterial({
+      map: sprite,
+      color: new THREE.Color("#fbbf24"),
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const sunGlow = new THREE.Sprite(sunGlowMat);
+    sunGlow.scale.set(2.4, 2.4, 1);
+    sunGroup.add(sunGlow);
+    const sunWashMat = new THREE.SpriteMaterial({
+      map: sprite,
+      color: new THREE.Color("#f59e0b"),
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const sunWash = new THREE.Sprite(sunWashMat);
+    sunWash.scale.set(5.2, 5.2, 1);
+    sunGroup.add(sunWash);
+
+    // ── Agent satellites — populated in updateAgents.
+    const agentGroup = new THREE.Group();
+    scene.add(agentGroup);
+    let records: AgentRecord[] = [];
+
+    function clearAgents() {
+      for (const r of records) {
+        agentGroup.remove(r.group);
+        r.planet.geometry.dispose();
+        r.planet.material.dispose();
+        r.haloMat.dispose();
+        r.ring.geometry.dispose();
+        r.ringMat.dispose();
+      }
+      records = [];
+    }
+
+    function buildAgents(list: AgentStats[], champion: string | null) {
+      clearAgents();
+      // Sort by total_r so the strongest agents sit on the inner arms,
+      // weakest on the rim — reads as a pecking order around the sun.
+      const ranked = [...list]
+        .filter((a) => a.agent_id !== champion)
+        .sort((a, b) => b.total_r - a.total_r);
+      const N = ranked.length;
+      ranked.forEach((a, i) => {
+        const fam = agentFamily(a.agent_id);
+        const baseColor = familyColorOrFallback(a.agent_id);
+        // Distribute across mid → outer arms, skip the very core.
+        const rNorm = N <= 1 ? 0.6 : 0.32 + (i / (N - 1)) * 0.62;
+        const r = rNorm * GALAXY_RADIUS;
+        const branch = i % BRANCHES;
+        const branchAngle = (branch / BRANCHES) * Math.PI * 2;
+        const theta =
+          branchAngle + r * SPIN + ((i * 73 + 11) % 19) * 0.01;
+
+        const group = new THREE.Group();
+        const planet = new THREE.Mesh(
+          new THREE.SphereGeometry(0.07, 16, 16),
+          new THREE.MeshBasicMaterial({ color: 0xffffff }),
+        );
+        group.add(planet);
+        const haloMat = new THREE.SpriteMaterial({
+          map: sprite,
+          color: baseColor,
+          transparent: true,
+          opacity: 0.6,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const halo = new THREE.Sprite(haloMat);
+        halo.scale.set(0.4, 0.4, 1);
+        group.add(halo);
+
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: baseColor,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.1, 0.12, 48),
+          ringMat,
+        );
+        ring.rotation.x = -Math.PI / 2;
+        group.add(ring);
+
+        // userData for raycast hits
+        group.userData.agentId = a.agent_id;
+        planet.userData.agentId = a.agent_id;
+        halo.userData.agentId = a.agent_id;
+
+        agentGroup.add(group);
+
+        records.push({
+          id: a.agent_id,
+          family: fam,
+          agent: a,
+          isChampion: false,
+          r,
+          theta,
+          group,
+          planet,
+          halo,
+          haloMat,
+          ring,
+          ringMat,
+          baseColor,
+          activity: 0,
+        });
+      });
+    }
+
+    // ── Camera controls (orbit + pan + wheel zoom)
+    const ctl = { ...DEFAULT_VIEW };
+    let dragging:
+      | {
+          id: number;
+          mode: "orbit" | "pan";
+          startX: number;
+          startY: number;
+          yaw0: number;
+          pitch0: number;
+          panX0: number;
+          panZ0: number;
+          moved: boolean;
         }
-        linksOut.push({ source: n.id, target: parent });
-      }
-    }
-    return { nodes: [...liveNodes, ...seedNodes], links: linksOut };
-  }, [frozenAgents, championId]);
+      | null = null;
+    const dom = renderer.domElement;
+    dom.style.touchAction = "none";
+    dom.style.cursor = "grab";
 
-  useEffect(() => {
-    if (nodes.length === 0) return;
-    const sim = forceSimulation<GraphNode>(nodes)
-      .force(
-        "link",
-        forceLink<GraphNode, GraphLink>(links)
-          .id((d) => d.id)
-          .distance((l) => {
-            const s = l.source as GraphNode;
-            const t = l.target as GraphNode;
-            return s.family === t.family ? 60 : 100;
-          })
-          .strength(0.18),
-      )
-      .force("charge", forceManyBody<GraphNode>().strength(-80))
-      .force("center", forceCenter(CENTER_X, CENTER_Y))
-      .force("anchorX", forceX<GraphNode>(CENTER_X).strength(0.04))
-      .force("anchorY", forceY<GraphNode>(CENTER_Y).strength(0.04))
-      .force(
-        "collide",
-        forceCollide<GraphNode>()
-          .radius((d) => d.size + 4)
-          .strength(0.9),
-      )
-      .velocityDecay(0.5)
-      .alpha(1)
-      .alphaDecay(0.035);
-
-    const margin = 8;
-    const onTick = () => {
-      for (const n of nodes) {
-        if (n.x == null) n.x = CENTER_X;
-        if (n.y == null) n.y = CENTER_Y;
-        n.x = Math.max(margin, Math.min(WIDTH - margin, n.x));
-        n.y = Math.max(margin, Math.min(HEIGHT - margin, n.y));
+    const onPointerDown = (e: PointerEvent) => {
+      dom.setPointerCapture(e.pointerId);
+      dom.style.cursor = "grabbing";
+      const pan = e.button === 2 || e.shiftKey;
+      dragging = {
+        id: e.pointerId,
+        mode: pan ? "pan" : "orbit",
+        startX: e.clientX,
+        startY: e.clientY,
+        yaw0: ctl.yaw,
+        pitch0: ctl.pitch,
+        panX0: ctl.panX,
+        panZ0: ctl.panZ,
+        moved: false,
+      };
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging || dragging.id !== e.pointerId) return;
+      const dx = e.clientX - dragging.startX;
+      const dy = e.clientY - dragging.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 6) dragging.moved = true;
+      if (dragging.mode === "orbit") {
+        ctl.yaw = dragging.yaw0 - dx * 0.005;
+        ctl.pitch = Math.max(
+          0.05,
+          Math.min(Math.PI / 2 - 0.02, dragging.pitch0 + dy * 0.005),
+        );
+      } else {
+        const cosY = Math.cos(ctl.yaw);
+        const sinY = Math.sin(ctl.yaw);
+        ctl.panX =
+          dragging.panX0 - dx * 0.012 * cosY - dy * 0.012 * sinY;
+        ctl.panZ =
+          dragging.panZ0 + dx * 0.012 * sinY - dy * 0.012 * cosY;
       }
     };
-    sim.on("tick", onTick);
-    simRef.current = sim;
-    return () => {
-      sim.stop();
-      simRef.current = null;
-    };
-  }, [nodes, links]);
-
-  useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const loop = (t: number) => {
-      const dt = t - last;
-      last = t;
-      // Auto-rotate only in the resting "default" view: nothing
-      // selected, no zoom or pan applied, no active gesture. Once the
-      // user has touched any control we stop spinning so we're not
-      // fighting their input.
-      const isIdle =
-        !dragRef.current &&
-        !pinchRef.current &&
-        selectedId === null &&
-        Math.abs(scaleRef.current - 1) < 0.01 &&
-        Math.abs(panXRef.current) < 1 &&
-        Math.abs(panYRef.current) < 1;
-      if (isIdle) {
-        yawRef.current += (dt / 1000) * ((Math.PI * 2) / 90);
+    const onPointerUp = (e: PointerEvent) => {
+      if (!dragging || dragging.id !== e.pointerId) return;
+      const wasDrag = dragging.moved;
+      dragging = null;
+      dom.style.cursor = "grab";
+      // Tap (no drag) → attempt selection via raycast.
+      if (!wasDrag) {
+        const hit = pickAgentAt(e.clientX, e.clientY);
+        if (hit) {
+          setSelectedId((cur) => (cur === hit ? null : hit));
+        } else {
+          setSelectedId(null);
+        }
       }
-      tickCount.current++;
-      if (tickCount.current % 2 === 0) forceRerender((c) => c + 1);
-      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [selectedId]);
-
-  // Single source of truth for client→viewBox conversion. Reads svgRef
-  // (stable) so a closure over this function is fine.
-  const screenToViewBox = (clientX: number, clientY: number) => {
-    const svg = svgRef.current;
-    if (!svg) return null;
-    const pt = svg.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return null;
-    return pt.matrixTransform(ctm.inverse());
-  };
-
-  const viewBoxToWorld = (vx: number, vy: number) => ({
-    x: (vx - panXRef.current) / scaleRef.current,
-    y: (vy - panYRef.current) / scaleRef.current,
-  });
-
-  const zoomAt = (factor: number, vbx: number, vby: number) => {
-    const oldScale = scaleRef.current;
-    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, oldScale * factor));
-    if (newScale === oldScale) return;
-    // Anchor: world point under (vbx, vby) stays put across the zoom.
-    const worldX = (vbx - panXRef.current) / oldScale;
-    const worldY = (vby - panYRef.current) / oldScale;
-    panXRef.current = vbx - worldX * newScale;
-    panYRef.current = vby - worldY * newScale;
-    scaleRef.current = newScale;
-  };
-
-  // Wheel handler attached natively so we can preventDefault even when
-  // React's synthetic wheel event is passive.
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const vb = screenToViewBox(e.clientX, e.clientY);
-      if (!vb) return;
-      zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, vb.x, vb.y);
+      ctl.dist = Math.max(
+        2.5,
+        Math.min(25, ctl.dist * (e.deltaY > 0 ? 1.1 : 1 / 1.1)),
+      );
     };
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
-  }, []);
+    dom.addEventListener("pointerdown", onPointerDown);
+    dom.addEventListener("pointermove", onPointerMove);
+    dom.addEventListener("pointerup", onPointerUp);
+    dom.addEventListener("pointercancel", onPointerUp);
+    dom.addEventListener("contextmenu", (e) => e.preventDefault());
+    dom.addEventListener("wheel", onWheel, { passive: false });
 
-  // Window-level pointer move/up handlers. Window-level so the gesture
-  // continues even if the cursor leaves the SVG.
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      if (!pointersRef.current.has(e.pointerId)) return;
-      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // ── Raycaster for agent picking.
+    const raycaster = new THREE.Raycaster();
+    raycaster.params.Points = { threshold: 0.05 };
+    const ndc = new THREE.Vector2();
 
-      // Pinch/pan beats single drag. Two pointers → zoom around the
-      // midpoint, pan with the midpoint, ignore individual moves.
-      if (pinchRef.current && pointersRef.current.size >= 2) {
-        const ps = Array.from(pointersRef.current.values());
-        const a = ps[0];
-        const b = ps[1];
-        const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-        const ratio = dist / pinchRef.current.startDist;
-        const newScale = Math.max(
-          MIN_SCALE,
-          Math.min(MAX_SCALE, pinchRef.current.startScale * ratio),
+    function pickAgentAt(clientX: number, clientY: number): string | null {
+      const rect = dom.getBoundingClientRect();
+      ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      // Build a flat list of pickable meshes with userData.
+      const candidates: THREE.Object3D[] = [];
+      for (const r of records) {
+        candidates.push(r.planet, r.halo);
+      }
+      const hits = raycaster.intersectObjects(candidates, false);
+      for (const h of hits) {
+        const id = h.object.userData?.agentId;
+        if (typeof id === "string") return id;
+      }
+      return null;
+    }
+
+    // ── Hover detection (mouse only — touch uses tap).
+    const onPointerHover = (e: PointerEvent) => {
+      if (e.pointerType === "touch" || dragging) return;
+      const id = pickAgentAt(e.clientX, e.clientY);
+      hoveredRef.current = id;
+      setHoveredId(id);
+    };
+    dom.addEventListener("pointermove", onPointerHover);
+    const onPointerLeave = () => {
+      hoveredRef.current = null;
+      setHoveredId(null);
+    };
+    dom.addEventListener("pointerleave", onPointerLeave);
+
+    // ── Resize observer.
+    const onResize = () => {
+      const w = mount.clientWidth;
+      const h = mount.clientHeight;
+      renderer.setSize(w, h);
+      uniforms.uSize.value = 12 * renderer.getPixelRatio();
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    };
+    const ro = new ResizeObserver(onResize);
+    ro.observe(mount);
+
+    // ── Animation loop.
+    let raf = 0;
+    const start = performance.now();
+
+    const animate = () => {
+      raf = requestAnimationFrame(animate);
+      const now = performance.now();
+      const t = (now - start) / 1000;
+      uniforms.uTime.value = t;
+
+      // Camera position on a sphere around (panX, 0, panZ).
+      const tx = ctl.panX;
+      const tz = ctl.panZ;
+      const r = ctl.dist;
+      camera.position.set(
+        tx + Math.cos(ctl.pitch) * Math.sin(ctl.yaw) * r,
+        Math.sin(ctl.pitch) * r,
+        tz + Math.cos(ctl.pitch) * Math.cos(ctl.yaw) * r,
+      );
+      camera.lookAt(tx, 0, tz);
+      if (!dragging) ctl.yaw += 0.0005;
+
+      // Sun breathe.
+      const sunPulse = 1 + 0.06 * Math.sin(t * 1.1);
+      sunCore.scale.setScalar(sunPulse);
+      sunGlow.scale.set(2.4 * sunPulse, 2.4 * sunPulse, 1);
+      sunWash.scale.set(5.2 * sunPulse, 5.2 * sunPulse, 1);
+      sunGlowMat.opacity = 0.85 + 0.1 * Math.sin(t * 1.1);
+
+      // Decay activity and reposition each satellite along its arm.
+      for (const rec of records) {
+        rec.activity *= 0.93;
+        const ang = rec.theta + t * omegaAt(rec.r);
+        rec.group.position.set(
+          Math.cos(ang) * rec.r,
+          0,
+          Math.sin(ang) * rec.r,
         );
-        const midClient = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        const midVB = screenToViewBox(midClient.x, midClient.y);
-        if (!midVB) return;
-        const worldAnchor = {
-          x:
-            (pinchRef.current.startCenterVB.x - pinchRef.current.startPanX) /
-            pinchRef.current.startScale,
-          y:
-            (pinchRef.current.startCenterVB.y - pinchRef.current.startPanY) /
-            pinchRef.current.startScale,
-        };
-        panXRef.current = midVB.x - worldAnchor.x * newScale;
-        panYRef.current = midVB.y - worldAnchor.y * newScale;
-        scaleRef.current = newScale;
-        return;
+        const breathe = 1 + 0.07 * Math.sin(t * 1.5 + rec.theta);
+        const isSelected = selectedRef.current === rec.id;
+        const isHovered = hoveredRef.current === rec.id;
+        const focusBoost = isSelected ? 1.5 : isHovered ? 1.2 : 1;
+        const act = rec.activity;
+        rec.planet.scale.setScalar((1 + act * 1.6) * breathe * focusBoost);
+        const baseHalo = 0.4;
+        const haloS = baseHalo + act * 0.9 + (isSelected ? 0.25 : 0);
+        rec.halo.scale.set(haloS, haloS, 1);
+        rec.haloMat.opacity =
+          0.55 + act * 0.45 + (isSelected ? 0.25 : isHovered ? 0.1 : 0);
+        rec.ringMat.opacity = act * 0.85 + (isSelected ? 0.35 : 0);
+        rec.ring.scale.setScalar(1 + act * 5 + (isSelected ? 1.6 : 0));
       }
 
-      const drag = dragRef.current;
-      if (!drag || drag.pointerId !== e.pointerId) return;
+      renderer.render(scene, camera);
+    };
+    animate();
 
-      if (drag.mode === "camera") {
-        const dx = e.clientX - drag.lastX;
-        const dy = e.clientY - drag.lastY;
-        drag.lastX = e.clientX;
-        drag.lastY = e.clientY;
-        yawRef.current += dx * 0.006;
-        pitchRef.current = Math.max(
-          -Math.PI / 2 + 0.1,
-          Math.min(Math.PI / 2 - 0.1, pitchRef.current + dy * 0.006),
-        );
-        return;
-      }
-
-      // Node drag — only commit movement once the pointer has travelled
-      // past the tap radius, so a tap (with natural finger jitter)
-      // reliably selects instead of dragging by 1-2 pixels.
-      const totalDx = e.clientX - drag.startX;
-      const totalDy = e.clientY - drag.startY;
-      const distSq = totalDx * totalDx + totalDy * totalDy;
-      if (
-        !drag.moved &&
-        distSq < TAP_VS_DRAG_THRESHOLD * TAP_VS_DRAG_THRESHOLD
-      ) {
-        return;
-      }
-      drag.moved = true;
-      const vb = screenToViewBox(e.clientX, e.clientY);
-      if (!vb) return;
-      const local = viewBoxToWorld(vb.x, vb.y);
-      const dxScreen = local.x - CENTER_X;
-      const dyScreen = -(local.y - CENTER_Y);
-      const r = Math.min(
-        SPHERE_RADIUS,
-        Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen),
-      );
-      const lon = Math.atan2(
-        dxScreen,
-        Math.sqrt(SPHERE_RADIUS * SPHERE_RADIUS - r * r),
-      );
-      const lat = Math.asin(
-        Math.max(-1, Math.min(1, dyScreen / SPHERE_RADIUS)),
-      );
-      const adjLon = lon - yawRef.current;
-      const adjLat = lat - pitchRef.current;
-      drag.node.fx = CENTER_X + (adjLon / Math.PI) * CENTER_X;
-      drag.node.fy = CENTER_Y + (adjLat / (Math.PI / 2)) * CENTER_Y;
-      if (simRef.current) simRef.current.alphaTarget(0.25);
+    // ── Expose imperative handles via ref.
+    sceneRef.current = {
+      updateAgents: (list, champion) => buildAgents(list, champion),
+      pulse: (agentId) => {
+        if (records.length === 0) return;
+        let target: AgentRecord | undefined;
+        if (agentId) target = records.find((r) => r.id === agentId);
+        if (!target)
+          target = records[Math.floor(Math.random() * records.length)];
+        target.activity = Math.max(target.activity, 1);
+      },
+      resetView: () => Object.assign(ctl, DEFAULT_VIEW),
+      pickAgentAt,
     };
 
-    const onUp = (e: PointerEvent) => {
-      if (!pointersRef.current.has(e.pointerId)) return;
-      pointersRef.current.delete(e.pointerId);
+    // Initial agent build.
+    buildAgents(frozenAgents, championId);
 
-      if (pinchRef.current && pointersRef.current.size < 2) {
-        // Pinch ends. We don't promote a leftover pointer into a fresh
-        // single drag — user must lift fully and re-press to rotate
-        // again, which avoids unintended yaw spins on pinch release.
-        pinchRef.current = null;
-        return;
-      }
-
-      const drag = dragRef.current;
-      if (!drag || drag.pointerId !== e.pointerId) return;
-      if (drag.mode === "node") {
-        if (!drag.moved) {
-          setSelectedId((cur) => (cur === drag.node.id ? null : drag.node.id));
-        }
-        drag.node.fx = null;
-        drag.node.fy = null;
-        if (simRef.current) simRef.current.alphaTarget(0);
-      }
-      dragRef.current = null;
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
     return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      dom.removeEventListener("pointerdown", onPointerDown);
+      dom.removeEventListener("pointermove", onPointerMove);
+      dom.removeEventListener("pointerup", onPointerUp);
+      dom.removeEventListener("pointercancel", onPointerUp);
+      dom.removeEventListener("pointermove", onPointerHover);
+      dom.removeEventListener("pointerleave", onPointerLeave);
+      dom.removeEventListener("wheel", onWheel);
+      clearAgents();
+      sprite.dispose();
+      geom.dispose();
+      pMat.dispose();
+      sunCore.geometry.dispose();
+      (sunCore.material as THREE.Material).dispose();
+      sunGlowMat.dispose();
+      sunWashMat.dispose();
+      renderer.dispose();
+      if (dom.parentNode === mount) mount.removeChild(dom);
+      sceneRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Helper: snapshot pinch state from the current pointer set.
-  const tryStartPinch = () => {
-    if (pointersRef.current.size < 2) return;
-    const ps = Array.from(pointersRef.current.values());
-    const a = ps[0];
-    const b = ps[1];
-    const midVB = screenToViewBox((a.x + b.x) / 2, (a.y + b.y) / 2);
-    if (!midVB) return;
-    pinchRef.current = {
-      startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-      startScale: scaleRef.current,
-      startCenterVB: { x: midVB.x, y: midVB.y },
-      startPanX: panXRef.current,
-      startPanY: panYRef.current,
-    };
-    // Cancel any in-progress single drag so the gesture is clean.
-    const cur = dragRef.current;
-    if (cur?.mode === "node") {
-      cur.node.fx = null;
-      cur.node.fy = null;
-      if (simRef.current) simRef.current.alphaTarget(0);
+  // ── Re-bind agent meshes when the agent list or champion changes.
+  useEffect(() => {
+    sceneRef.current?.updateAgents(frozenAgents, championId);
+  }, [frozenAgents, championId]);
+
+  // ── Pulse on parent's pulseKey bump.
+  const lastPulseKey = useRef(pulseKey);
+  useEffect(() => {
+    if (pulseKey !== lastPulseKey.current && pulseKey > 0) {
+      lastPulseKey.current = pulseKey;
+      sceneRef.current?.pulse(pulseAgentId ?? null);
     }
-    dragRef.current = null;
-  };
+  }, [pulseKey, pulseAgentId]);
 
-  const onPointerDownNode = (e: React.PointerEvent, n: GraphNode) => {
-    e.stopPropagation();
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointersRef.current.size >= 2) {
-      tryStartPinch();
-      return;
-    }
-    dragRef.current = {
-      mode: "node",
-      pointerId: e.pointerId,
-      node: n,
-      startX: e.clientX,
-      startY: e.clientY,
-      moved: false,
-    };
-    n.fx = n.x ?? CENTER_X;
-    n.fy = n.y ?? CENTER_Y;
-    if (simRef.current) simRef.current.alphaTarget(0.25).restart();
-  };
+  // ── Selection + hover overlay derivations.
+  const selected = useMemo(
+    () => frozenAgents.find((a) => a.agent_id === selectedId) ?? null,
+    [frozenAgents, selectedId],
+  );
+  const hovered = useMemo(
+    () => frozenAgents.find((a) => a.agent_id === hoveredId) ?? null,
+    [frozenAgents, hoveredId],
+  );
 
-  const onPointerDownBackground = (e: React.PointerEvent) => {
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointersRef.current.size >= 2) {
-      tryStartPinch();
-      return;
-    }
-    dragRef.current = {
-      mode: "camera",
-      pointerId: e.pointerId,
-      lastX: e.clientX,
-      lastY: e.clientY,
-    };
-  };
-
-  const onClickBackground = () => setSelectedId(null);
-
-  const resetView = () => {
-    scaleRef.current = 1;
-    panXRef.current = 0;
-    panYRef.current = 0;
-    yawRef.current = 0;
-    pitchRef.current = 0;
-    setSelectedId(null);
-  };
-  const zoomIn = () => zoomAt(1.25, WIDTH / 2, HEIGHT / 2);
-  const zoomOut = () => zoomAt(1 / 1.25, WIDTH / 2, HEIGHT / 2);
-
-  if (nodes.length === 0) return null;
-
-  const yaw = yawRef.current;
-  const pitch = pitchRef.current;
-  const projected = nodes.map((n) => {
-    const x = n.x ?? CENTER_X;
-    const y = n.y ?? CENTER_Y;
-    const p = project(x, y, yaw, pitch);
-    return { node: n, ...p };
-  });
-  projected.sort((a, b) => {
-    if (a.node.isChampion !== b.node.isChampion) return a.node.isChampion ? 1 : -1;
-    return a.depth - b.depth;
-  });
-  const selected = nodes.find((n) => n.id === selectedId) ?? null;
-  const hovered = nodes.find((n) => n.id === hoveredId) ?? null;
-  const championProjection = projected.find((p) => p.node.isChampion) ?? null;
+  const championAgent = useMemo(
+    () => frozenAgents.find((a) => a.agent_id === championId) ?? null,
+    [frozenAgents, championId],
+  );
 
   return (
     <section className="panel p-4 sm:p-5 relative">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div className="text-xs uppercase tracking-[0.3em] text-amber/80">
-          Pythian agora · lineage
+          Pythian galaxy · swarm field
         </div>
         <div className="text-[0.65rem] text-mist num">
-          gen {generation} · {nodes.filter((n) => !n.isSeed).length} agents · {links.length} edges
+          gen {generation} · {frozenAgents.length} agents
         </div>
       </div>
       <p className="text-[0.65rem] text-mist mb-3 max-w-2xl leading-relaxed">
-        Drag the marble to turn it · pinch / scroll / +− to zoom ·
-        two-finger drag to pan · tap any node for the agent&apos;s
-        record. Champion glows gold and stays on top.
+        Drag to orbit · scroll to zoom · shift-drag (or right-drag) to pan.
+        Champion is the sun at the core; satellites sit on the spiral
+        arms in rank order, brightest closest in. Tap a satellite for
+        its record.
       </p>
       <div className="relative">
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          className="w-full h-auto rounded-sm bg-black/40 border border-edge/40 select-none touch-none"
-          onPointerDown={onPointerDownBackground}
-          onClick={onClickBackground}
-          aria-label="Pythian agora — agent lineage orb"
-        >
-          <defs>
-            {/* Greek palette: ochre-amber haze fading to dark wine.
-                Replaces the old indigo/space-blue gradient. */}
-            <radialGradient id="globe-glow" cx="50%" cy="42%" r="55%">
-              <stop offset="0%" stopColor="#d97706" stopOpacity="0.22" />
-              <stop offset="55%" stopColor="#7c2d12" stopOpacity="0.1" />
-              <stop offset="100%" stopColor="#000" stopOpacity="0" />
-            </radialGradient>
-            <radialGradient id="champion-halo" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#fde68a" stopOpacity="0.95" />
-              <stop offset="60%" stopColor="#f59e0b" stopOpacity="0.55" />
-              <stop offset="100%" stopColor="#b45309" stopOpacity="0" />
-            </radialGradient>
-            <filter id="champion-glow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="6" result="coloredBlur" />
-              <feMerge>
-                <feMergeNode in="coloredBlur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
+        <div
+          ref={mountRef}
+          className="w-full aspect-[16/10] rounded-sm bg-black border border-edge/40 select-none touch-none overflow-hidden"
+          aria-label="Pythian galaxy — agent satellites"
+        />
 
-          {/* Everything that should pan/zoom together lives inside this
-              <g transform>. The sphere outline + edges + nodes + champion
-              callout all move with the camera. screenToViewBox uses the
-              outer <svg>'s CTM, then we divide by scale + subtract pan
-              for the inverse. */}
-          <g
-            transform={`translate(${panXRef.current} ${panYRef.current}) scale(${scaleRef.current})`}
-          >
-            <circle
-              cx={CENTER_X}
-              cy={CENTER_Y}
-              r={SPHERE_RADIUS + 12}
-              fill="url(#globe-glow)"
-            />
-            {/* White smoke layer — drawn first so it sits behind
-                every other element. Densest at rOffset ≈ 1.0 and
-                fades outward, with a slow lon/lat drift so the
-                cloud feels alive even when the camera is still. */}
-            <g style={{ pointerEvents: "none" }}>
-              {smoke.map((p, i) => {
-                const t = performance.now() / 1000;
-                const lon = p.lon + p.dLon * t;
-                const lat = p.lat + p.dLat * t;
-                const cy = Math.cos(lat + pitch);
-                const sx_sphere =
-                  cy * Math.sin(lon + yaw) * p.rOffset;
-                const sy_sphere = Math.sin(lat + pitch) * p.rOffset;
-                const sz_sphere =
-                  cy * Math.cos(lon + yaw) * p.rOffset;
-                const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
-                const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
-                // Smoke fades the further it sits from the surface.
-                const haloFade = Math.max(
-                  0.15,
-                  1 - Math.abs(p.rOffset - 1) * 1.0,
-                );
-                // Subtle flicker — slower than the colored particles
-                // so the smoke breathes calmly.
-                const flicker = 0.85 + 0.15 * Math.sin(t * 0.45 + p.phase);
-                // Back-of-globe dim.
-                const depthFade =
-                  sz_sphere >= 0
-                    ? 1
-                    : Math.max(0.35, 1 + sz_sphere * 0.6);
-                const opacity = p.baseOp * haloFade * flicker * depthFade;
-                if (opacity < 0.02) return null;
-                return (
-                  <circle
-                    key={`s${i}`}
-                    cx={sx}
-                    cy={sy}
-                    r={p.size}
-                    fill="#e2e8f0"
-                    opacity={opacity}
-                  />
-                );
-              })}
-            </g>
-
-            {/* Particle cloud — multi-colored dots distributed near
-                the sphere surface so the orb reads as a luminous
-                brain rather than a wireframe globe. Each particle
-                rotates with the camera and pulses on its own phase.
-                Drawn before the sphere outline + edges + nodes so it
-                sits in the background. */}
-            <g style={{ pointerEvents: "none" }}>
-              {particles.map((p, i) => {
-                const cy = Math.cos(p.lat + pitch);
-                const sx_sphere =
-                  cy * Math.sin(p.lon + yaw) * p.rOffset;
-                const sy_sphere = Math.sin(p.lat + pitch) * p.rOffset;
-                const sz_sphere =
-                  cy * Math.cos(p.lon + yaw) * p.rOffset;
-                const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
-                const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
-                // Front-of-globe (depth ≈ +1) glows bright; back fades
-                // away. Pulse oscillates at 0.7–1.0 with a per-particle
-                // phase offset so the cloud breathes asynchronously.
-                const depth = sz_sphere;
-                const depthBase = 0.08 + (Math.max(0, depth + 1) / 2) * 0.55;
-                const t = performance.now() / 1000;
-                const pulse = 0.72 + 0.28 * Math.sin(t * 0.7 + p.phase);
-                const opacity = depthBase * pulse;
-                if (opacity < 0.02) return null;
-                return (
-                  <circle
-                    key={i}
-                    cx={sx}
-                    cy={sy}
-                    r={p.size}
-                    fill={p.color}
-                    opacity={opacity}
-                  />
-                );
-              })}
-            </g>
-
-            {/* Bronze horizon — subtle dashed circle frames the marble. */}
-            <circle
-              cx={CENTER_X}
-              cy={CENTER_Y}
-              r={SPHERE_RADIUS}
-              fill="none"
-              stroke="#a16207"
-              strokeOpacity={0.18}
-              strokeWidth={1}
-              strokeDasharray="2 4"
-            />
-
-            <g>
-              {links.map((l, i) => {
-                const s = l.source as GraphNode;
-                const t = l.target as GraphNode;
-                const ps = projected.find((p) => p.node === s);
-                const pt = projected.find((p) => p.node === t);
-                if (!ps || !pt) return null;
-                const avg = (ps.depth + pt.depth) / 2;
-                // Visible enough to read as lineage spokes, muted
-                // enough that the family-colored nodes own the
-                // visual hierarchy.
-                const op = 0.13 + Math.max(0, avg) * 0.32;
-                return (
-                  <line
-                    key={i}
-                    x1={ps.sx}
-                    y1={ps.sy}
-                    x2={pt.sx}
-                    y2={pt.sy}
-                    stroke="#92400e"
-                    strokeOpacity={op}
-                    strokeWidth={0.7}
-                    strokeLinecap="round"
-                  />
-                );
-              })}
-            </g>
-
-            <g>
-              {projected.map(({ node: n, sx, sy, depth }) => {
-                const fam =
-                  (FAMILY_COLORS as Record<string, string>)[n.family] ??
-                  "#94a3b8";
-                const isSelected = selectedId === n.id;
-                const isHovered = hoveredId === n.id;
-                const depthScale = n.isChampion
-                  ? 1.6
-                  : 0.55 + (Math.max(0, depth + 1) / 2) * 0.45;
-                // Visible bump on hover/select so every node — not just
-                // the champion — feels touchable.
-                const interactionBump = isSelected ? 1.35 : isHovered ? 1.15 : 1;
-                const r = n.size * depthScale * interactionBump;
-                const opacity = n.isChampion
-                  ? 1
-                  : n.isSeed
-                    ? 0.4 + Math.max(0, depth) * 0.35
-                    : 0.4 + (Math.max(0, depth + 1) / 2) * 0.6;
-                const stroke = isSelected
-                  ? "#22d3ee"
-                  : n.isChampion
-                    ? "#fbbf24"
-                    : isHovered
-                      ? "#cbd5e1"
-                      : n.isSeed
-                        ? fam
-                        : "#0b0f14";
-                return (
-                  <g
-                    key={n.id}
-                    transform={`translate(${sx},${sy})`}
-                    className="cursor-pointer"
-                    onPointerDown={(e) => onPointerDownNode(e, n)}
-                    onPointerEnter={() => setHoveredId(n.id)}
-                    onPointerLeave={() =>
-                      setHoveredId((cur) => (cur === n.id ? null : cur))
-                    }
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {n.isChampion ? (
-                      <>
-                        <circle r={r + 16} fill="url(#champion-halo)">
-                          <animate
-                            attributeName="r"
-                            values={`${r + 12};${r + 22};${r + 12}`}
-                            dur="3.6s"
-                            repeatCount="indefinite"
-                          />
-                        </circle>
-                        <circle
-                          r={r + 6}
-                          fill="none"
-                          stroke="#fbbf24"
-                          strokeWidth={2.5}
-                          opacity={0.85}
-                        >
-                          <animate
-                            attributeName="r"
-                            values={`${r + 4};${r + 12};${r + 4}`}
-                            dur="3.6s"
-                            repeatCount="indefinite"
-                          />
-                          <animate
-                            attributeName="opacity"
-                            values="0.95;0.35;0.95"
-                            dur="3.6s"
-                            repeatCount="indefinite"
-                          />
-                        </circle>
-                      </>
-                    ) : null}
-                    {/* Selection ring on any non-champion picked node so
-                        users get strong visual confirmation of the tap. */}
-                    {isSelected && !n.isChampion ? (
-                      <circle
-                        r={r + 4}
-                        fill="none"
-                        stroke="#22d3ee"
-                        strokeWidth={1.5}
-                        strokeDasharray="3 2"
-                        opacity={0.85}
-                      >
-                        <animate
-                          attributeName="r"
-                          values={`${r + 3};${r + 7};${r + 3}`}
-                          dur="2.4s"
-                          repeatCount="indefinite"
-                        />
-                      </circle>
-                    ) : null}
-                    <circle
-                      r={r}
-                      fill={n.isSeed ? "#1f2937" : fam}
-                      fillOpacity={opacity}
-                      stroke={stroke}
-                      strokeWidth={n.isChampion ? 2.5 : isSelected ? 2 : 1}
-                      filter={n.isChampion ? "url(#champion-glow)" : undefined}
-                    />
-                    {n.isChampion ? (
-                      <text
-                        y={-(r + 14)}
-                        textAnchor="middle"
-                        fontSize="14"
-                        fill="#fde68a"
-                        style={{
-                          pointerEvents: "none",
-                          filter: "drop-shadow(0 0 4px #000)",
-                        }}
-                      >
-                        👑 CHAMPION
-                      </text>
-                    ) : null}
-                  </g>
-                );
-              })}
-            </g>
-
-            {championProjection
-              ? (() => {
-                  const { sx, sy, depth, node } = championProjection;
-                  const above = sy < CENTER_Y;
-                  const labelDy = above ? 70 : -70;
-                  const labelY = sy + labelDy;
-                  const opacity = depth < 0 ? 0.7 : 1;
-                  const champ = node.agent;
-                  return (
-                    <g opacity={opacity} style={{ pointerEvents: "none" }}>
-                      <line
-                        x1={sx}
-                        y1={sy}
-                        x2={sx}
-                        y2={labelY + (above ? -10 : 10)}
-                        stroke="#fbbf24"
-                        strokeWidth={1}
-                        strokeDasharray="2 3"
-                        opacity={0.6}
-                      />
-                      <rect
-                        x={sx - 78}
-                        y={labelY - 18}
-                        width={156}
-                        height={36}
-                        rx={6}
-                        fill="rgba(11, 15, 20, 0.92)"
-                        stroke="#fbbf24"
-                        strokeWidth={1.5}
-                      />
-                      <text
-                        x={sx}
-                        y={labelY - 4}
-                        textAnchor="middle"
-                        fontSize={11}
-                        fill="#fde68a"
-                        fontWeight={600}
-                      >
-                        👑 CHAMPION
-                      </text>
-                      <text
-                        x={sx}
-                        y={labelY + 11}
-                        textAnchor="middle"
-                        fontSize={10}
-                        fill="#cbd5e1"
-                        fontFamily="ui-monospace, monospace"
-                      >
-                        {champ
-                          ? `${champ.total_r >= 0 ? "+" : ""}${champ.total_r.toFixed(0)}R · ${(champ.win_rate * 100).toFixed(0)}% WR`
-                          : node.id.slice(0, 22)}
-                      </text>
-                    </g>
-                  );
-                })()
-              : null}
-          </g>
-        </svg>
-
-        {/* Zoom + reset overlay. Top-left so it doesn't fight the
-            details panel for space (which pins top-right on desktop,
-            bottom-anchored on mobile). */}
+        {/* Reset view button. */}
         <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-10">
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              zoomIn();
-            }}
-            className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-slate-100 text-lg leading-none flex items-center justify-center"
-            aria-label="Zoom in"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              zoomOut();
-            }}
-            className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-slate-100 text-lg leading-none flex items-center justify-center"
-            aria-label="Zoom out"
-          >
-            −
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              resetView();
+              sceneRef.current?.resetView();
             }}
             className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-mist hover:text-slate-100 text-sm leading-none flex items-center justify-center"
             aria-label="Reset view"
@@ -1063,21 +719,36 @@ export function AgentLineageGraph({
           </button>
         </div>
 
-        {/* Details panel.
-            Mobile: pinned to the bottom of the graph, full width minus
-            small margins, so it doesn't collide with the champion
-            callout above.
-            Desktop (sm+): top-right floating card. */}
+        {/* Champion callout — always pinned top-right when one exists. */}
+        {championAgent ? (
+          <div className="hidden sm:flex absolute top-3 right-3 z-10 items-center gap-2 px-3 py-1.5 rounded-sm bg-black/85 border border-amber/60 backdrop-blur-sm pointer-events-none">
+            <span className="text-[0.6rem] tracking-[0.3em] text-amber uppercase">
+              👑 Champion
+            </span>
+            <span className="font-mono text-[0.7rem] text-slate-100">
+              {championAgent.agent_id.replace(/^gen\d+-mut\d+-/, "")}
+            </span>
+            <span className="num text-[0.65rem] text-green">
+              {championAgent.total_r >= 0 ? "+" : ""}
+              {championAgent.total_r.toFixed(0)}R
+            </span>
+          </div>
+        ) : null}
+
+        {/* Selection panel — full-width bottom on mobile, top-right on
+            desktop. Hover preview only fires on desktop pointer (touch
+            taps go straight to selected). */}
+        <div ref={overlayRef} />
         {selected ? (
           <div
-            className="absolute left-2 right-2 bottom-2 sm:left-auto sm:right-3 sm:top-3 sm:bottom-auto sm:max-w-[280px] panel p-3 bg-black/95 backdrop-blur-sm text-[0.7rem] num shadow-2xl ring-1 ring-cyan/30 z-20"
+            className="absolute left-2 right-2 bottom-2 sm:left-auto sm:right-3 sm:top-14 sm:bottom-auto sm:max-w-[300px] panel p-3 bg-black/95 backdrop-blur-sm text-[0.7rem] num shadow-2xl ring-1 ring-cyan/30 z-20"
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-                {selected.isChampion ? "👑 " : ""}
-                {selected.id.replace(/^gen\d+-mut\d+-/, "")}
+                {selected.agent_id === championId ? "👑 " : ""}
+                {selected.agent_id.replace(/^gen\d+-mut\d+-/, "")}
               </div>
               <button
                 onClick={() => setSelectedId(null)}
@@ -1087,104 +758,90 @@ export function AgentLineageGraph({
                 ×
               </button>
             </div>
-            <div className="text-[0.6rem] text-mist mb-2">
-              {selected.isSeed
-                ? "phantom seed (ancestor not in live set)"
-                : `family: ${selected.family}`}
+            <div
+              className="text-[0.6rem] text-mist mb-2"
+              title={FAMILY_LABEL[agentFamily(selected.agent_id)]}
+            >
+              family: {agentFamily(selected.agent_id)}
             </div>
-            {selected.agent ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <span>
-                  <span className="text-mist">Σ R</span>{" "}
-                  <span
-                    className={
-                      selected.agent.total_r >= 0 ? "text-green" : "text-red"
-                    }
-                  >
-                    {selected.agent.total_r >= 0 ? "+" : ""}
-                    {selected.agent.total_r.toFixed(2)}
-                  </span>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <span>
+                <span className="text-mist">Σ R</span>{" "}
+                <span
+                  className={selected.total_r >= 0 ? "text-green" : "text-red"}
+                >
+                  {selected.total_r >= 0 ? "+" : ""}
+                  {selected.total_r.toFixed(2)}
                 </span>
-                <span>
-                  <span className="text-mist">WR</span>{" "}
-                  {(selected.agent.win_rate * 100).toFixed(1)}%
+              </span>
+              <span>
+                <span className="text-mist">WR</span>{" "}
+                {(selected.win_rate * 100).toFixed(1)}%
+              </span>
+              <span>
+                <span className="text-mist">trades</span>{" "}
+                {selected.wins + selected.losses}
+              </span>
+              <span>
+                <span className="text-mist">Sharpe</span>{" "}
+                {selected.rolling_sharpe.toFixed(2)}
+              </span>
+              <span className="col-span-2">
+                <span className="text-mist">last R</span>{" "}
+                <span
+                  className={selected.last_r >= 0 ? "text-green" : "text-red"}
+                >
+                  {selected.last_r >= 0 ? "+" : ""}
+                  {selected.last_r.toFixed(2)}
                 </span>
-                <span>
-                  <span className="text-mist">trades</span>{" "}
-                  {selected.agent.wins + selected.agent.losses}
-                </span>
-                <span>
-                  <span className="text-mist">Sharpe</span>{" "}
-                  {selected.agent.rolling_sharpe.toFixed(2)}
-                </span>
+              </span>
+              {selected.expectancy_r != null ? (
                 <span className="col-span-2">
-                  <span className="text-mist">last R</span>{" "}
+                  <span className="text-mist">E[R]</span>{" "}
                   <span
                     className={
-                      selected.agent.last_r >= 0 ? "text-green" : "text-red"
+                      selected.expectancy_r >= 0 ? "text-green" : "text-red"
                     }
                   >
-                    {selected.agent.last_r >= 0 ? "+" : ""}
-                    {selected.agent.last_r.toFixed(2)}
+                    {selected.expectancy_r >= 0 ? "+" : ""}
+                    {selected.expectancy_r.toFixed(3)}
                   </span>
                 </span>
-                {selected.agent.expectancy_r != null ? (
-                  <span className="col-span-2">
-                    <span className="text-mist">E[R]</span>{" "}
-                    <span
-                      className={
-                        selected.agent.expectancy_r >= 0
-                          ? "text-green"
-                          : "text-red"
-                      }
-                    >
-                      {selected.agent.expectancy_r >= 0 ? "+" : ""}
-                      {selected.agent.expectancy_r.toFixed(3)}
-                    </span>
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         ) : hovered ? (
-          // Hover preview — desktop only (sm:block); mobile users get
-          // the pinned panel on tap instead. No close button because
-          // pointerleave dismisses it.
-          <div className="hidden sm:block absolute top-3 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40 z-10">
+          <div className="hidden sm:block absolute top-14 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40 z-10">
             <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-              {hovered.isChampion ? "👑 " : ""}
-              {hovered.id.replace(/^gen\d+-mut\d+-/, "")}
+              {hovered.agent_id === championId ? "👑 " : ""}
+              {hovered.agent_id.replace(/^gen\d+-mut\d+-/, "")}
             </div>
             <div className="text-[0.55rem] text-mist mt-0.5 mb-1.5">
-              {hovered.isSeed ? "phantom seed" : `${hovered.family} · tap to pin`}
+              {agentFamily(hovered.agent_id)} · tap to pin
             </div>
-            {hovered.agent ? (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                <span>
-                  <span className="text-mist">Σ R</span>{" "}
-                  <span
-                    className={
-                      hovered.agent.total_r >= 0 ? "text-green" : "text-red"
-                    }
-                  >
-                    {hovered.agent.total_r >= 0 ? "+" : ""}
-                    {hovered.agent.total_r.toFixed(2)}
-                  </span>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              <span>
+                <span className="text-mist">Σ R</span>{" "}
+                <span
+                  className={hovered.total_r >= 0 ? "text-green" : "text-red"}
+                >
+                  {hovered.total_r >= 0 ? "+" : ""}
+                  {hovered.total_r.toFixed(2)}
                 </span>
-                <span>
-                  <span className="text-mist">WR</span>{" "}
-                  {(hovered.agent.win_rate * 100).toFixed(1)}%
-                </span>
-                <span>
-                  <span className="text-mist">trades</span>{" "}
-                  {hovered.agent.wins + hovered.agent.losses}
-                </span>
-                <span>
-                  <span className="text-mist">Sharpe</span>{" "}
-                  {hovered.agent.rolling_sharpe.toFixed(2)}
-                </span>
-              </div>
-            ) : null}
+              </span>
+              <span>
+                <span className="text-mist">WR</span>{" "}
+                {(hovered.win_rate * 100).toFixed(1)}%
+              </span>
+              <span>
+                <span className="text-mist">trades</span>{" "}
+                {hovered.wins + hovered.losses}
+              </span>
+              <span>
+                <span className="text-mist">Sharpe</span>{" "}
+                {hovered.rolling_sharpe.toFixed(2)}
+              </span>
+            </div>
           </div>
         ) : null}
       </div>

@@ -1051,6 +1051,8 @@ export function TournamentClient() {
             agents={snap.agents}
             championId={champ?.agent_id ?? null}
             generation={snap.generation ?? 0}
+            pulseKey={pulseKey}
+            pulseAgentId={feed[0]?.routing?.specialist_id ?? null}
           />
           <PipelineRail
             pulseKey={pulseKey}
