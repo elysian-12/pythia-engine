@@ -28,7 +28,12 @@ permissions:
 jobs:
   evolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # Bumped from 12 → 25. The first cold run hits all three slow paths
+    # in series: full cargo workspace compile (~6-8 min), 90-day Kiyotaka
+    # scrape (~1-2 min), backtest (~30 s). Subsequent runs land at ~2 min
+    # because Swatinem/rust-cache restores the build artifacts. 25 min
+    # gives the cold path comfortable headroom.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,8 +76,12 @@ jobs:
           fi
           DAYS=7
           if [ ! -f data/pythia.duckdb ]; then
-            echo "no cached duckdb; bootstrapping with 365 days"
-            DAYS=365
+            # 90 days on bootstrap (was 365). Still gives ~6,500 hourly
+            # events per asset — plenty for the backtest to surface
+            # multi-family evolution. 365 days made the first run blow
+            # through the 12-min job timeout on a cold runner.
+            echo "no cached duckdb; bootstrapping with 90 days"
+            DAYS=90
           fi
           cargo run --release -p ingest --bin scrape -- $DAYS 2>&1 | tail -30
 
