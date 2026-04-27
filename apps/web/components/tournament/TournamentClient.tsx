@@ -140,6 +140,16 @@ export function TournamentClient() {
   const [pulseKey, setPulseKey] = useState(0);
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
   const [autopilotOn, setAutopilotOn] = useState(false);
+  // Right-sidebar tabbed view: settings ⇄ portfolio. Default to
+  // portfolio because once positions are open that's what the user
+  // checks most. The CopyTrader sits below the tabs so it's always
+  // visible regardless of which side of the tab is active.
+  const [rightTab, setRightTab] = useState<"settings" | "portfolio">("portfolio");
+  // Collapsible state for the "How the swarm gets smart" sidebar
+  // explainer — collapsed by default to save vertical real estate
+  // in the narrow left sidebar, expandable on click. The button
+  // styling makes the disclosure unmissable.
+  const [descOpen, setDescOpen] = useState(false);
 
   // Paper HL ledger — opens when the copy-trader's agent reacts to an event.
   const [openPositions, setOpenPositions] = useState<PaperPosition[]>([]);
@@ -886,15 +896,40 @@ export function TournamentClient() {
     );
   })() : null;
 
-  // The "How the swarm gets smart" explainer — extracted so the left
-  // column can host it without bloating the JSX. Keeps the same 8-step
-  // narrative; just reads better as a sidebar than as a wide panel.
+  // The "How the swarm gets smart" explainer — collapsible to save
+  // sidebar space. The header button is cyan-tinted with a Show/Hide
+  // label + chevron so the affordance is obvious; collapsed by
+  // default since most repeat visitors don't need to re-read the
+  // 8-step narrative.
   const descriptionPanel = (
-    <div className="panel p-4 sm:p-5">
-      <div className="text-xs uppercase tracking-[0.3em] text-mist">
-        How the swarm gets smart
-      </div>
-      <ol className="mt-3 space-y-2 text-[0.7rem] sm:text-xs text-slate-300 leading-relaxed">
+    <div className="panel overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setDescOpen((o) => !o)}
+        aria-expanded={descOpen}
+        className={`w-full px-3 sm:px-4 py-3 flex items-center justify-between gap-2 text-left transition-colors ${
+          descOpen
+            ? "bg-cyan/10 border-b border-cyan/20"
+            : "hover:bg-cyan/5"
+        }`}
+      >
+        <span className="text-xs uppercase tracking-[0.3em] text-cyan">
+          How the swarm gets smart
+        </span>
+        <span className="flex items-center gap-2 text-[0.6rem] text-mist shrink-0">
+          <span>{descOpen ? "Hide" : "Show"}</span>
+          <span
+            className={`text-cyan text-sm transition-transform duration-200 ${
+              descOpen ? "rotate-180" : ""
+            }`}
+            aria-hidden
+          >
+            ▾
+          </span>
+        </span>
+      </button>
+      {descOpen ? (
+        <ol className="px-3 sm:px-4 py-3 space-y-2 text-[0.7rem] sm:text-xs text-slate-300 leading-relaxed">
         <li>
           <span className="text-purple-300 font-mono">1. Event →</span>{" "}
           A market tick arrives from Kiyotaka — a forced liquidation,
@@ -943,6 +978,7 @@ export function TournamentClient() {
           straight back to step 4 — the loop closes.
         </li>
       </ol>
+      ) : null}
     </div>
   );
 
@@ -991,15 +1027,16 @@ export function TournamentClient() {
         </div>
       </header>
 
-      {/* MAIN GRID — 3/6/3 at md+, single col at mobile. Bottom row
+      {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Bottom row
           (trade feed + scoreboard) spans full width below the three
-          sidebar columns. */}
+          sidebar columns. Center column is 7/12 (~58%) so the globe
+          dominates the page like a price chart. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-start">
         {/* CENTER — globe (dominant), champion, pipeline. Mobile order 1. */}
         <main
           className="space-y-3 md:space-y-4 min-w-0
             order-1
-            md:col-span-6 md:col-start-4 md:row-start-1"
+            md:col-span-7 md:col-start-3 md:row-start-1"
         >
           <AgentLineageGraph
             agents={snap.agents}
@@ -1036,21 +1073,56 @@ export function TournamentClient() {
           <LiveTradeFeed entries={feed} />
         </section>
 
-        {/* RIGHT SIDEBAR — settings + portfolio + copy. Mobile order 4. */}
+        {/* RIGHT SIDEBAR — settings/portfolio tabs + copy. Mobile order 4.
+            The two tabs share the cell so the user never has both at
+            once — toggling between them is the explicit way to switch
+            context. Active tab gets a solid cyan slab so the change
+            is unmissable; the inactive label is dim. */}
         <aside
           className="space-y-3 md:space-y-4 min-w-0
             order-4
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
-          <SettingsForm />
-          <HyperliquidPanel
-            open={openPositions}
-            closed={closedPositions}
-            marks={marks}
-            equity_usd={EQUITY_USD}
-            onClose={handleClosePosition}
-            onReset={handleReset}
-          />
+          <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
+            <button
+              type="button"
+              onClick={() => setRightTab("settings")}
+              aria-pressed={rightTab === "settings"}
+              className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+                rightTab === "settings"
+                  ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
+                  : "text-mist hover:text-slate-100"
+              }`}
+            >
+              Trade settings
+            </button>
+            <button
+              type="button"
+              onClick={() => setRightTab("portfolio")}
+              aria-pressed={rightTab === "portfolio"}
+              className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+                rightTab === "portfolio"
+                  ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
+                  : "text-mist hover:text-slate-100"
+              }`}
+            >
+              Portfolio
+            </button>
+          </div>
+
+          {rightTab === "settings" ? (
+            <SettingsForm />
+          ) : (
+            <HyperliquidPanel
+              open={openPositions}
+              closed={closedPositions}
+              marks={marks}
+              equity_usd={EQUITY_USD}
+              onClose={handleClosePosition}
+              onReset={handleReset}
+            />
+          )}
+
           <CopyTradePanel
             agents={snap.agents}
             selected={copyAgent}
@@ -1068,7 +1140,7 @@ export function TournamentClient() {
         <aside
           className="space-y-3 md:space-y-4
             order-5
-            md:col-span-3 md:col-start-1 md:row-start-1"
+            md:col-span-2 md:col-start-1 md:row-start-1"
         >
           {descriptionPanel}
           <AutoPilot

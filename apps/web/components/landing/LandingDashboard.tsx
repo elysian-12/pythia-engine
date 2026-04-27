@@ -210,9 +210,9 @@ export function LandingDashboard() {
     : [];
 
   return (
-    <div className="space-y-8">
+    <div className="max-w-[110rem] mx-auto space-y-5 md:space-y-6">
       {/* HERO */}
-      <section className="panel relative overflow-hidden p-6 md:p-8 ring-1 ring-royal/20">
+      <section className="panel relative overflow-hidden p-4 md:p-6 ring-1 ring-royal/20">
         <div
           className="pointer-events-none absolute inset-0 opacity-60"
           style={{
@@ -238,7 +238,7 @@ export function LandingDashboard() {
                   <span className="text-mist/60">·</span>
                   <span className="text-purple-300">Oracle of the Swarm</span>
                 </div>
-                <h2 className="mt-3 text-4xl md:text-5xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
+                <h2 className="mt-2 text-3xl md:text-4xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
                   25 agents.{" "}
                   <span
                     className="bg-gradient-to-r from-amber-300 via-purple-400 to-cyan bg-clip-text text-transparent"
@@ -250,7 +250,7 @@ export function LandingDashboard() {
                     Every Kiyotaka event becomes a trade.
                   </span>
                 </h2>
-                <p className="mt-3 text-sm md:text-base text-mist max-w-2xl leading-relaxed">
+                <p className="mt-2 text-xs md:text-sm text-mist max-w-2xl leading-relaxed">
                   Liquidations, funding, hourly candles, volume, and Polymarket
                   leadership all stream from Kiyotaka into the swarm. Each
                   agent votes; the scoreboard picks the champion; the champion
@@ -279,7 +279,7 @@ export function LandingDashboard() {
           </div>
 
           {/* Headline numbers */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-4">
             <Stat
               label="365-day backtest"
               value={fmtUsd(STARTING_EQUITY)}
@@ -324,7 +324,7 @@ export function LandingDashboard() {
 
           {/* Equity curve */}
           {equity.length > 1 ? (
-            <div className="mt-6 rounded-sm border border-edge/60 bg-black/30 p-3">
+            <div className="mt-4 rounded-sm border border-edge/60 bg-black/30 p-3">
               <div className="flex items-center justify-between text-[0.65rem] uppercase tracking-widest text-mist mb-1.5">
                 <span>Equity curve · 365d</span>
                 <span className="num">
@@ -344,8 +344,8 @@ export function LandingDashboard() {
       <AutoReplay snap={snap} />
 
       {/* Champion + agent leaderboard */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="panel p-5 lg:col-span-1">
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
+        <div className="panel p-4 lg:col-span-1">
           <div className="text-[0.65rem] uppercase tracking-[0.3em] text-mist mb-2">
             Current champion
           </div>
@@ -421,7 +421,7 @@ export function LandingDashboard() {
           )}
         </div>
 
-        <div className="panel p-5 lg:col-span-2">
+        <div className="panel p-4 lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <div className="text-[0.65rem] uppercase tracking-[0.3em] text-mist">
               Top 8 by Σ R
@@ -444,7 +444,7 @@ export function LandingDashboard() {
       </section>
 
       {/* What you can do */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
         <ActionCard
           title="Run the tournament"
           body="Fire signals manually or let autopilot pull live BTC/ETH events from Kiyotaka. Watch the swarm vote, the champion fire, and a paper Hyperliquid order open with stop + TP."
@@ -552,7 +552,7 @@ function ActionCard({
   return (
     <Link
       href={href}
-      className={`panel p-5 block ring-1 ring-transparent ${ring} transition-all hover:bg-black/30`}
+      className={`panel p-4 block ring-1 ring-transparent ${ring} transition-all hover:bg-black/30`}
     >
       <div className="text-sm font-semibold text-slate-100">{title}</div>
       <p className="mt-2 text-xs text-mist leading-relaxed">{body}</p>

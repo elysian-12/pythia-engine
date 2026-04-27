@@ -43,13 +43,28 @@ export function PerformanceClient() {
     );
   }
 
+  // Performance page = quant audit, optimised to fit one viewport on
+  // a typical laptop (1280-1920px). Header is a single compact strip;
+  // the four analytic sections sit in a 12-col grid with 7/5 and 5/7
+  // splits so cards stay readable rather than stretched on wide
+  // monitors. Mobile collapses to single col via grid-cols-1.
   return (
-    <div className="space-y-6">
+    <div className="max-w-[110rem] mx-auto space-y-3 sm:space-y-4">
       <Header snap={snap} />
-      <CertBlock snap={snap} />
-      <FamilyRollup agents={snap.agents} />
-      <TopAgentsScatter agents={snap.agents} />
-      <RDistribution agents={snap.agents} />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-start">
+        <div className="lg:col-span-7">
+          <CertBlock snap={snap} />
+        </div>
+        <div className="lg:col-span-5">
+          <FamilyRollup agents={snap.agents} />
+        </div>
+        <div className="lg:col-span-5">
+          <TopAgentsScatter agents={snap.agents} />
+        </div>
+        <div className="lg:col-span-7">
+          <RDistribution agents={snap.agents} />
+        </div>
+      </div>
       <ProvenanceFooter snap={snap} />
     </div>
   );
@@ -64,8 +79,8 @@ function Header({ snap }: { snap: SwarmSnapshot }) {
     0,
   );
   return (
-    <section className="panel p-5 sm:p-6">
-      <div className="flex items-baseline gap-3 flex-wrap">
+    <section className="panel p-3 sm:p-4">
+      <div className="flex items-baseline gap-3 flex-wrap mb-1.5">
         <span className="chip chip-cyan text-[0.6rem]">
           deployed snapshot
         </span>
@@ -73,36 +88,81 @@ function Header({ snap }: { snap: SwarmSnapshot }) {
           gen {snap.generation ?? 0} · {snap.agents.length} agents
         </span>
       </div>
-      <h2 className="mt-2 text-2xl sm:text-4xl font-semibold tracking-tight text-slate-100">
-        {ch ? ch.agent_id : "—"}
-      </h2>
-      <p className="mt-1 text-xs text-mist max-w-3xl">
-        Champion as of the bundled snapshot. The numbers below are
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <h2 className="text-lg sm:text-2xl font-semibold tracking-tight text-slate-100">
+          {ch ? ch.agent_id : "—"}
+        </h2>
+        {ch ? (
+          <div className="flex items-baseline gap-3 sm:gap-4 flex-wrap text-xs num">
+            <InlineMetric
+              label="Σ R"
+              value={`${ch.total_r >= 0 ? "+" : ""}${ch.total_r.toFixed(2)}`}
+              tone={ch.total_r >= 0 ? "pos" : "neg"}
+            />
+            <InlineMetric
+              label="WR"
+              value={`${(ch.win_rate * 100).toFixed(1)}%`}
+              tone="neutral"
+            />
+            <InlineMetric
+              label="Trades"
+              value={(ch.wins + ch.losses).toLocaleString()}
+              tone="neutral"
+            />
+            <InlineMetric
+              label="E[R]"
+              value={`${(ch.expectancy_r ?? 0) >= 0 ? "+" : ""}${(ch.expectancy_r ?? 0).toFixed(3)}`}
+              tone={(ch.expectancy_r ?? 0) >= 0 ? "pos" : "neg"}
+            />
+            <InlineMetric
+              label="Sharpe"
+              value={ch.rolling_sharpe.toFixed(2)}
+              tone={
+                ch.rolling_sharpe >= 0.5
+                  ? "pos"
+                  : ch.rolling_sharpe >= 0
+                    ? "amber"
+                    : "neg"
+              }
+            />
+          </div>
+        ) : null}
+      </div>
+      <p className="mt-2 text-[0.7rem] text-mist max-w-3xl">
+        Champion as of the bundled snapshot. The numbers above are
         what the deployed system has actually traded across {totalTrades.toLocaleString()}{" "}
         decisions, not a hypothetical backtest. Read{" "}
         <span className="text-cyan font-mono">/tournament</span> for live
         decisions; this page is the statistical audit.
       </p>
-      {ch ? (
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm num">
-          <Metric label="Σ R" value={`${ch.total_r >= 0 ? "+" : ""}${ch.total_r.toFixed(2)}`} tone={ch.total_r >= 0 ? "pos" : "neg"} />
-          <Metric label="Win rate" value={`${(ch.win_rate * 100).toFixed(1)}%`} tone="neutral" />
-          <Metric label="Trades" value={(ch.wins + ch.losses).toLocaleString()} tone="neutral" />
-          <Metric label="E[R] / trade" value={`${(ch.expectancy_r ?? 0) >= 0 ? "+" : ""}${(ch.expectancy_r ?? 0).toFixed(3)}`} tone={(ch.expectancy_r ?? 0) >= 0 ? "pos" : "neg"} />
-          <Metric label="Sharpe" value={ch.rolling_sharpe.toFixed(2)} tone={ch.rolling_sharpe >= 0.5 ? "pos" : ch.rolling_sharpe >= 0 ? "amber" : "neg"} />
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone: "pos" | "neg" | "neutral" | "amber" }) {
-  const color = tone === "pos" ? "text-green" : tone === "neg" ? "text-red" : tone === "amber" ? "text-amber" : "text-slate-100";
+function InlineMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "pos" | "neg" | "neutral" | "amber";
+}) {
+  const color =
+    tone === "pos"
+      ? "text-green"
+      : tone === "neg"
+        ? "text-red"
+        : tone === "amber"
+          ? "text-amber"
+          : "text-slate-100";
   return (
-    <div className="rounded-sm border border-edge/60 bg-black/20 px-3 py-2">
-      <div className="text-[0.6rem] uppercase tracking-wider text-mist">{label}</div>
-      <div className={`mt-0.5 ${color}`}>{value}</div>
-    </div>
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="text-[0.65rem] uppercase tracking-wider text-mist">
+        {label}
+      </span>
+      <span className={`text-base font-semibold ${color}`}>{value}</span>
+    </span>
   );
 }
 
@@ -123,14 +183,13 @@ function CertBlock({ snap }: { snap: SwarmSnapshot }) {
     const CERT_THRESHOLD = 60;
     const pct = Math.min(100, (trades / CERT_THRESHOLD) * 100);
     return (
-      <section className="panel p-5 sm:p-6">
+      <section className="panel p-3 sm:p-4">
         <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
           <div className="text-xs uppercase tracking-[0.3em] text-mist">
             Track record
           </div>
-          <div className="text-[0.65rem] text-mist">
-            Statistical certification activates after ~{CERT_THRESHOLD}{" "}
-            trades — bootstrap CI needs the sample to be meaningful
+          <div className="text-[0.6rem] text-mist">
+            Cert activates after ~{CERT_THRESHOLD} trades
           </div>
         </div>
 
@@ -223,17 +282,16 @@ function CertBlock({ snap }: { snap: SwarmSnapshot }) {
   const ciCleared =
     cert.sharpe_ci_lo != null && cert.sharpe_ci_lo > 0;
   return (
-    <section className="panel p-5 sm:p-6">
+    <section className="panel p-3 sm:p-4">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
           Statistical certification
         </div>
-        <div className="text-[0.65rem] text-mist">
-          Bailey & López de Prado — is the headline edge real, or
-          could random noise have produced it?
+        <div className="text-[0.6rem] text-mist">
+          Bailey &amp; López de Prado — is the edge real?
         </div>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm num">
+      <div className="grid grid-cols-2 gap-2 text-sm num">
         <CertCard
           label="PSR"
           value={cert.psr.toFixed(3)}
@@ -289,12 +347,11 @@ function CertCard({ label, value, tone, help }: { label: string; value: string; 
   const color = tone === "pos" ? "text-green" : tone === "neg" ? "text-red" : tone === "amber" ? "text-amber" : "text-slate-100";
   return (
     <div
-      className="rounded-sm border border-edge/60 bg-black/30 px-3 py-3 cursor-help"
+      className="rounded-sm border border-edge/60 bg-black/30 px-3 py-2 cursor-help"
       title={help}
     >
-      <div className="text-[0.65rem] uppercase tracking-wider text-mist">{label}</div>
-      <div className={`mt-1 text-2xl ${color}`}>{value}</div>
-      <div className="mt-1 text-[0.6rem] text-mist line-clamp-2">{help}</div>
+      <div className="text-[0.6rem] uppercase tracking-wider text-mist">{label}</div>
+      <div className={`mt-0.5 text-lg font-semibold ${color}`}>{value}</div>
     </div>
   );
 }
@@ -325,7 +382,7 @@ function FamilyRollup({ agents }: { agents: AgentStats[] }) {
   }, [agents]);
   const maxR = Math.max(1, ...fams.map((f) => Math.abs(f.r)));
   return (
-    <section className="panel p-5">
+    <section className="panel p-3 sm:p-4">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Per-family contribution
       </div>
@@ -390,7 +447,7 @@ function TopAgentsScatter({ agents }: { agents: AgentStats[] }) {
   }
   const maxTrades = Math.max(...eligible.map((a) => a.wins + a.losses));
   return (
-    <section className="panel p-5">
+    <section className="panel p-3 sm:p-4">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Top 24 agents · skill scatter
       </div>
@@ -454,7 +511,7 @@ function RDistribution({ agents }: { agents: AgentStats[] }) {
     .slice(0, 12);
   if (rows.length === 0) return null;
   return (
-    <section className="panel p-5">
+    <section className="panel p-3 sm:p-4">
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Win/loss R balance · top 12
       </div>

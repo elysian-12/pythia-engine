@@ -39,7 +39,7 @@ function fmtTime(ts: number): string {
 
 export function LiveTradeFeed({ entries }: { entries: FeedEntry[] }) {
   return (
-    <div className="panel p-5 flex flex-col h-[480px]">
+    <div className="panel p-4 flex flex-col h-[520px]">
       <div className="flex items-center justify-between mb-3 shrink-0">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
           Trade feed

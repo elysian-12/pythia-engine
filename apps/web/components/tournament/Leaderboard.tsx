@@ -4,11 +4,17 @@ import { agentFamily, FAMILY_COLORS, type AgentStats } from "@/lib/swarm";
 
 export function Leaderboard({ agents }: { agents: AgentStats[] }) {
   return (
-    <div className="panel p-4">
-      <div className="text-xs uppercase tracking-[0.3em] text-mist mb-3">
-        Scoreboard · ranked by Σ R
+    <div className="panel p-4 flex flex-col h-[520px]">
+      <div className="flex items-center justify-between mb-3 shrink-0">
+        <div className="text-xs uppercase tracking-[0.3em] text-mist">
+          Scoreboard
+        </div>
+        <div className="text-[0.65rem] text-mist num">
+          ranked by Σ R · {" "}
+          {agents.length} {agents.length === 1 ? "agent" : "agents"}
+        </div>
       </div>
-      <div className="max-h-[520px] overflow-auto -mx-1 px-1">
+      <div className="flex-1 min-h-0 overflow-auto -mx-1 px-1">
         <table className="w-full text-xs">
           <caption className="sr-only">
             Pythia agent scoreboard, ranked by total R-multiple (Σ R).
