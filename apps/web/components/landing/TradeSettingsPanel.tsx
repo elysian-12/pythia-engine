@@ -99,7 +99,7 @@ export function TradeSettingsPanel() {
 
   return (
     <section
-      className="relative panel p-5 md:p-6 ring-1 ring-cyan/30 shadow-[0_0_45px_-15px_rgba(34,211,238,0.45)]"
+      className="relative panel p-4 md:p-5 ring-1 ring-cyan/30 shadow-[0_0_45px_-15px_rgba(34,211,238,0.45)]"
       style={{
         backgroundImage:
           "linear-gradient(135deg, rgba(34,211,238,0.06) 0%, rgba(11,15,20,0) 35%, rgba(11,15,20,0) 100%)",
@@ -111,26 +111,27 @@ export function TradeSettingsPanel() {
           ⚙ tune your portfolio
         </span>
       </div>
-      <div className="flex items-start justify-between flex-wrap gap-2 mb-4">
-        <div>
-          <h3 className="text-2xl font-semibold text-slate-100 mt-1">
-            Set your size · the swarm sizes for you
+      <div className="flex items-start justify-between flex-wrap gap-2 mb-3">
+        <div className="min-w-0">
+          <h3 className="text-base sm:text-lg font-semibold text-slate-100 mt-1">
+            Tune your size
           </h3>
-          <p className="text-xs text-mist mt-1.5 max-w-xl">
-            These knobs drive the auto-replay above and the live tournament
-            on{" "}
-            <a className="text-cyan hover:underline mx-1" href="/tournament">
+          <p className="text-[0.7rem] text-mist mt-1 leading-relaxed">
+            Drives the auto-replay above and the live tournament on{" "}
+            <a className="text-cyan hover:underline" href="/tournament">
               /tournament
             </a>
-            — change them and the swarm sizes accordingly on the next event.
-            Flip to <span className="text-amber">live preview</span> to plug
-            in a Hyperliquid wallet (execution wiring lands next pass).
+            . Flip to <span className="text-amber">live preview</span> for
+            a Hyperliquid wallet.
           </p>
         </div>
         <ModeToggle mode={cfg.mode} onChange={(m) => set("mode", m)} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      {/* Single column — this panel sits in a narrow 3/12 sidebar on
+          the landing page, so a 2-col internal grid would cramp every
+          card. Stack all four vertically. */}
+      <div className="grid grid-cols-1 gap-3">
         {/* Equity */}
         <NumberField
           label="Equity to deploy"
