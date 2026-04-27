@@ -1,26 +1,11 @@
 name: Refresh swarm snapshot
 
-# Runs swarm-backtest on the GitHub-hosted runner, commits the fresh
-# evolved snapshot + reports dir, and lets Vercel auto-redeploy. Vercel
-# can't run evolution itself (every request is a stateless serverless
-# function), so this cron is the closest thing to "live evolution" the
-# Vercel-only architecture supports.
-#
-# Cadence: every 30 minutes. Each run takes ~30 s on a free runner;
-# 30-minute cadence = 48 runs/day = 24 runner-minutes/day, well under
-# the 2000 min/month free GitHub Actions budget.
-#
-# Manual triggers welcome via the workflow_dispatch button.
-
 on:
   schedule:
-    # Every 30 minutes, at :00 and :30
-    - cron: "*/30 * * * *"
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 concurrency:
-  # Skip queued runs if a previous one is still going — we don't want
-  # to pile up backtests if a runner is slow.
   group: refresh-snapshot
   cancel-in-progress: false
 
@@ -36,108 +21,77 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use a token that can push back to main. The default
-          # GITHUB_TOKEN works for direct pushes to the same repo on
-          # public repos; for private repos use a PAT in
-          # secrets.SNAPSHOT_REFRESH_TOKEN.
-          token: ${{ secrets.SNAPSHOT_REFRESH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.88"
+          toolchain: '1.88'
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          # Share cache across cron runs so each pass starts warm.
           shared-key: swarm-backtest
 
-      - name: Restore data dir (DuckDB + persisted population)
-        # Cache the 365-day DuckDB and the swarm-population.json so
-        # each cron run continues evolving from where the prior run
-        # left off, instead of cold-starting from house_roster() every
-        # 30 min. Cache key is the workflow file itself — bumping the
-        # workflow invalidates the cache deliberately.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore data dir
         id: data-cache
         uses: actions/cache@v4
         with:
-          path: data/
-          key: pythia-data-${{ hashFiles('.github/workflows/refresh-snapshot.yml') }}-v1
+          path: data
+          key: pythia-data-v1-${{ github.run_id }}
           restore-keys: |
+            pythia-data-v1-
             pythia-data-
 
-      - name: Top up Kiyotaka data (last 7 days)
-        # Pulls the most recent 7 days of BTC + ETH candles + funding +
-        # liquidations + OI into the cached DuckDB. Store dedupes by
-        # (asset, ts) so re-scraping overlapping days is safe. On the
-        # very first run (cache miss) we expand to 365 days so the
-        # backtest has a full history.
+      - name: Top up Kiyotaka data
         env:
           KIYOTAKA_API_KEY: ${{ secrets.KIYOTAKA_API_KEY }}
         run: |
+          set -e
+          if [ -z "$KIYOTAKA_API_KEY" ]; then
+            echo "KIYOTAKA_API_KEY secret not set; aborting"
+            exit 1
+          fi
           DAYS=7
           if [ ! -f data/pythia.duckdb ]; then
-            echo "no cached duckdb — bootstrapping with 365 days"
+            echo "no cached duckdb; bootstrapping with 365 days"
             DAYS=365
           fi
           cargo run --release -p ingest --bin scrape -- $DAYS 2>&1 | tail -30
 
-      - name: Run swarm-backtest (evolve population)
+      - name: Run swarm-backtest
         env:
-          # Tighter cadence than the local default (500 → 750) so the
-          # run wall-clock stays under the 2-min target while still
-          # giving each generation enough events to stabilise.
-          PYTHIA_EVOLVE_EVERY: "750"
-          RUST_LOG: "info,swarm=info"
+          PYTHIA_EVOLVE_EVERY: '750'
+          RUST_LOG: 'info,swarm=info'
         run: |
-          # Backtest reads the cached DuckDB and persisted population,
-          # evolves one generation per 750 events, writes the fresh
-          # snapshot to data/swarm-snapshot.json + saves the new
-          # population to data/swarm-population.json for the next run.
+          set -e
           cargo run --release -p swarm --bin swarm-backtest 2>&1 | tail -40
 
       - name: Re-bundle snapshot for Vercel
         working-directory: apps/web
         run: |
-          # The bundle script reads data/swarm-snapshot.json (just
-          # written by the backtest) and copies it into both
-          # public/swarm-snapshot.json and lib/bundled/swarm-snapshot.json
-          # so Vercel's serverless function picks it up on next request.
+          set -e
           node scripts/bundle-snapshot.mjs
 
-      - name: Commit + push if anything changed
+      - name: Commit and push if changed
         run: |
+          set -e
           git config user.name "elysian-12"
           git config user.email "jeremy@trontalgroup.com"
-          # Only stage the produced artifacts — we don't want to commit
-          # any incidental local cargo / node modifications.
           git add data/swarm-snapshot.json data/swarm-population.json \
                   apps/web/lib/bundled/swarm-snapshot.json \
                   apps/web/public/swarm-snapshot.json \
-                  reports/swarm/ || true
-
+                  reports/swarm/ 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "no snapshot changes — nothing to commit"
+            echo "no snapshot changes - nothing to commit"
             exit 0
           fi
-
-          # Embed the new generation + champion in the commit message
-          # so the git log is its own audit trail.
-          GEN=$(jq -r '.generation' data/swarm-snapshot.json 2>/dev/null || echo "?")
-          CH=$(jq -r '.champion.agent_id' data/swarm-snapshot.json 2>/dev/null || echo "?")
-          SHARPE=$(jq -r '.champion.rolling_sharpe' data/swarm-snapshot.json 2>/dev/null || echo "?")
-          PSR=$(jq -r '.champion_certification.psr' data/swarm-snapshot.json 2>/dev/null || echo "?")
-
-          git commit -m "chore(snapshot): refresh @ gen ${GEN} · ${CH} · Sharpe ${SHARPE} · PSR ${PSR}
-
-Auto-refreshed by .github/workflows/refresh-snapshot.yml — runs the
-swarm-backtest binary, evolves the persisted population one more
-cycle, and commits the bundled artifacts so Vercel's prebuild hook
-picks them up on the next deploy."
-
-          # Rebase-pull in case another concurrent run is racing us;
-          # if there's a real conflict, fall through and the next
-          # cron tick picks it up.
+          GEN=$(jq -r '.generation // "?"' data/swarm-snapshot.json 2>/dev/null || echo "?")
+          CH=$(jq -r '.champion.agent_id // "?"' data/swarm-snapshot.json 2>/dev/null || echo "?")
+          git commit -m "chore(snapshot): refresh gen ${GEN} (${CH})"
           git pull --rebase origin main || true
           git push origin HEAD:main
