@@ -28,7 +28,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="min-h-screen bg-ink text-slate-200">
-        <div className="mx-auto max-w-7xl px-3 sm:px-6 py-4 sm:py-6">
+        {/* Full-width container — the tournament page is a chart-style
+            trading dashboard and needs every pixel of horizontal space
+            to keep the globe at price-chart size on wide monitors.
+            Old max-w-7xl (1280px) capped content at ~37% of a 3456px
+            display. No max-width now; padding keeps content off the
+            screen edge on ultra-wide. */}
+        <div className="px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
           <header className="flex items-center justify-between flex-wrap gap-2">
             <a href="/" className="block group">
               <PythiaWordmark size={36} />

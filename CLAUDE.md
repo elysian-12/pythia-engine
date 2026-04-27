@@ -164,6 +164,11 @@ Rules:
   5. left sidebar (description + autopilot + simulator)
 - **Don't replace the lineage globe** with a different
   visualization without confirming. The orb is the page's identity.
+- **Don't add `max-w-*` to the page wrapper** in `apps/web/app/layout.tsx`.
+  The tournament dashboard needs full viewport width on wide monitors;
+  the old `max-w-7xl` (1280px) capped a 4K display at 37% width. Use
+  padding (`px-3 sm:px-6 lg:px-8`) for edge breathing room, not a
+  fixed cap.
 
 Reference screenshot: GeckoTerminal token detail view (chart-centric
 layout with narrow left nav, dominant chart, and right info panel).
