@@ -946,30 +946,37 @@ export function TournamentClient() {
     </div>
   );
 
-  // Three-column horizontal layout requested by the user:
-  //   left 3/12  — description, live event poller, what-if simulator
-  //   middle 5/12 — title + globe + closed-loop pipeline + trade feed
-  //                 + scoreboard
-  //   right 4/12 — risk + portfolio settings, paper HL panel, copy
-  //                 trader picker
-  // Mobile collapses to a single column with the columns ordered so the
-  // hero/globe come first, then portfolio, then description+inputs.
+  // Layout (desktop, md+):
+  //
+  //   ┌──────── 3 ────────┐ ┌──────── 5 ────────┐ ┌──────── 4 ────────┐
+  //   │ description       │ │ hero / title       │ │ trade & risk      │
+  //   │ live event poller │ │ globe (chart-size) │ │ portfolio (HL)    │
+  //   │ what-if simulator │ │ champion details   │ │ copy trader       │
+  //   │                   │ │ closed-loop rail   │ │                   │
+  //   └───────────────────┘ └────────────────────┘ └───────────────────┘
+  //   ┌──────────── 6 ────────────┐ ┌──────────── 6 ────────────┐
+  //   │ trade feed (LiveTradeFeed) │ │ scoreboard (Leaderboard)  │
+  //   └───────────────────────────┘ └───────────────────────────┘
+  //
+  // Mobile (below md) collapses to a single column; the order classes
+  // step the children through:
+  //   1. hero + globe + champion + closed-loop rail
+  //   2. scoreboard
+  //   3. trade feed
+  //   4. settings + portfolio + copy
+  //   5. description + autopilot + simulator
+  //
+  // All five row blocks below set explicit md:col-start / md:row-start
+  // so CSS Grid places them correctly regardless of the order classes.
   return (
     <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 items-start">
-      {/* LEFT — description, live feed, what-if simulator */}
-      <aside className="space-y-4 sm:space-y-5 md:col-span-3 order-3 md:order-1">
-        {descriptionPanel}
-        <AutoPilot
-          onFire={onFire}
-          onPrices={onPrices}
-          onStatus={setAutopilotOn}
-        />
-        <EventSimulator onFire={onFire} lastFired={lastEvent} />
-      </aside>
-
-      {/* MIDDLE — hero header, globe, closed-loop pipeline, trade feed,
-          scoreboard. The page's centre of gravity. */}
-      <main className="space-y-4 sm:space-y-5 md:col-span-5 order-1 md:order-2 min-w-0">
+      {/* HERO + GLOBE + CHAMPION + RAIL — middle top column. The centre
+          of gravity of the page. Mobile order 1. */}
+      <main
+        className="space-y-4 sm:space-y-5 min-w-0
+          order-1
+          md:col-span-5 md:col-start-4 md:row-start-1"
+      >
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
@@ -1001,7 +1008,6 @@ export function TournamentClient() {
               <span>{fmt(snap.generated_at)}</span>
             </div>
           </div>
-          {championCard}
         </section>
 
         <AgentLineageGraph
@@ -1009,6 +1015,8 @@ export function TournamentClient() {
           championId={champ?.agent_id ?? null}
           generation={snap.generation ?? 0}
         />
+
+        {championCard}
 
         <PipelineRail
           pulseKey={pulseKey}
@@ -1019,14 +1027,34 @@ export function TournamentClient() {
           championId={champ?.agent_id ?? null}
           lastLatencyMs={lastLatencyMs}
         />
-
-        <LiveTradeFeed entries={feed} />
-
-        <Leaderboard agents={snap.agents} />
       </main>
 
-      {/* RIGHT — risk + portfolio settings, paper HL panel, copy trader */}
-      <aside className="space-y-4 sm:space-y-5 md:col-span-4 order-2 md:order-3 min-w-0">
+      {/* SCOREBOARD — full-width bottom row, left half on desktop.
+          Mobile order 2. */}
+      <section
+        className="min-w-0
+          order-2
+          md:col-span-6 md:col-start-7 md:row-start-2"
+      >
+        <Leaderboard agents={snap.agents} />
+      </section>
+
+      {/* TRADE FEED — full-width bottom row, right half on desktop.
+          Mobile order 3 (after scoreboard, per user request). */}
+      <section
+        className="min-w-0
+          order-3
+          md:col-span-6 md:col-start-1 md:row-start-2"
+      >
+        <LiveTradeFeed entries={feed} />
+      </section>
+
+      {/* SETTINGS + PORTFOLIO + COPY — right top column. Mobile order 4. */}
+      <aside
+        className="space-y-4 sm:space-y-5 min-w-0
+          order-4
+          md:col-span-4 md:col-start-9 md:row-start-1"
+      >
         <SettingsForm />
         <HyperliquidPanel
           open={openPositions}
@@ -1047,6 +1075,23 @@ export function TournamentClient() {
           reactions={reactions}
           lastEvent={lastEvent}
         />
+      </aside>
+
+      {/* DESCRIPTION + AUTOPILOT + SIMULATOR — left top column.
+          Mobile order 5 (last, since the user prioritises the trading
+          surface above the explanatory + input panels on mobile). */}
+      <aside
+        className="space-y-4 sm:space-y-5
+          order-5
+          md:col-span-3 md:col-start-1 md:row-start-1"
+      >
+        {descriptionPanel}
+        <AutoPilot
+          onFire={onFire}
+          onPrices={onPrices}
+          onStatus={setAutopilotOn}
+        />
+        <EventSimulator onFire={onFire} lastFired={lastEvent} />
       </aside>
     </div>
   );
