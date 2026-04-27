@@ -628,9 +628,9 @@ export function AgentLineageGraph({
                 if (!ps || !pt) return null;
                 const avg = (ps.depth + pt.depth) / 2;
                 // Visible enough to read as lineage spokes, muted
-                // enough that the family-colored nodes still own the
+                // enough that the family-colored nodes own the
                 // visual hierarchy.
-                const op = 0.18 + Math.max(0, avg) * 0.42;
+                const op = 0.13 + Math.max(0, avg) * 0.32;
                 return (
                   <line
                     key={i}
@@ -638,9 +638,9 @@ export function AgentLineageGraph({
                     y1={ps.sy}
                     x2={pt.sx}
                     y2={pt.sy}
-                    stroke="#b45309"
+                    stroke="#92400e"
                     strokeOpacity={op}
-                    strokeWidth={0.9}
+                    strokeWidth={0.7}
                     strokeLinecap="round"
                   />
                 );

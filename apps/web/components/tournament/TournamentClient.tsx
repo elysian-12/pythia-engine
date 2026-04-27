@@ -914,9 +914,9 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
   // Mobile collapses to a single column with the columns ordered so the
   // hero/globe come first, then portfolio, then description+inputs.
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 items-start">
       {/* LEFT — description, live feed, what-if simulator */}
-      <aside className="space-y-4 sm:space-y-5 lg:col-span-3 order-3 lg:order-1">
+      <aside className="space-y-4 sm:space-y-5 md:col-span-3 order-3 md:order-1">
         {descriptionPanel}
         <AutoPilot
           onFire={onFire}
@@ -928,7 +928,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
 
       {/* MIDDLE — hero header, globe, closed-loop pipeline, trade feed,
           scoreboard. The page's centre of gravity. */}
-      <main className="space-y-4 sm:space-y-5 lg:col-span-5 order-1 lg:order-2 min-w-0">
+      <main className="space-y-4 sm:space-y-5 md:col-span-5 order-1 md:order-2 min-w-0">
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
@@ -985,7 +985,7 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
       </main>
 
       {/* RIGHT — risk + portfolio settings, paper HL panel, copy trader */}
-      <aside className="space-y-4 sm:space-y-5 lg:col-span-4 order-2 lg:order-3 min-w-0">
+      <aside className="space-y-4 sm:space-y-5 md:col-span-4 order-2 md:order-3 min-w-0">
         <SettingsForm />
         <HyperliquidPanel
           open={openPositions}
