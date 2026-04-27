@@ -627,10 +627,10 @@ export function AgentLineageGraph({
                 const pt = projected.find((p) => p.node === t);
                 if (!ps || !pt) return null;
                 const avg = (ps.depth + pt.depth) / 2;
-                // More prominent edges: wider, more opaque, copper
-                // tone that picks up the warm orb glow without
-                // overpowering the family colors.
-                const op = 0.28 + Math.max(0, avg) * 0.55;
+                // Visible enough to read as lineage spokes, muted
+                // enough that the family-colored nodes still own the
+                // visual hierarchy.
+                const op = 0.18 + Math.max(0, avg) * 0.42;
                 return (
                   <line
                     key={i}
@@ -638,9 +638,9 @@ export function AgentLineageGraph({
                     y1={ps.sy}
                     x2={pt.sx}
                     y2={pt.sy}
-                    stroke="#d97706"
+                    stroke="#b45309"
                     strokeOpacity={op}
-                    strokeWidth={1.3}
+                    strokeWidth={0.9}
                     strokeLinecap="round"
                   />
                 );
