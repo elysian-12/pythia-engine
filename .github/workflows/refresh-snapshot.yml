@@ -1,15 +1,32 @@
 name: Refresh swarm snapshot
 
 on:
-  # Hourly cadence: 24 runs/day, ~48 runner-min/day after the cache is
-  # warm. Balanced for demo + research use — fresh enough that the
-  # leaderboard shifts visibly between sessions, light enough that the
-  # Actions UI stays scannable. Bump to '*/30 * * * *' for minute-fresh
-  # evolution; switch to a Railway/Fly.io daemon ($5/mo) for true
-  # continuous evolution without the commit churn.
+  # Three trigger paths — pick whichever stays reliable for your
+  # environment.
+  #
+  # 1. `schedule` (hourly). Reliable on paper; in practice GitHub
+  #    Actions cron is lossy under platform load and runs can be
+  #    delayed by hours or skipped entirely. Keep as the baseline,
+  #    but don't trust it for time-critical refreshes.
+  #
+  # 2. `workflow_dispatch`. Manual button on the Actions tab. Ship-it
+  #    insurance — fire it before any demo to guarantee a fresh
+  #    snapshot.
+  #
+  # 3. `repository_dispatch`. External-scheduler hook. Any service
+  #    that can POST to GitHub's REST API
+  #    (https://api.github.com/repos/<owner>/<repo>/dispatches) with
+  #    `{"event_type": "refresh-snapshot"}` triggers a run. Use
+  #    cron-job.org (free, ~99.9% reliability) or a Vercel Cron Job
+  #    when you need actual hourly precision.
+  #
+  # 4. `push`. Re-bundle on relevant code changes so deploy and
+  #    snapshot can't drift.
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [refresh-snapshot]
   push:
     branches: [main]
     paths:
