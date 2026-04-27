@@ -627,7 +627,10 @@ export function AgentLineageGraph({
                 const pt = projected.find((p) => p.node === t);
                 if (!ps || !pt) return null;
                 const avg = (ps.depth + pt.depth) / 2;
-                const op = 0.12 + Math.max(0, avg) * 0.45;
+                // More prominent edges: wider, more opaque, copper
+                // tone that picks up the warm orb glow without
+                // overpowering the family colors.
+                const op = 0.28 + Math.max(0, avg) * 0.55;
                 return (
                   <line
                     key={i}
@@ -635,9 +638,10 @@ export function AgentLineageGraph({
                     y1={ps.sy}
                     x2={pt.sx}
                     y2={pt.sy}
-                    stroke="#92400e"
+                    stroke="#d97706"
                     strokeOpacity={op}
-                    strokeWidth={0.7}
+                    strokeWidth={1.3}
+                    strokeLinecap="round"
                   />
                 );
               })}

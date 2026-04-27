@@ -14,8 +14,6 @@ import { PipelineRail } from "./PipelineRail";
 import {
   fetchSwarm,
   applySessionDelta,
-  FAMILY_COLORS,
-  agentFamily,
   type SwarmSnapshot,
 } from "@/lib/swarm";
 import type { SimEvent } from "@/lib/simulate";
@@ -732,18 +730,207 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
   }
 
   const champ = snap.champion;
-  const familiesActive = Array.from(
-    new Set(snap.agents.map((a) => agentFamily(a.agent_id))),
+
+  // Champion stat card — extracted so we can drop it into the middle
+  // column under the title without a sea of inline JSX.
+  const championCard = champ ? (
+    <div className="panel p-3 sm:p-4 backdrop-blur-sm bg-black/30">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
+            Current champion
+          </div>
+          <div className="mt-1 text-base sm:text-lg font-mono text-slate-100 truncate">
+            {champ.agent_id}
+          </div>
+        </div>
+        {snap.champion_certification ? (
+          <CertificationBadge cert={snap.champion_certification} />
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-3 num">
+        <span>
+          <span className="text-mist">Σ R</span>{" "}
+          <span className={champ.total_r >= 0 ? "text-green" : "text-red"}>
+            {champ.total_r >= 0 ? "+" : ""}
+            {champ.total_r.toFixed(2)}
+          </span>
+        </span>
+        <span>
+          <span className="text-mist">WR</span>{" "}
+          {(champ.win_rate * 100).toFixed(1)}%
+        </span>
+        <span>
+          <span className="text-mist">Trades</span>{" "}
+          {champ.wins + champ.losses}
+        </span>
+        <span title="Average R per trade">
+          <span className="text-mist">E[R]</span>{" "}
+          <span className={(champ.expectancy_r ?? 0) >= 0 ? "text-green" : "text-red"}>
+            {champ.expectancy_r !== undefined
+              ? (champ.expectancy_r >= 0 ? "+" : "") + champ.expectancy_r.toFixed(2)
+              : "—"}
+          </span>
+        </span>
+        <span title="Profit factor — gross win R / gross loss R">
+          <span className="text-mist">PF</span>{" "}
+          <span
+            className={
+              (champ.profit_factor ?? 0) >= 1.5
+                ? "text-green"
+                : (champ.profit_factor ?? 0) >= 1
+                  ? "text-amber"
+                  : "text-red"
+            }
+          >
+            {champ.profit_factor !== undefined && Number.isFinite(champ.profit_factor)
+              ? champ.profit_factor.toFixed(2)
+              : "—"}
+          </span>
+        </span>
+        <span title="Sharpe of per-trade R + 95% block-bootstrap CI">
+          <span className="text-mist">Sharpe</span>{" "}
+          <span
+            className={
+              champ.rolling_sharpe > 0.5
+                ? "text-green"
+                : champ.rolling_sharpe > 0
+                  ? "text-amber"
+                  : "text-red"
+            }
+          >
+            {champ.rolling_sharpe.toFixed(2)}
+          </span>
+          {snap.champion_certification?.sharpe_ci_lo != null &&
+          snap.champion_certification?.sharpe_ci_hi != null ? (
+            <span className="text-[0.55rem] text-mist ml-1">
+              [{snap.champion_certification.sharpe_ci_lo.toFixed(2)},{" "}
+              {snap.champion_certification.sharpe_ci_hi.toFixed(2)}]
+            </span>
+          ) : null}
+        </span>
+        {snap.champion_certification ? (
+          <>
+            <span title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
+              <span className="text-mist">PSR</span>{" "}
+              <span
+                className={
+                  snap.champion_certification.psr >= 0.95
+                    ? "text-green"
+                    : snap.champion_certification.psr >= 0.5
+                      ? "text-amber"
+                      : "text-red"
+                }
+              >
+                {snap.champion_certification.psr.toFixed(2)}
+              </span>
+            </span>
+            <span title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias">
+              <span className="text-mist">DSR</span>{" "}
+              <span
+                className={
+                  snap.champion_certification.dsr >= 0.95
+                    ? "text-green"
+                    : snap.champion_certification.dsr >= 0.5
+                      ? "text-amber"
+                      : "text-red"
+                }
+              >
+                {snap.champion_certification.dsr.toFixed(2)}
+              </span>
+            </span>
+          </>
+        ) : null}
+      </div>
+    </div>
+  ) : null;
+
+  // The "How the swarm gets smart" explainer — extracted so the left
+  // column can host it without bloating the JSX. Keeps the same 8-step
+  // narrative; just reads better as a sidebar than as a wide panel.
+  const descriptionPanel = (
+    <div className="panel p-4 sm:p-5">
+      <div className="text-xs uppercase tracking-[0.3em] text-mist">
+        How the swarm gets smart
+      </div>
+      <ol className="mt-3 space-y-2 text-[0.7rem] sm:text-xs text-slate-300 leading-relaxed">
+        <li>
+          <span className="text-purple-300 font-mono">1. Event →</span>{" "}
+          A market tick arrives from Kiyotaka — a forced liquidation,
+          a funding spike, a price breakout, a Polymarket lead, or two
+          of those at once.
+        </li>
+        <li>
+          <span className="text-purple-300 font-mono">2. Vote →</span>{" "}
+          All 27 agents see it at the same time. Each one decides
+          independently: trade or sit out. 7 are rule-based, 5 are LLM
+          personas reasoning in plain English.
+        </li>
+        <li>
+          <span className="text-purple-300 font-mono">3. Self-check →</span>{" "}
+          Before voting, every agent looks at its own recent results.
+          If it&apos;s been losing money lately, it benches itself
+          until it recovers (the self-backtest gate).
+        </li>
+        <li>
+          <span className="text-purple-300 font-mono">4. Scoreboard →</span>{" "}
+          After a trade closes, the realised win or loss feeds back.
+          Each agent&apos;s running profit, win rate, and statistical
+          confidence (Sharpe / PSR / DSR) update.
+        </li>
+        <li>
+          <span className="text-purple-300 font-mono">5. Specialist →</span>{" "}
+          For this kind of event, who has the best track record?
+          Specialists, not generalists.
+        </li>
+        <li>
+          <span className="text-purple-300 font-mono">6. Ensemble →</span>{" "}
+          Among the agents that did fire, sum their votes weighted by
+          track record. If they agree strongly enough, trade in that
+          direction; if they&apos;re split, sit out.
+        </li>
+        <li>
+          <span className="text-amber-300 font-mono">7. Evolution →</span>{" "}
+          Every N events, the worst agents get replaced by tweaked
+          copies of the best. Bad agents die out; good ones spawn
+          lookalikes.
+        </li>
+        <li>
+          <span className="text-amber-300 font-mono">8. Trade →</span>{" "}
+          The chosen direction + size opens a paper position on
+          Hyperliquid. When that trade closes, its result flows
+          straight back to step 4 — the loop closes.
+        </li>
+      </ol>
+    </div>
   );
 
+  // Three-column horizontal layout requested by the user:
+  //   left 3/12  — description, live event poller, what-if simulator
+  //   middle 5/12 — title + globe + closed-loop pipeline + trade feed
+  //                 + scoreboard
+  //   right 4/12 — risk + portfolio settings, paper HL panel, copy
+  //                 trader picker
+  // Mobile collapses to a single column with the columns ordered so the
+  // hero/globe come first, then portfolio, then description+inputs.
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* HERO header — flat (the 3D arena was retired in favour of the
-          force-directed lineage graph below; that view shows real
-          mutation/evolution structure instead of a decorative scene). */}
-      <section className="space-y-3">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
+      {/* LEFT — description, live feed, what-if simulator */}
+      <aside className="space-y-4 sm:space-y-5 lg:col-span-3 order-3 lg:order-1">
+        {descriptionPanel}
+        <AutoPilot
+          onFire={onFire}
+          onPrices={onPrices}
+          onStatus={setAutopilotOn}
+        />
+        <EventSimulator onFire={onFire} lastFired={lastEvent} />
+      </aside>
+
+      {/* MIDDLE — hero header, globe, closed-loop pipeline, trade feed,
+          scoreboard. The page's centre of gravity. */}
+      <main className="space-y-4 sm:space-y-5 lg:col-span-5 order-1 lg:order-2 min-w-0">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem]">
                 <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
@@ -753,151 +940,35 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
                 Pythia tournament
               </span>
             </div>
-            <h2 className="text-xl sm:text-3xl md:text-5xl font-semibold text-slate-100 mt-1 tracking-tight leading-tight">
-              Events → Swarm → Champion → Your trade
-            </h2>
-            <p className="mt-2 text-[0.7rem] text-mist max-w-xl">
+            <div className="flex items-center gap-3 flex-wrap text-[0.65rem] text-mist">
+              <KiyotakaBadge />
+              <SourceBadge source={snap.source} />
+              <PhaseBadge phase={phase} />
+            </div>
+          </div>
+          <h2 className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-semibold text-slate-100 tracking-tight leading-tight">
+            Events → Swarm → Champion → Your trade
+          </h2>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-[0.7rem] text-mist max-w-xl">
               Live decision loop on real Kiyotaka events. The leaderboard
               re-ranks the moment an agent fires — page is dynamic, not a
               static snapshot.
             </p>
-          </div>
-          <div className="text-right space-y-1 shrink-0">
-            <KiyotakaBadge />
-            <SourceBadge source={snap.source} />
-            <RegimeBadge regime={snap.regime} />
-            <div className="text-[0.65rem] text-mist num">
-              {fmt(snap.generated_at)}
-            </div>
-            <PhaseBadge phase={phase} />
-          </div>
-        </div>
-
-        {champ ? (
-          <div className="panel p-3 sm:p-4 backdrop-blur-sm bg-black/30">
-            <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <div className="min-w-0">
-                <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
-                  Current champion
-                </div>
-                <div className="mt-1 text-base sm:text-lg font-mono text-slate-100 truncate">
-                  {champ.agent_id}
-                </div>
-              </div>
-              {snap.champion_certification ? (
-                <CertificationBadge cert={snap.champion_certification} />
-              ) : null}
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-3 num">
-              <span>
-                <span className="text-mist">Σ R</span>{" "}
-                <span className={champ.total_r >= 0 ? "text-green" : "text-red"}>
-                  {champ.total_r >= 0 ? "+" : ""}
-                  {champ.total_r.toFixed(2)}
-                </span>
-              </span>
-              <span>
-                <span className="text-mist">WR</span>{" "}
-                {(champ.win_rate * 100).toFixed(1)}%
-              </span>
-              <span>
-                <span className="text-mist">Trades</span>{" "}
-                {champ.wins + champ.losses}
-              </span>
-              <span title="Average R per trade">
-                <span className="text-mist">E[R]</span>{" "}
-                <span className={(champ.expectancy_r ?? 0) >= 0 ? "text-green" : "text-red"}>
-                  {champ.expectancy_r !== undefined
-                    ? (champ.expectancy_r >= 0 ? "+" : "") + champ.expectancy_r.toFixed(2)
-                    : "—"}
-                </span>
-              </span>
-              <span title="Profit factor — gross win R / gross loss R">
-                <span className="text-mist">PF</span>{" "}
-                <span
-                  className={
-                    (champ.profit_factor ?? 0) >= 1.5
-                      ? "text-green"
-                      : (champ.profit_factor ?? 0) >= 1
-                        ? "text-amber"
-                        : "text-red"
-                  }
-                >
-                  {champ.profit_factor !== undefined && Number.isFinite(champ.profit_factor)
-                    ? champ.profit_factor.toFixed(2)
-                    : "—"}
-                </span>
-              </span>
-              <span title="Sharpe of per-trade R + 95% block-bootstrap CI">
-                <span className="text-mist">Sharpe</span>{" "}
-                <span
-                  className={
-                    champ.rolling_sharpe > 0.5
-                      ? "text-green"
-                      : champ.rolling_sharpe > 0
-                        ? "text-amber"
-                        : "text-red"
-                  }
-                >
-                  {champ.rolling_sharpe.toFixed(2)}
-                </span>
-                {snap.champion_certification?.sharpe_ci_lo != null &&
-                snap.champion_certification?.sharpe_ci_hi != null ? (
-                  <span className="text-[0.55rem] text-mist ml-1">
-                    [{snap.champion_certification.sharpe_ci_lo.toFixed(2)},{" "}
-                    {snap.champion_certification.sharpe_ci_hi.toFixed(2)}]
-                  </span>
-                ) : null}
-              </span>
-              {snap.champion_certification ? (
-                <>
-                  <span title="Probabilistic Sharpe Ratio — Bailey & López de Prado 2012">
-                    <span className="text-mist">PSR</span>{" "}
-                    <span
-                      className={
-                        snap.champion_certification.psr >= 0.95
-                          ? "text-green"
-                          : snap.champion_certification.psr >= 0.5
-                            ? "text-amber"
-                            : "text-red"
-                      }
-                    >
-                      {snap.champion_certification.psr.toFixed(2)}
-                    </span>
-                  </span>
-                  <span title="Deflated Sharpe Ratio — corrects PSR for multiple-testing bias">
-                    <span className="text-mist">DSR</span>{" "}
-                    <span
-                      className={
-                        snap.champion_certification.dsr >= 0.95
-                          ? "text-green"
-                          : snap.champion_certification.dsr >= 0.5
-                            ? "text-amber"
-                            : "text-red"
-                      }
-                    >
-                      {snap.champion_certification.dsr.toFixed(2)}
-                    </span>
-                  </span>
-                </>
-              ) : null}
+            <div className="flex items-center gap-3 flex-wrap text-[0.65rem] text-mist num">
+              <RegimeBadge regime={snap.regime} />
+              <span>{fmt(snap.generated_at)}</span>
             </div>
           </div>
-        ) : null}
-      </section>
+          {championCard}
+        </section>
 
-      {/* Force-directed lineage graph — interactive replacement for
-          the prior 3D arena. Updates with each cron-driven snapshot
-          refresh; champion glows gold, families colour-coded, edges
-          encode mutation/revive lineage. */}
-      <AgentLineageGraph
-        agents={snap.agents}
-        championId={champ?.agent_id ?? null}
-        generation={snap.generation ?? 0}
-      />
+        <AgentLineageGraph
+          agents={snap.agents}
+          championId={champ?.agent_id ?? null}
+          generation={snap.generation ?? 0}
+        />
 
-      {/* Closed-loop pipeline visualizer */}
-      <section>
         <PipelineRail
           pulseKey={pulseKey}
           autopilotOn={autopilotOn}
@@ -907,186 +978,35 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
           championId={champ?.agent_id ?? null}
           lastLatencyMs={lastLatencyMs}
         />
-      </section>
 
-      {/* New-user wayfinding: a single "what to do here" strip with three
-          numbered actions matching the columns below. Without this,
-          first-time visitors land on a wall of similarly-styled panels
-          and have no entry point. */}
-      <section
-        aria-label="Quick start"
-        className="rounded-md border border-royal/30 bg-royal/5 px-3 sm:px-4 py-3 flex items-start sm:items-center flex-wrap gap-x-4 sm:gap-x-6 gap-y-2 text-[0.7rem] sm:text-[0.75rem]"
-      >
-        <span className="text-[0.6rem] tracking-[0.4em] uppercase text-purple-300">
-          Start here
-        </span>
-        <a href="#zone-controls" className="hover:text-cyan flex items-center gap-2">
-          <span className="num text-purple-300">1.</span>
-          Configure your size + risk
-        </a>
-        <a href="#zone-controls" className="hover:text-cyan flex items-center gap-2">
-          <span className="num text-purple-300">2.</span>
-          Watch the live feed (or fire a synthetic event)
-        </a>
-        <a href="#zone-trading" className="hover:text-cyan flex items-center gap-2">
-          <span className="num text-purple-300">3.</span>
-          Watch the paper position open under the champion
-        </a>
-        <a href="#zone-monitoring" className="hover:text-cyan flex items-center gap-2">
-          <span className="num text-purple-300">4.</span>
-          Read the trade feed + leaderboard
-        </a>
-      </section>
+        <LiveTradeFeed entries={feed} />
 
-      {/* 3-column deck — each zone has its own header so a first-time
-          visitor knows what each column is for at a glance. Order chosen
-          to match the natural left-to-right reading flow: configure →
-          observe positions → review history. */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-start">
-        {/* CONTROLS */}
-        <section
-          id="zone-controls"
-          aria-labelledby="zone-controls-h"
-          className="space-y-4"
-        >
-          <h2 id="zone-controls-h" className="zone-header">
-            <span className="text-purple-300">A · Controls</span>
-            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
-              your inputs · settings · autopilot · what-if events
-            </span>
-          </h2>
-          <AutoPilot
-            onFire={onFire}
-            onPrices={onPrices}
-            onStatus={setAutopilotOn}
-          />
-          <EventSimulator onFire={onFire} lastFired={lastEvent} />
-          <SettingsForm />
-        </section>
-
-        {/* TRADING */}
-        <section
-          id="zone-trading"
-          aria-labelledby="zone-trading-h"
-          className="space-y-4"
-        >
-          <h2 id="zone-trading-h" className="zone-header">
-            <span className="text-purple-300">B · Trading</span>
-            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
-              your paper positions · who you mirror
-            </span>
-          </h2>
-          <HyperliquidPanel
-            open={openPositions}
-            closed={closedPositions}
-            marks={marks}
-            equity_usd={EQUITY_USD}
-            onClose={handleClosePosition}
-            onReset={handleReset}
-          />
-          <CopyTradePanel
-            agents={snap.agents}
-            selected={copyAgent}
-            onSelect={setCopyAgent}
-            equity_usd={EQUITY_USD}
-            risk_fraction={riskFraction}
-            btc_price={marks.BTC ?? DEFAULT_BTC}
-            eth_price={marks.ETH ?? DEFAULT_ETH}
-            reactions={reactions}
-            lastEvent={lastEvent}
-          />
-        </section>
-
-        {/* MONITORING + INFO */}
-        <section
-          id="zone-monitoring"
-          aria-labelledby="zone-monitoring-h"
-          className="space-y-4"
-        >
-          <h2 id="zone-monitoring-h" className="zone-header">
-            <span className="text-purple-300">C · Monitoring</span>
-            <span className="text-mist normal-case tracking-normal text-[0.6rem]">
-              live feed · how the swarm thinks
-            </span>
-          </h2>
-          {/* The explainer sits above the feed on purpose — once the
-              feed fills up it scrolls inside its own bounded height, so
-              the 8-step walkthrough stays anchored on screen instead of
-              getting pushed below the fold by every new event. */}
-          <div className="panel p-5">
-            <div className="text-xs uppercase tracking-[0.3em] text-mist">
-              How the swarm gets smart
-            </div>
-            <ol className="mt-3 space-y-2 text-xs text-slate-300 leading-relaxed">
-              <li>
-                <span className="text-purple-300 font-mono">1. Event →</span>{" "}
-                A market tick arrives from Kiyotaka — a forced
-                liquidation, a funding spike, a price breakout, a
-                Polymarket lead, or two of those at once.
-              </li>
-              <li>
-                <span className="text-purple-300 font-mono">2. Vote →</span>{" "}
-                All 27 agents see it at the same time. Each one decides
-                independently: trade or sit out. 7 are rule-based, 5 are
-                LLM personas reasoning in plain English.
-              </li>
-              <li>
-                <span className="text-purple-300 font-mono">3. Self-check →</span>{" "}
-                Before voting, every agent looks at its own recent
-                results. If it's been losing money lately, it benches
-                itself until it recovers (the self-backtest gate).
-              </li>
-              <li>
-                <span className="text-purple-300 font-mono">4. Scoreboard →</span>{" "}
-                After a trade closes, the realised win or loss feeds
-                back. Each agent's running profit, win rate, and
-                statistical confidence (Sharpe / PSR / DSR) update.
-              </li>
-              <li>
-                <span className="text-purple-300 font-mono">5. Specialist →</span>{" "}
-                For this kind of event, who has the best track record?
-                Polymarket leads go to <span className="font-mono">polyedge</span>,
-                liquidation cascades to <span className="font-mono">liq-trend</span>,
-                funding spikes to <span className="font-mono">funding-trend</span>,
-                and so on. Specialists, not generalists.
-              </li>
-              <li>
-                <span className="text-purple-300 font-mono">6. Ensemble →</span>{" "}
-                Among the agents that did fire, sum their votes weighted
-                by track record. If they agree strongly enough, trade in
-                that direction; if they're split, sit out. Size the
-                trade by how confident the specialist usually is when
-                right (quarter-Kelly).
-              </li>
-              <li>
-                <span className="text-amber-300 font-mono">7. Evolution →</span>{" "}
-                Every N events, the worst agents get replaced by tweaked
-                copies of the best — small random parameter shifts plus
-                some swaps between top performers in the same family.
-                Bad agents die out; good ones spawn lookalikes.
-              </li>
-              <li>
-                <span className="text-amber-300 font-mono">8. Trade →</span>{" "}
-                The chosen direction + size opens a paper position on
-                Hyperliquid. When that trade closes, its result flows
-                straight back to step 4 — the loop closes.
-              </li>
-            </ol>
-          </div>
-          <LiveTradeFeed entries={feed} />
-        </section>
-      </section>
-
-      {/* Full leaderboard */}
-      <section aria-labelledby="zone-leaderboard-h" className="space-y-4">
-        <h2 id="zone-leaderboard-h" className="zone-header">
-          <span className="text-purple-300">D · Leaderboard</span>
-          <span className="text-mist normal-case tracking-normal text-[0.6rem]">
-            every agent · ranked by Σ R · click any column header to re-sort
-          </span>
-        </h2>
         <Leaderboard agents={snap.agents} />
-      </section>
+      </main>
+
+      {/* RIGHT — risk + portfolio settings, paper HL panel, copy trader */}
+      <aside className="space-y-4 sm:space-y-5 lg:col-span-4 order-2 lg:order-3 min-w-0">
+        <SettingsForm />
+        <HyperliquidPanel
+          open={openPositions}
+          closed={closedPositions}
+          marks={marks}
+          equity_usd={EQUITY_USD}
+          onClose={handleClosePosition}
+          onReset={handleReset}
+        />
+        <CopyTradePanel
+          agents={snap.agents}
+          selected={copyAgent}
+          onSelect={setCopyAgent}
+          equity_usd={EQUITY_USD}
+          risk_fraction={riskFraction}
+          btc_price={marks.BTC ?? DEFAULT_BTC}
+          eth_price={marks.ETH ?? DEFAULT_ETH}
+          reactions={reactions}
+          lastEvent={lastEvent}
+        />
+      </aside>
     </div>
   );
 }
