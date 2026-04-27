@@ -11,6 +11,9 @@
     },
     "app/api/config/route.ts": {
       "maxDuration": 5
+    },
+    "app/api/cron/refresh/route.ts": {
+      "maxDuration": 10
     }
   }
 }
