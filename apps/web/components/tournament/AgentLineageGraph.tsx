@@ -108,6 +108,17 @@ export function AgentLineageGraph({
   const [, forceRerender] = useState(0);
   const tickCount = useRef(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  // Frozen view of the agents prop. The cron-driven snapshot refreshes
+  // every hour and `agents` updates whenever /api/swarm changes. If
+  // we let those refreshes propagate while the user is studying a
+  // selection, the layout reshuffles under their cursor and the
+  // selection disappears. So we mirror `agents` into `frozenAgents`
+  // only when the user isn't interacting (no selection + tab is
+  // visible). When they tab away and back, the visibilitychange
+  // listener catches up to the latest snapshot.
+  const [frozenAgents, setFrozenAgents] = useState(agents);
 
   // Camera rotation. Refs (not state) so updating during a drag
   // doesn't trigger React re-renders for every mouse move; the rAF
@@ -125,13 +136,36 @@ export function AgentLineageGraph({
 
   const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
 
+  // Sync `frozenAgents` to the live `agents` prop only when safe.
+  useEffect(() => {
+    const isInteracting = selectedId !== null || dragRef.current !== null;
+    const tabHidden = typeof document !== "undefined" && document.hidden;
+    if (!isInteracting && !tabHidden) {
+      setFrozenAgents(agents);
+    }
+  }, [agents, selectedId]);
+
+  // On tab-becomes-visible, catch up to whatever's freshest. Stops
+  // the graph from showing a gen-old snapshot after the user has
+  // been away for a while.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibility = () => {
+      if (!document.hidden && selectedId === null && dragRef.current === null) {
+        setFrozenAgents(agents);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [agents, selectedId]);
+
   const { nodes, links } = useMemo(() => {
-    if (agents.length === 0) {
+    if (frozenAgents.length === 0) {
       return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
     }
-    const liveIds = new Set(agents.map((a) => a.agent_id));
-    const maxR = Math.max(1, ...agents.map((a) => Math.abs(a.total_r)));
-    const liveNodes: GraphNode[] = agents.map((a) => {
+    const liveIds = new Set(frozenAgents.map((a) => a.agent_id));
+    const maxR = Math.max(1, ...frozenAgents.map((a) => Math.abs(a.total_r)));
+    const liveNodes: GraphNode[] = frozenAgents.map((a) => {
       const family = agentFamily(a.agent_id);
       const sizeR = 7 + (Math.abs(a.total_r) / maxR) * 13;
       return {
@@ -167,7 +201,7 @@ export function AgentLineageGraph({
       }
     }
     return { nodes: [...liveNodes, ...seedNodes], links: linksOut };
-  }, [agents, championId]);
+  }, [frozenAgents, championId]);
 
   // Force simulation in 2D. The 2D positions feed sphere projection
   // (lon = x, lat = y) so a balanced 2D layout maps to a balanced
@@ -365,6 +399,8 @@ export function AgentLineageGraph({
     return a.depth - b.depth;
   });
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
+  const hovered = nodes.find((n) => n.id === hoveredId) ?? null;
+  const championProjection = projected.find((p) => p.node.isChampion) ?? null;
 
   return (
     <section className="panel p-4 sm:p-5 relative">
@@ -456,7 +492,10 @@ export function AgentLineageGraph({
             })}
           </g>
 
-          {/* Nodes — back-to-front, champion last (always on top). */}
+          {/* Nodes — back-to-front, champion last (always on top).
+              The champion's persistent floating callout is drawn
+              after the node loop so it always sits on top, no matter
+              what's behind it. */}
           <g>
             {projected.map(({ node: n, sx, sy, depth }) => {
               const fam = (FAMILY_COLORS as Record<string, string>)[n.family] ?? "#94a3b8";
@@ -477,6 +516,10 @@ export function AgentLineageGraph({
                   transform={`translate(${sx},${sy})`}
                   className="cursor-pointer"
                   onPointerDown={(e) => onPointerDownNode(e, n)}
+                  onPointerEnter={() => setHoveredId(n.id)}
+                  onPointerLeave={() =>
+                    setHoveredId((cur) => (cur === n.id ? null : cur))
+                  }
                 >
                   {n.isChampion ? (
                     <>
@@ -535,10 +578,77 @@ export function AgentLineageGraph({
               );
             })}
           </g>
+
+          {/* Persistent champion callout — always visible above the
+              champion's projected position, regardless of selection
+              state, hover, or which face of the globe it's on.
+              Drawn after the node loop so it sits on top of any
+              other element. Dims slightly when champion is on the
+              back of the globe (depth < 0). */}
+          {championProjection ? (
+            (() => {
+              const { sx, sy, depth, node } = championProjection;
+              const above = sy < CENTER_Y;
+              const labelDy = above ? 70 : -70;
+              const labelY = sy + labelDy;
+              const opacity = depth < 0 ? 0.7 : 1;
+              const champ = node.agent;
+              return (
+                <g
+                  opacity={opacity}
+                  style={{ pointerEvents: "none" }}
+                >
+                  <line
+                    x1={sx}
+                    y1={sy}
+                    x2={sx}
+                    y2={labelY + (above ? -10 : 10)}
+                    stroke="#fbbf24"
+                    strokeWidth={1}
+                    strokeDasharray="2 3"
+                    opacity={0.6}
+                  />
+                  <rect
+                    x={sx - 78}
+                    y={labelY - 18}
+                    width={156}
+                    height={36}
+                    rx={6}
+                    fill="rgba(11, 15, 20, 0.92)"
+                    stroke="#fbbf24"
+                    strokeWidth={1.5}
+                  />
+                  <text
+                    x={sx}
+                    y={labelY - 4}
+                    textAnchor="middle"
+                    fontSize={11}
+                    fill="#fde68a"
+                    fontWeight={600}
+                  >
+                    👑 CHAMPION
+                  </text>
+                  <text
+                    x={sx}
+                    y={labelY + 11}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill="#cbd5e1"
+                    fontFamily="ui-monospace, monospace"
+                  >
+                    {champ
+                      ? `${champ.total_r >= 0 ? "+" : ""}${champ.total_r.toFixed(0)}R · ${(champ.win_rate * 100).toFixed(0)}% WR`
+                      : node.id.slice(0, 22)}
+                  </text>
+                </g>
+              );
+            })()
+          ) : null}
         </svg>
 
-        {/* Pinned details panel — shows whichever node was last
-            tapped/clicked. Closed via × or by tapping empty space. */}
+        {/* Pinned details panel — selection takes priority, hover
+            shows a lighter preview when no selection. Both are
+            anchored top-right so they don't follow the cursor. */}
         {selected ? (
           <div
             className="absolute top-3 right-3 panel p-3 bg-black/95 backdrop-blur-sm max-w-[280px] text-[0.7rem] num shadow-2xl ring-1 ring-cyan/30"
@@ -604,6 +714,52 @@ export function AgentLineageGraph({
                     </span>
                   </span>
                 ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : hovered ? (
+          /* Hover preview — appears only when nothing is pinned.
+              Lighter chrome than the selected panel; no close button
+              because pointerleave dismisses it. Same anchored
+              top-right slot so the layout doesn't shift between
+              hover and selection. */
+          <div
+            className="absolute top-3 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40"
+          >
+            <div className="font-mono text-slate-100 break-all text-[0.7rem]">
+              {hovered.isChampion ? "👑 " : ""}
+              {hovered.id.replace(/^gen\d+-mut\d+-/, "")}
+            </div>
+            <div className="text-[0.55rem] text-mist mt-0.5 mb-1.5">
+              {hovered.isSeed
+                ? "phantom seed"
+                : `${hovered.family} · tap to pin`}
+            </div>
+            {hovered.agent ? (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                <span>
+                  <span className="text-mist">Σ R</span>{" "}
+                  <span
+                    className={
+                      hovered.agent.total_r >= 0 ? "text-green" : "text-red"
+                    }
+                  >
+                    {hovered.agent.total_r >= 0 ? "+" : ""}
+                    {hovered.agent.total_r.toFixed(2)}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-mist">WR</span>{" "}
+                  {(hovered.agent.win_rate * 100).toFixed(1)}%
+                </span>
+                <span>
+                  <span className="text-mist">trades</span>{" "}
+                  {hovered.agent.wins + hovered.agent.losses}
+                </span>
+                <span>
+                  <span className="text-mist">Sharpe</span>{" "}
+                  {hovered.agent.rolling_sharpe.toFixed(2)}
+                </span>
               </div>
             ) : null}
           </div>
