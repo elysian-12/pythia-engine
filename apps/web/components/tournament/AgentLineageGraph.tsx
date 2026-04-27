@@ -390,11 +390,13 @@ export function AgentLineageGraph({
         const familyHex =
           (FAMILY_COLORS as Record<string, string>)[fam] ?? "#94a3b8";
         const baseColor = new THREE.Color(familyHex);
-        // Pastel-shifted version for the planet body + halo + ring so
-        // satellites read as soft accents rather than hard primaries
-        // that fight the warm core / purple rim of the galaxy.
-        const pastel = pastelColor(familyHex, 0.55);
-        const planetColor = pastelColor(familyHex, 0.7); // even softer
+        // Halo / ring use the lightly-pastelized family color so they
+        // sit softly over the warm-orange / purple particle field.
+        // The planet body itself is the *saturated* family color so
+        // each node is unmistakably its hue — earlier the planet was
+        // 70% white which washed every satellite out to the same
+        // bright dot.
+        const pastel = pastelColor(familyHex, 0.45);
 
         // Distribute across mid → outer arms, skip the very core.
         const rNorm = N <= 1 ? 0.6 : 0.32 + (i / (N - 1)) * 0.62;
@@ -406,22 +408,22 @@ export function AgentLineageGraph({
 
         const group = new THREE.Group();
         const planet = new THREE.Mesh(
-          new THREE.SphereGeometry(0.07, 16, 16),
-          new THREE.MeshBasicMaterial({ color: planetColor }),
+          new THREE.SphereGeometry(0.06, 16, 16),
+          new THREE.MeshBasicMaterial({ color: baseColor }),
         );
         group.add(planet);
         const haloMat = new THREE.SpriteMaterial({
           map: sprite,
           color: pastel,
           transparent: true,
-          // Soft halo — opacity steps up on hover/select via the
-          // animation loop, so the resting state can be very subtle.
-          opacity: 0.32,
+          // Slightly louder so the family hue surrounds the planet
+          // visibly even at rest. Selection / hover bumps it more.
+          opacity: 0.45,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
         const halo = new THREE.Sprite(haloMat);
-        halo.scale.set(0.5, 0.5, 1);
+        halo.scale.set(0.6, 0.6, 1);
         group.add(halo);
 
         const ringMat = new THREE.MeshBasicMaterial({
@@ -447,9 +449,11 @@ export function AgentLineageGraph({
         agentGroup.add(group);
 
         const normR = Math.max(0, Math.min(1, (a.total_r - minR) / range));
-        // 0.4 (weakest R) → 0.85 (strongest R). Both bounds < 1.0
-        // so every satellite trails the particle dust.
-        const omegaScale = 0.4 + 0.45 * normR;
+        // 0.25 (weakest R) → 0.55 (strongest R). Both bounds well
+        // below 1.0 so every satellite visibly trails the particle
+        // dust; high-R agents still tick faster than the laggards
+        // but the whole population orbits gently.
+        const omegaScale = 0.25 + 0.3 * normR;
 
         records.push({
           id: a.agent_id,
