@@ -20,13 +20,14 @@ type Props = {
   onStatus?: (running: boolean) => void;
 };
 
-// Live-feed cadence presets. Default lands on 30s — long enough that
-// Kiyotaka's per-IP rate limit (~10 req/s, 600 req/min) never bites
-// even with the parallel funding/candles fan-out, short enough that a
-// fresh visitor sees the rail pulse within half a minute.
-const INTERVALS = [15, 30, 60, 120, 300] as const;
+// Live-feed cadence presets. Default lands on 10s so visitors see the
+// rail pulse within seconds of opening the page. The route's eight
+// parallel Kiyotaka fan-out calls per poll (candles+funding+liqs+OI ×
+// BTC/ETH) sit at ~10s burst rate, well under Kiyotaka's documented
+// 600 req/min cap. Bump up if quotas tighten.
+const INTERVALS = [10, 15, 30, 60, 120, 300] as const;
 type IntervalSec = (typeof INTERVALS)[number];
-const DEFAULT_INTERVAL_SEC: IntervalSec = 30;
+const DEFAULT_INTERVAL_SEC: IntervalSec = 10;
 
 export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
   // Live by default — no manual start. The cron is a self-managing
@@ -288,10 +289,11 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
             ))}
           </div>
           <p className="text-[0.6rem] text-mist mt-2 leading-relaxed">
-            30 s is the default — Kiyotaka rate-limits at ~10 req/s per
-            IP, and the page already fans out four parallel calls per
-            poll. Faster cadences won't surface more events; the
-            detector's z-score threshold is the binding constraint.
+            10 s is the default — eight parallel Kiyotaka calls per
+            poll (candles + funding + liquidations + open interest ×
+            BTC/ETH) and the route emits an event the moment any
+            detector clears its z-threshold. Quiet markets stay quiet
+            on purpose: no synthetic events from the live feed.
           </p>
         </div>
       ) : null}

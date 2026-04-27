@@ -73,6 +73,15 @@ function EventRow({ entry }: { entry: FeedEntry }) {
   const shorts = firing.length - longs;
   const champion = firing.find((r) => r.agent_id === entry.championId);
   const eventLabel = entry.event.kind.replace("-", " ");
+  // Show the Kiyotaka feed name on the row so visitors can trace
+  // events back to their source. Falls back to "what-if" for any
+  // event without a `source` (manual EventSimulator fires don't set
+  // it; everything from /api/signals does).
+  const source = entry.event.source ?? "what-if";
+  const sourceShort = source
+    .replace(/^kiyotaka:/, "")
+    .replace("_AGG", "")
+    .toLowerCase();
 
   return (
     <div className="border border-edge/60 rounded-sm bg-black/20">
@@ -83,6 +92,12 @@ function EventRow({ entry }: { entry: FeedEntry }) {
           {eventLabel}
         </span>
         <span className="font-mono text-cyan shrink-0">{entry.event.asset}</span>
+        <span
+          className="text-[0.6rem] text-mist/80 shrink-0 font-mono"
+          title={source}
+        >
+          {sourceShort}
+        </span>
         <span className="text-mist num shrink-0">
           |z|={entry.event.magnitude_z.toFixed(2)}
         </span>

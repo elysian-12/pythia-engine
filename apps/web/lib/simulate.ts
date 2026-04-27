@@ -49,6 +49,10 @@ export type SimEvent = {
   kind: SimEventKind;
   magnitude_z: number; // z-score of the input (2.5 = typical trigger)
   direction: SimDirection; // the "raw" sign of the event
+  /** Optional human-readable provenance — e.g.
+   *  "kiyotaka:LIQUIDATION_AGG" — surfaced in the trade-feed footer so
+   *  a visitor can trace back where the signal came from. */
+  source?: string;
 };
 
 /** A predicted agent reaction, for the UI to visualise which orbs
