@@ -716,18 +716,19 @@ export function TournamentClient() {
 
   if (snap.source === "empty" || snap.agents.length === 0) {
     return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center space-y-4 text-center">
+      <div className="min-h-[60vh] flex flex-col items-center justify-center space-y-4 text-center max-w-md mx-auto px-4">
         <div className="text-xs tracking-[0.35em] text-cyan uppercase">
-          No swarm snapshot yet
+          Snapshot warming up
         </div>
         <h2 className="text-2xl md:text-3xl font-semibold text-slate-100">
-          Run the backtest or the live daemon first
+          The swarm hasn&apos;t published its first generation yet
         </h2>
-        <pre className="panel text-left text-xs md:text-sm p-4 num">
-{`cargo run --release -p swarm --bin swarm-backtest
-# or
-cargo run --release -p live-executor --bin pythia-swarm-live`}
-        </pre>
+        <p className="text-sm text-mist leading-relaxed">
+          The hourly cron refresh either hasn&apos;t run yet on this
+          deploy, or it&apos;s mid-run. Once the first generation
+          publishes, this page wakes up automatically — the leaderboard
+          polls every five seconds.
+        </p>
       </div>
     );
   }

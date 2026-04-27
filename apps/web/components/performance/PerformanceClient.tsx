@@ -111,16 +111,57 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: "p
 function CertBlock({ snap }: { snap: SwarmSnapshot }) {
   const cert = snap.champion_certification;
   if (!cert) {
+    // No formal cert block yet — surface the available raw signal
+    // from the champion instead of a CLI command. The block-bootstrap
+    // / PSR / DSR / PBO numbers need a richer R-history than the
+    // current snapshot has logged. Show what we can: Sharpe,
+    // expectancy, sample size.
+    const champ = snap.champion;
+    const trades = champ ? champ.wins + champ.losses : 0;
     return (
       <section className="panel p-5">
-        <div className="text-xs uppercase tracking-[0.3em] text-mist mb-3">
-          Certification
+        <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+          <div className="text-xs uppercase tracking-[0.3em] text-mist">
+            Certification
+          </div>
+          <div className="text-[0.6rem] text-amber uppercase tracking-[0.25em]">
+            Pending
+          </div>
         </div>
-        <p className="text-xs text-mist">
-          No certification block in this snapshot. Run{" "}
-          <span className="font-mono text-cyan">cargo run -p swarm --bin swarm-backtest</span>{" "}
-          and re-bundle to populate PSR / DSR / PBO / Sharpe-CI.
+        <p className="text-xs text-slate-300 leading-relaxed mb-3">
+          The champion needs a longer trade history before PSR / DSR /
+          PBO / Sharpe-CI become meaningful. The hourly cron keeps
+          adding trades — values populate automatically once the
+          sample is large enough to bootstrap.
         </p>
+        {champ ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm num">
+            <CertCard
+              label="Closed trades"
+              value={trades.toString()}
+              tone={trades >= 60 ? "pos" : trades >= 20 ? "amber" : "neutral"}
+              help="Bootstrap-based PSR/DSR/PBO need ~60+ trades to be meaningful. Below 20 and they're statistically noisy."
+            />
+            <CertCard
+              label="Σ R"
+              value={`${champ.total_r >= 0 ? "+" : ""}${champ.total_r.toFixed(2)}`}
+              tone={champ.total_r >= 0 ? "pos" : "neg"}
+              help="Cumulative R-multiple — total profit measured in units of risk."
+            />
+            <CertCard
+              label="Sharpe (raw)"
+              value={champ.rolling_sharpe.toFixed(2)}
+              tone={
+                champ.rolling_sharpe > 0.5
+                  ? "pos"
+                  : champ.rolling_sharpe > 0
+                    ? "amber"
+                    : "neg"
+              }
+              help="Rolling Sharpe of per-trade R. Becomes a certified PSR/DSR once the trade history supports a block-bootstrap CI."
+            />
+          </div>
+        ) : null}
       </section>
     );
   }
