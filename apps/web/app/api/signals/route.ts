@@ -618,6 +618,6 @@ export async function GET() {
           }
         : null,
     source:
-      "kiyotaka:TRADE_SIDE_AGNOSTIC_AGG + FUNDING_RATE_AGG + LIQUIDATION_AGG + OPEN_INTEREST_AGG (synthetic fallback when quiet)",
+      "kiyotaka: TRADE_SIDE_AGNOSTIC_AGG (1m) + FUNDING_RATE_AGG (1h) + LIQUIDATION_AGG (1m) + OPEN_INTEREST_AGG (1h) — real events only, empty array on quiet polls",
   });
 }

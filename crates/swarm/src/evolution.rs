@@ -163,6 +163,16 @@ impl Evolution {
                 Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())) as Box<dyn SwarmAgent>
             })
             .collect();
+        // Snapshot of every prior agent BEFORE the min-decisions filter —
+        // used by step 1b so each family's flagship is preserved even
+        // when it hasn't accumulated `min_decisions` trades yet. Without
+        // this, families that fire infrequently (e.g. liq-trend in a
+        // ranging regime — only ~2 trades per 500-event window) get
+        // filtered out of `ranked_all`, step 1b can't find them, and
+        // step 2 respawns them with a fresh `genN-revive-X` id every
+        // generation. Net effect: their trade history resets every
+        // generation and they never accumulate enough sample to evolve.
+        let unfiltered: Vec<ScoredAgent> = scored.clone();
 
         // Elite — top N by **fitness score**, not raw total_R. The
         // earlier ranking sorted by lifetime cumulative R, which meant
@@ -211,26 +221,78 @@ impl Evolution {
         let mut next: Vec<Box<dyn SwarmAgent>> = Vec::with_capacity(self.cfg.population_cap);
         let mut family_counts: HashMap<RuleFamilyKind, usize> = HashMap::new();
 
-        // 1. Preserve elite unchanged.
+        // 1a. Preserve elite unchanged (verbatim id + params, full
+        //     trade history carries forward via the scoreboard).
         for a in &elite {
             next.push(Box::new(SystematicAgent::new(a.id.clone(), a.params.clone())));
             increment_family(&mut family_counts, a.params.family);
         }
 
-        // 2. Enforce per-family quotas BEFORE generic mutant fill. For
-        //    each family that's underfilled, draw the best-ranked
-        //    representative from `ranked_all` that isn't already in
-        //    `next`; if none exists, spawn a fresh seed agent for the
-        //    family. This stops single-family lock-in across many gens.
+        // 1b. Preserve the top representative of every known family,
+        //     verbatim — even if it didn't make the global elite.
+        //     Without this, non-elite families spawn a *new* mutant
+        //     ID every generation (`gen{N}-mutXX-...`), which means
+        //     their trade history resets at every evolution cycle —
+        //     they never accumulate enough closed trades to be
+        //     considered for the elite, and the leaderboard reads as
+        //     "only one family ever evolves." Carrying forward each
+        //     family's flagship lets that flagship age, accumulate
+        //     trades, and graduate into the elite when its track
+        //     record warrants it.
+        for kind in [
+            RuleFamilyKind::LiqTrend,
+            RuleFamilyKind::LiqFade,
+            RuleFamilyKind::FundingTrend,
+            RuleFamilyKind::FundingArb,
+            RuleFamilyKind::VolBreakout,
+            RuleFamilyKind::PolyEdge,
+        ] {
+            let already: std::collections::HashSet<&str> =
+                next.iter().map(|a| a.id()).collect();
+            // Top of this family in the UNFILTERED ranked list. Pulling
+            // from `unfiltered` (not `ranked_all`) means the flagship is
+            // carried forward even when it hasn't accumulated
+            // `min_decisions` trades — exactly the agents that need
+            // history persistence the most. Pick by lifetime total_r as
+            // a coarse rank within the unfiltered set; the t-statistic
+            // sort lives in `scored` which excludes these.
+            let mut candidates: Vec<&ScoredAgent> = unfiltered
+                .iter()
+                .filter(|a| kind.matches(a.params.family) && !already.contains(a.id.as_str()))
+                .collect();
+            candidates.sort_by(|a, b| {
+                b.stats
+                    .total_r
+                    .partial_cmp(&a.stats.total_r)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some(top) = candidates.first() {
+                if next.len() < self.cfg.population_cap {
+                    next.push(Box::new(SystematicAgent::new(top.id.clone(), top.params.clone())));
+                    increment_family(&mut family_counts, top.params.family);
+                }
+            }
+        }
+
+        // 2. Enforce per-family quotas. After 1b each family already
+        //    has at least one survivor (when one exists in
+        //    ranked_all), so the quota fill mostly adds *mutated*
+        //    siblings — not raw revives — which is what we want for
+        //    genetic exploration around the family's known-good
+        //    flagship. Falls back to a fresh seed only when the
+        //    family is genuinely extinct from the prior population.
         for (kind, quota) in self.cfg.family_quotas.clone() {
             while *family_counts.get(&kind).unwrap_or(&0) < quota
                 && next.len() < self.cfg.population_cap
             {
                 let already: std::collections::HashSet<&str> =
                     next.iter().map(|a| a.id()).collect();
-                // Try to pull a survivor of this family from the
-                // full ranked list first.
-                let import = ranked_all.iter().find(|a| {
+                // Pull from the *unfiltered* prior population — same
+                // reason as step 1b: families that haven't met
+                // min_decisions still need a viable parent for
+                // mutation, otherwise they get respawned from raw
+                // seed every generation and never evolve.
+                let import = unfiltered.iter().find(|a| {
                     kind.matches(a.params.family) && !already.contains(a.id.as_str())
                 });
                 if let Some(survivor) = import {
@@ -240,7 +302,8 @@ impl Evolution {
                     increment_family(&mut family_counts, kind_to_family(kind));
                     continue;
                 }
-                // Family went extinct — re-seed from the canonical params.
+                // No surviving rep AND no flagship from 1b → family is
+                // extinct. Re-seed from the canonical params.
                 let seed = seed_params_for(kind);
                 let new_id =
                     format!("gen{}-revive-{}", self.generation, family_label(kind));
@@ -291,10 +354,13 @@ impl Evolution {
                 .copied()
                 .unwrap_or(RuleFamilyKind::VolBreakout);
 
-            // Best representative of the target family across the full
-            // ranked list (not just elite). Falls back to top-of-elite
-            // if the family has no representatives this generation.
-            let in_family: Vec<&ScoredAgent> = ranked_all
+            // Best representative of the target family in the
+            // *unfiltered* prior population. Same min-decisions
+            // bypass as step 1b — families that fire infrequently
+            // need a parent even when their flagship hasn't crossed
+            // the eligibility threshold, otherwise round-robin would
+            // fall back to elite (the dominant family) every time.
+            let in_family: Vec<&ScoredAgent> = unfiltered
                 .iter()
                 .filter(|a| target.matches(a.params.family))
                 .collect();

@@ -7,7 +7,7 @@ import {
   Bloom,
   Vignette,
 } from "@react-three/postprocessing";
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   agentFamily,
@@ -55,6 +55,9 @@ function RegimeSurface() {
     g.rotateX(-Math.PI / 2);
     return g;
   }, []);
+  // Explicit GPU disposal on unmount — same reason as Omphalos:
+  // `<primitive>` doesn't auto-dispose attached geometries.
+  useEffect(() => () => geom.dispose(), [geom]);
   const baseY = useMemo(() => {
     const pos = geom.attributes.position;
     const out = new Float32Array(pos.count);
@@ -179,6 +182,11 @@ function Omphalos() {
     (g as THREE.BufferGeometry & { userData: { speed: Float32Array } }).userData = { speed };
     return g;
   }, []);
+  // Explicit GPU disposal on unmount — `<primitive object={geom}>`
+  // doesn't unwind the BufferGeometry the way JSX-declared geometries
+  // do, so without this the buffer leaks every time the page
+  // navigates away and back.
+  useEffect(() => () => geom.dispose(), [geom]);
   useFrame((_state, delta) => {
     if (!vaporRef.current) return;
     const attr = vaporRef.current.geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -614,7 +622,18 @@ export function Arena({
   const [hovered, setHovered] = useState<string | null>(null);
   const ranked = [...agents].sort((a, b) => b.total_r - a.total_r);
   const champion = ranked[0] ?? null;
-  const others = ranked.slice(1);
+  // Cap visible totems at the top 24 by sumR. As the population grows
+  // (current snapshot bundles up to ~36 agents after the bundler's
+  // family-quota injection + warmup synthesis) the scene gets heavy
+  // and Three.js can't recycle GPU buffers fast enough on lower-end
+  // hardware. The leaderboard table below the canvas still shows
+  // every agent — this is purely about keeping the 3D scene legible
+  // and the frame budget tight. React Three Fiber disposes the
+  // geometry/material attached to each AgentTotem when its
+  // `key={agent.agent_id}` rotates out, so the dropped totems also
+  // free their GPU memory.
+  const ARENA_TOTEM_CAP = 24;
+  const others = ranked.slice(1, ARENA_TOTEM_CAP + 1);
   const maxR = Math.max(1, ...others.map((a) => Math.abs(a.total_r)));
 
   const byFamily = useMemo(() => {
