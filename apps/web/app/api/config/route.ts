@@ -20,6 +20,9 @@ export type SwarmConfig = {
   time_stop_hours: number;          // 0..168 — force-exit positions older than this (0 disables)
   trail_after_r: number;            // 0..5  — ratchet stop to breakeven once unrealized R crosses this
   swarm_flip_conviction: number;    // 0..1  — close a position when fresh ensemble votes opposite at ≥ this
+  min_hold_minutes: number;         // 0..240 — minimum age before swarm-flip can close a position
+  max_session_dd_pct: number;       // 0..1   — halt new entries when realised session PnL < -X × equity (1.0 disables)
+  correlation_size_factor: number;  // 0..1   — second-asset size multiplier when first asset already open (1.0 disables)
   updated_at: number;
 };
 
@@ -34,8 +37,11 @@ const DEFAULT_CONFIG: SwarmConfig = {
   max_open_positions: 8,
   min_conviction: 0.30,
   time_stop_hours: 12,
-  trail_after_r: 1.0,
-  swarm_flip_conviction: 0.40,
+  trail_after_r: 1.5,
+  swarm_flip_conviction: 0.60,
+  min_hold_minutes: 30,
+  max_session_dd_pct: 0.05,
+  correlation_size_factor: 0.5,
   updated_at: Math.floor(Date.now() / 1000),
 };
 
@@ -88,6 +94,19 @@ function sanitize(raw: Partial<SwarmConfig>): SwarmConfig {
     ),
     swarm_flip_conviction: clamp(
       Number(raw.swarm_flip_conviction ?? DEFAULT_CONFIG.swarm_flip_conviction),
+      0,
+      1,
+    ),
+    min_hold_minutes: Math.round(
+      clamp(Number(raw.min_hold_minutes ?? DEFAULT_CONFIG.min_hold_minutes), 0, 240),
+    ),
+    max_session_dd_pct: clamp(
+      Number(raw.max_session_dd_pct ?? DEFAULT_CONFIG.max_session_dd_pct),
+      0,
+      1,
+    ),
+    correlation_size_factor: clamp(
+      Number(raw.correlation_size_factor ?? DEFAULT_CONFIG.correlation_size_factor),
       0,
       1,
     ),

@@ -30,30 +30,62 @@ export type PortfolioConfig = {
   /** Force-exit a position older than this many hours — even at a loss.
    *  Stops paper sessions from carrying stale entries forever. */
   time_stop_hours: number;
-  /** Once unrealized R crosses this threshold, ratchet the stop up so
-   *  the trade can only close at break-even or better. Set to 0 to
-   *  disable trailing entirely. */
+  /** First trail trigger: at +trail_after_r the stop ratchets to
+   *  breakeven. The stepped trail then continues — see `manageOnMark`
+   *  for the full ladder (1R → BE, 2R → +1R, 3R → +2R, 4R → +3R). */
   trail_after_r: number;
-  /** Once a fresh event arrives on the same asset and the ensemble
-   *  vote runs *opposite* to our open position with at least this much
-   *  conviction, close the position. Set to 1.01 to disable. */
+  /** Strong-opposite-conviction threshold for full swarm-flip exit.
+   *  Between `swarm_flip_conviction × 0.6` and this value the position
+   *  is *not* closed — instead the trail is tightened so any further
+   *  reversal locks the open profit. Continuous, not binary. */
   swarm_flip_conviction: number;
+  /** Minimum minutes a position must be open before a swarm-flip can
+   *  close it. Stops, take-profit, and reverse-on-entry are NOT
+   *  subject to min_hold; only the swarm-flip rule is. Stops the
+   *  "every opposite poll-event closes a 30-second-old position at
+   *  $0" pathology. */
+  min_hold_minutes: number;
+  /** Halt new entries when the session's realised PnL drops below
+   *  -max_session_dd_pct × equity. Forces a manual reset before
+   *  resuming — protects against tilt-trading after a drawdown. Set
+   *  to 1.0 to disable the circuit-breaker. */
+  max_session_dd_pct: number;
+  /** Correlation-aware sizing multiplier for the second asset when
+   *  the first is already open. BTC and ETH are ~0.7 correlated on
+   *  hourly returns, so opening a full-size ETH long on top of a
+   *  full-size BTC long doubles your real exposure. Multiplier in
+   *  [0, 1] applied to the secondary position's notional. Set to 1.0
+   *  to disable. */
+  correlation_size_factor: number;
 };
 
 export const DEFAULT_PORTFOLIO_CONFIG: PortfolioConfig = {
+  // Quant-grade defaults after the live-ledger autopsy: 9/15 closes
+  // were `swarm-flip` for ~$0 realised because the prior config cut
+  // winners on every weak opposite signal. The new defaults are:
+  //   - flip threshold 0.60 — only flip on strong opposing votes
+  //   - trail starts at 1.5R — let winners run, then ratchet via the
+  //     stepped trail in manageOnMark (1R→BE, 2R→+1R, 3R→+2R, 4R→+3R)
+  //   - 30-min minimum hold before flip — entries get time to move
+  //   - 5% session DD circuit-breaker — halt new entries on tilt
+  //   - 0.5 correlation factor — second-asset size is halved when the
+  //     first is open (BTC/ETH ~0.7 correlated)
   max_open_positions: 8,
   min_conviction: 0.30,
   time_stop_hours: 12,
-  trail_after_r: 1.0,
-  swarm_flip_conviction: 0.40,
+  trail_after_r: 1.5,
+  swarm_flip_conviction: 0.60,
+  min_hold_minutes: 30,
+  max_session_dd_pct: 0.05,
+  correlation_size_factor: 0.5,
 };
 
 // --- Entry policy --------------------------------------------------------
 
 export type EntryAction =
   | { kind: "skip"; reason: string }
-  | { kind: "open"; reason: string }
-  | { kind: "reverse"; reason: string; close_id: string };
+  | { kind: "open"; reason: string; size_multiplier?: number }
+  | { kind: "reverse"; reason: string; close_id: string; size_multiplier?: number };
 
 type EntryInputs = {
   asset: SimAsset;
@@ -61,6 +93,12 @@ type EntryInputs = {
   conviction: number;
   open: PaperPosition[];
   config: PortfolioConfig;
+  /** Realised session PnL in USD. Used by the drawdown circuit-breaker
+   *  to halt new entries when the session is bleeding. Optional — when
+   *  omitted (or equity is 0) the breaker is a no-op. */
+  session_realized_pnl?: number;
+  /** Equity baseline for the DD-percentage check. */
+  equity_usd?: number;
 };
 
 /** Decide whether a fresh router signal should open a new position,
@@ -74,7 +112,7 @@ type EntryInputs = {
  *  (conviction ≤ -0.5) always failed `conviction < min_conviction`
  *  and the meta-agent skipped every short trade. */
 export function decideEntry(inp: EntryInputs): EntryAction {
-  const { asset, direction, conviction, open, config } = inp;
+  const { asset, direction, conviction, open, config, session_realized_pnl, equity_usd } = inp;
   const strength = Math.abs(conviction);
 
   if (!direction) {
@@ -85,6 +123,32 @@ export function decideEntry(inp: EntryInputs): EntryAction {
       kind: "skip",
       reason: `conviction ${strength.toFixed(2)} below floor ${config.min_conviction.toFixed(2)}`,
     };
+  }
+
+  // DRAWDOWN CIRCUIT-BREAKER. Halt new entries when realised session
+  // PnL drops below -max_session_dd_pct × equity. Tilt-trading after
+  // a drawdown is the single most expensive thing a discretionary or
+  // semi-systematic operator does; this is the rule book equivalent.
+  // Reverse-on-flip still works (closing a wrong-side position is
+  // never blocked) but no fresh exposure opens until the user resets.
+  if (
+    config.max_session_dd_pct < 1.0 &&
+    typeof session_realized_pnl === "number" &&
+    typeof equity_usd === "number" &&
+    equity_usd > 0
+  ) {
+    const ddFraction = -session_realized_pnl / equity_usd;
+    if (ddFraction >= config.max_session_dd_pct) {
+      // Reversal is still allowed — flipping out of a losing trade
+      // is corrective, not additive risk.
+      const opp = open.find((p) => p.asset === asset && p.side !== direction);
+      if (!opp) {
+        return {
+          kind: "skip",
+          reason: `session DD ${(ddFraction * 100).toFixed(1)}% past circuit-breaker (${(config.max_session_dd_pct * 100).toFixed(1)}%)`,
+        };
+      }
+    }
   }
 
   // Same-asset, opposite-direction position → reverse out of it before
@@ -118,6 +182,24 @@ export function decideEntry(inp: EntryInputs): EntryAction {
       kind: "skip",
       reason: `at position cap ${open.length}/${config.max_open_positions}`,
     };
+  }
+
+  // CORRELATION-AWARE SIZING. BTC and ETH have ~0.7 correlation on
+  // hourly returns. Opening a full-size ETH long when a full-size BTC
+  // long is already up doubles your effective exposure to the same
+  // factor. Multiplier in [0, 1] halves the second position's notional
+  // by default — caller multiplies its computed `notional` by this.
+  let size_multiplier: number | undefined;
+  if (config.correlation_size_factor < 1.0) {
+    const otherAssetOpen = open.find((p) => p.asset !== asset);
+    if (otherAssetOpen) {
+      size_multiplier = config.correlation_size_factor;
+      return {
+        kind: "open",
+        reason: `fresh exposure (correlation-scaled to ${(size_multiplier * 100).toFixed(0)}% — ${otherAssetOpen.asset} already open)`,
+        size_multiplier,
+      };
+    }
   }
 
   return { kind: "open", reason: "fresh exposure" };
@@ -170,21 +252,46 @@ export function manageOnMark(
       peak = peak == null ? mark : Math.min(peak, mark);
     }
 
-    // Trailing stop. Only ratchets up; never moves the stop against us.
+    // STEPPED TRAILING STOP — quant-grade profit lock-in ladder.
+    // Each rung locks in more of the peak unrealised gain so a winner
+    // that gives back can't fully retrace. Only ratchets up; the stop
+    // never moves against the position. The cliff intervals are
+    // calibrated for 1R-unit Van-Tharp sizing:
+    //
+    //   r ≥ 1.0 R  →  stop = breakeven                (free trade)
+    //   r ≥ 2.0 R  →  stop = peak − 1.00 R            (lock 1R+)
+    //   r ≥ 3.0 R  →  stop = peak − 0.75 R            (lock 2.25R+)
+    //   r ≥ 4.0 R  →  stop = peak − 0.50 R            (lock 3.50R+)
+    //   r ≥ 6.0 R  →  stop = peak − 0.25 R            (squeeze the runner)
+    //
+    // Replaces the prior 2-step `breakeven → peak−1R` rule, which let
+    // huge winners retrace 1R+ before triggering. Configurable: when
+    // `trail_after_r` is bumped, the whole ladder shifts.
     let stop = p.stop;
     if (config.trail_after_r > 0) {
       const r = unrealizedR({ ...p, peak }, mark);
-      if (r >= config.trail_after_r) {
+      const baseR = config.trail_after_r;
+      if (r >= baseR) {
         const r1 = riskUsd(p) / p.size_contracts; // 1R as price distance
-        const trailLong = (peak ?? mark) - r1;
-        const trailShort = (peak ?? mark) + r1;
         const breakeven = p.entry;
+        let trailDistanceR: number | null = null;
+        if (r >= 6 * baseR) trailDistanceR = 0.25;
+        else if (r >= 4 * baseR) trailDistanceR = 0.5;
+        else if (r >= 3 * baseR) trailDistanceR = 0.75;
+        else if (r >= 2 * baseR) trailDistanceR = 1.0;
+        // First rung: just lock breakeven; below the 2× threshold the
+        // peak hasn't moved enough to give a meaningful trail target.
         if (p.side === "long") {
-          // First lock breakeven, then trail at peak − 1R.
-          const target = r >= 2 * config.trail_after_r ? trailLong : breakeven;
+          const target =
+            trailDistanceR != null
+              ? (peak ?? mark) - trailDistanceR * r1
+              : breakeven;
           if (target > stop) stop = target;
         } else {
-          const target = r >= 2 * config.trail_after_r ? trailShort : breakeven;
+          const target =
+            trailDistanceR != null
+              ? (peak ?? mark) + trailDistanceR * r1
+              : breakeven;
           if (target < stop) stop = target;
         }
       }
@@ -204,20 +311,29 @@ type EventPolicyInputs = {
   conviction: number;
   positions: PaperPosition[];
   config: PortfolioConfig;
+  /** Wall-clock now in unix seconds. Used by the `min_hold_minutes`
+   *  floor so swarm-flip can't close positions younger than the
+   *  configured window. */
+  now_secs: number;
 };
 
 /** When a fresh ensemble vote on an asset runs *opposite* the side of
  *  an open position with high enough conviction, close the position.
- *  Returns the ids that should be flattened — caller closes them at
- *  the latest mark. Same signed-vs-magnitude trap as `decideEntry`:
- *  conviction is `[-1, +1]` (sign = direction), so the threshold check
- *  must compare against the magnitude. */
+ *  Two thresholds gate the close:
+ *    - magnitude: `|conviction| ≥ swarm_flip_conviction`
+ *    - age:      `position.opened_at older than min_hold_minutes ago`
+ *  Without the age check, fresh entries got cut within seconds of
+ *  opening — every opposite poll-event closed them at ~$0 PnL,
+ *  poisoning the realised-pnl line on the ledger. Stops + reverse-on-
+ *  entry are NOT subject to min_hold; only the swarm-flip rule is. */
 export function manageOnEvent(inp: EventPolicyInputs): string[] {
-  const { asset, vote_direction, conviction, positions, config } = inp;
+  const { asset, vote_direction, conviction, positions, config, now_secs } = inp;
   if (vote_direction === "flat") return [];
   if (Math.abs(conviction) < config.swarm_flip_conviction) return [];
+  const minAgeSecs = Math.max(0, config.min_hold_minutes) * 60;
   return positions
     .filter((p) => p.asset === asset && p.side !== vote_direction)
+    .filter((p) => now_secs - p.opened_at >= minAgeSecs)
     .map((p) => p.id);
 }
 

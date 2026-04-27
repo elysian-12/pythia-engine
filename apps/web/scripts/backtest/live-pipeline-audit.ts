@@ -362,20 +362,26 @@ async function main() {
   }
 
   // 8d) Verify swarm-flip exit fires when a fresh opposite vote lands
+  // *and* the position is older than min_hold_minutes. We synthesise a
+  // ts well past the floor so the gate doesn't reject this audit probe.
   const flipIds = manageOnEvent({
     asset: probeEvent.asset,
     vote_direction: route.vote.direction === "long" ? "short" : "long",
-    conviction: 0.6,
+    conviction: 0.7,
     positions: open,
     config: DEFAULT_PORTFOLIO_CONFIG,
+    now_secs: probeEvent.ts + DEFAULT_PORTFOLIO_CONFIG.min_hold_minutes * 60 + 60,
   });
   log(
     step8,
-    `manageOnEvent (synthetic opposite vote @ 0.6 conviction): would close ${flipIds.length} position(s)`,
+    `manageOnEvent (synthetic opposite @ 0.7 conviction, position aged past min_hold): would close ${flipIds.length} position(s)`,
   );
 
   // ---- closeout: also probe the now-deployed exit chips ----
-  log(step8, `meta-agent rules in effect: max_open=${DEFAULT_PORTFOLIO_CONFIG.max_open_positions}, min_conviction=${DEFAULT_PORTFOLIO_CONFIG.min_conviction.toFixed(2)}, time_stop=${DEFAULT_PORTFOLIO_CONFIG.time_stop_hours}h, trail_after=${DEFAULT_PORTFOLIO_CONFIG.trail_after_r}R, swarm_flip=${DEFAULT_PORTFOLIO_CONFIG.swarm_flip_conviction.toFixed(2)}`);
+  log(
+    step8,
+    `meta-agent rules: max_open=${DEFAULT_PORTFOLIO_CONFIG.max_open_positions}, min_conviction=${DEFAULT_PORTFOLIO_CONFIG.min_conviction.toFixed(2)}, time_stop=${DEFAULT_PORTFOLIO_CONFIG.time_stop_hours}h, trail_after=${DEFAULT_PORTFOLIO_CONFIG.trail_after_r}R, swarm_flip=${DEFAULT_PORTFOLIO_CONFIG.swarm_flip_conviction.toFixed(2)}, min_hold=${DEFAULT_PORTFOLIO_CONFIG.min_hold_minutes}min, dd_breaker=${(DEFAULT_PORTFOLIO_CONFIG.max_session_dd_pct * 100).toFixed(1)}%, corr_factor=${DEFAULT_PORTFOLIO_CONFIG.correlation_size_factor.toFixed(2)}`,
+  );
 
   // Exit final state
   log(step8, `final: ${open.length - closed.length} open, ${closed.length} closed (realized $${closed.reduce((a, p) => a + realizedPnl(p), 0).toFixed(2)})`);

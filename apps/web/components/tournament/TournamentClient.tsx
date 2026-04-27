@@ -165,6 +165,7 @@ export function TournamentClient() {
   const riskFractionRef = useRef<number>(DEFAULT_RISK_FRACTION);
   const portfolioCfgRef = useRef<PortfolioConfig>(DEFAULT_PORTFOLIO_CONFIG);
   const openPositionsRef = useRef<PaperPosition[]>([]);
+  const closedPositionsRef = useRef<PaperPosition[]>([]);
   useEffect(() => {
     snapRef.current = snap;
   }, [snap]);
@@ -183,6 +184,9 @@ export function TournamentClient() {
   useEffect(() => {
     openPositionsRef.current = openPositions;
   }, [openPositions]);
+  useEffect(() => {
+    closedPositionsRef.current = closedPositions;
+  }, [closedPositions]);
 
   // Read user-configured risk fraction + portfolio rules once on mount
   // and whenever the SettingsForm broadcasts a save (CustomEvent for
@@ -202,6 +206,14 @@ export function TournamentClient() {
         swarm_flip_conviction: clampNum(
           c.swarm_flip_conviction,
           prev.swarm_flip_conviction,
+          0,
+          1,
+        ),
+        min_hold_minutes: clampNum(c.min_hold_minutes, prev.min_hold_minutes, 0, 240),
+        max_session_dd_pct: clampNum(c.max_session_dd_pct, prev.max_session_dd_pct, 0, 1),
+        correlation_size_factor: clampNum(
+          c.correlation_size_factor,
+          prev.correlation_size_factor,
           0,
           1,
         ),
@@ -487,13 +499,17 @@ export function TournamentClient() {
 
     // Step 1: act on swarm flips first — close any open positions on
     // this asset whose direction is now opposite the high-conviction
-    // ensemble vote. "Follow the swarm out" rule.
+    // ensemble vote AND have aged past the min_hold_minutes floor.
+    // "Follow the swarm out" rule, but only when the swarm is sure
+    // and the position has had time to find its direction.
+    const nowSec = Math.floor(Date.now() / 1000);
     const flipIds = manageOnEvent({
       asset: ev.asset,
       vote_direction: route.vote.direction,
       conviction: route.vote.conviction,
       positions: openPositionsRef.current,
       config: portfolioCfgRef.current,
+      now_secs: nowSec,
     });
     if (flipIds.length > 0) {
       const px = ev.asset === "BTC" ? btcPx : ethPx;
@@ -555,8 +571,12 @@ export function TournamentClient() {
       if (!route.decision.direction || !route.specialist) return;
       const price = ev.asset === "BTC" ? btcPx : ethPx;
       if (!Number.isFinite(price) || price <= 0) return;
+      // Stop multiplier widened 1.5 → 2.0 ATR. The 1.5× stops were
+      // catching too much noise on minute-resolution moves; 2.0× is
+      // closer to the systematic agents' internal risk model.
+      // Take-profit kept at 3× ATR so reward:risk stays at 1.5:1.
       const atr = price * 0.005;
-      const stopDist = 1.5 * atr;
+      const stopDist = 2.0 * atr;
       const riskUsd =
         EQUITY_USD * riskFractionRef.current * route.decision.size_factor;
       const n = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 3);
@@ -571,14 +591,30 @@ export function TournamentClient() {
 
     // Step 3: ask the portfolio meta-agent what to do with this fresh
     // signal, given current exposure. "skip" / "open" / "reverse".
+    // Pass realised session PnL + equity so the drawdown circuit-breaker
+    // can halt new entries on tilt. Realised PnL is summed live from
+    // the closedPositionsRef set by the mark sweep.
+    const realizedNow = sumRealized(closedPositionsRef.current);
     const action = decideEntry({
       asset: ev.asset,
       direction,
       conviction: route.vote.conviction,
       open: openPositionsRef.current,
       config: portfolioCfgRef.current,
+      session_realized_pnl: realizedNow,
+      equity_usd: EQUITY_USD,
     });
     if (action.kind === "skip") return;
+    // Honour any correlation-aware size multiplier the meta-agent
+    // returned. After the `kind === "skip"` early-return TypeScript
+    // narrows action to the open/reverse variants, both of which carry
+    // the optional `size_multiplier` field. notional is downstream of
+    // `n`, so we multiply once here and the size_contracts derives
+    // from notional/entryPx in the setOpenPositions call below.
+    const sizeMul = action.size_multiplier ?? 1;
+    if (sizeMul !== 1) {
+      notional *= sizeMul;
+    }
 
     setOpenPositions((prev) => {
       let next = prev;

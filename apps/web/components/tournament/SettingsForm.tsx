@@ -13,6 +13,9 @@ export type SwarmConfig = {
   time_stop_hours: number;
   trail_after_r: number;
   swarm_flip_conviction: number;
+  min_hold_minutes: number;
+  max_session_dd_pct: number;
+  correlation_size_factor: number;
   updated_at: number;
 };
 
@@ -24,8 +27,11 @@ const DEFAULT_CONFIG: SwarmConfig = {
   max_open_positions: 8,
   min_conviction: 0.30,
   time_stop_hours: 12,
-  trail_after_r: 1.0,
-  swarm_flip_conviction: 0.40,
+  trail_after_r: 1.5,
+  swarm_flip_conviction: 0.60,
+  min_hold_minutes: 30,
+  max_session_dd_pct: 0.05,
+  correlation_size_factor: 0.5,
   updated_at: 0,
 };
 
@@ -215,6 +221,39 @@ export function SettingsForm() {
             step={0.05}
             fmt={(v) => (v >= 1 ? "off" : `${(v * 100).toFixed(0)} %`)}
             onChange={(v) => onChange("swarm_flip_conviction", v)}
+          />
+
+          <Slider
+            label="Min hold (swarm-flip)"
+            sublabel="positions younger than this can't be cut by swarm-flip — stops + reverse still fire"
+            value={cfg.min_hold_minutes}
+            min={0}
+            max={120}
+            step={5}
+            fmt={(v) => (v === 0 ? "off" : `${v.toFixed(0)} min`)}
+            onChange={(v) => onChange("min_hold_minutes", v)}
+          />
+
+          <Slider
+            label="Session DD circuit-breaker"
+            sublabel="halt new entries when realised session PnL drops below −X% of equity"
+            value={cfg.max_session_dd_pct}
+            min={0}
+            max={0.2}
+            step={0.01}
+            fmt={(v) => (v >= 1 ? "off" : `${(v * 100).toFixed(1)} %`)}
+            onChange={(v) => onChange("max_session_dd_pct", v)}
+          />
+
+          <Slider
+            label="Correlation size cut"
+            sublabel="multiply 2nd asset's notional by this when 1st is open (BTC/ETH ~0.7 corr)"
+            value={cfg.correlation_size_factor}
+            min={0.25}
+            max={1}
+            step={0.05}
+            fmt={(v) => (v >= 1 ? "off" : `${(v * 100).toFixed(0)} %`)}
+            onChange={(v) => onChange("correlation_size_factor", v)}
           />
         </div>
       </div>

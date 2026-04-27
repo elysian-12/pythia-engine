@@ -334,13 +334,16 @@ async function runOneSession(
         );
       }
 
-      // Swarm-flip exit on existing positions for this asset.
+      // Swarm-flip exit on existing positions for this asset. Passes
+      // event.ts as now_secs so the min_hold_minutes floor evaluates
+      // correctly relative to opened_at on each position.
       const flipIds = manageOnEvent({
         asset: ev.asset,
         vote_direction: route.vote.direction,
         conviction: route.vote.conviction,
         positions: open,
         config: cfg,
+        now_secs: ev.ts,
       });
       if (flipIds.length > 0) {
         const px = ev.asset === "BTC" ? btcMark : ethMark;
