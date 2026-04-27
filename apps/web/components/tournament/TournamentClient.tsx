@@ -14,6 +14,9 @@ import { PipelineRail } from "./PipelineRail";
 import {
   fetchSwarm,
   applySessionDelta,
+  agentFamily,
+  FAMILY_COLORS,
+  FAMILY_LABEL,
   type SwarmSnapshot,
 } from "@/lib/swarm";
 import type { SimEvent } from "@/lib/simulate";
@@ -733,21 +736,57 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
 
   // Champion stat card — extracted so we can drop it into the middle
   // column under the title without a sea of inline JSX.
-  const championCard = champ ? (
-    <div className="panel p-3 sm:p-4 backdrop-blur-sm bg-black/30">
-      <div className="flex items-baseline justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
-            Current champion
+  // The header used to display the raw agent_id in a monospace font
+  // (e.g. "gen14-mut3-funding-arb-v0"), which read as a stray CLI
+  // command. We now strip the gen/mut prefix, prepend a family-color
+  // dot, and surface the family label + birth generation alongside
+  // it as supporting metadata.
+  const championCard = champ ? (() => {
+    const family = agentFamily(champ.agent_id);
+    const familyColor = FAMILY_COLORS[family];
+    const familyLabel = FAMILY_LABEL[family];
+    const cleanName = champ.agent_id.replace(/^gen\d+-mut\d+-/, "");
+    const bornMatch = champ.agent_id.match(/^gen(\d+)/);
+    const bornGen = bornMatch ? Number.parseInt(bornMatch[1], 10) : null;
+    const decisions = champ.wins + champ.losses;
+    const lastR = champ.last_r;
+    return (
+      <div className="panel p-3 sm:p-4 backdrop-blur-sm bg-black/30">
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="text-[0.6rem] sm:text-[0.65rem] tracking-[0.3em] sm:tracking-[0.4em] text-amber uppercase">
+              Current champion
+            </div>
+            <div className="mt-1.5 flex items-center gap-2 flex-wrap min-w-0">
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ background: familyColor }}
+                aria-hidden
+              />
+              <span className="text-base sm:text-lg font-semibold text-slate-100 truncate">
+                {cleanName}
+              </span>
+            </div>
+            <div className="mt-1 text-[0.6rem] sm:text-[0.65rem] text-mist flex items-center gap-2 flex-wrap">
+              <span className="uppercase tracking-[0.2em]" title={familyLabel}>
+                {family}
+              </span>
+              {bornGen != null ? (
+                <>
+                  <span className="text-edge">·</span>
+                  <span className="num">born gen {bornGen}</span>
+                </>
+              ) : null}
+              <span className="text-edge">·</span>
+              <span className="num">last {lastR >= 0 ? "+" : ""}{lastR.toFixed(2)}R</span>
+              <span className="text-edge">·</span>
+              <span className="num">{decisions} closed</span>
+            </div>
           </div>
-          <div className="mt-1 text-base sm:text-lg font-mono text-slate-100 truncate">
-            {champ.agent_id}
-          </div>
+          {snap.champion_certification ? (
+            <CertificationBadge cert={snap.champion_certification} />
+          ) : null}
         </div>
-        {snap.champion_certification ? (
-          <CertificationBadge cert={snap.champion_certification} />
-        ) : null}
-      </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 sm:gap-x-5 gap-y-1 text-[0.7rem] sm:text-xs mt-3 num">
         <span>
           <span className="text-mist">Σ R</span>{" "}
@@ -843,7 +882,8 @@ cargo run --release -p live-executor --bin pythia-swarm-live`}
         ) : null}
       </div>
     </div>
-  ) : null;
+    );
+  })() : null;
 
   // The "How the swarm gets smart" explainer — extracted so the left
   // column can host it without bloating the JSX. Keeps the same 8-step
