@@ -267,14 +267,6 @@ export function LandingDashboard() {
               >
                 Open tournament →
               </Link>
-              <div>
-                <Link
-                  href="/visualize"
-                  className="inline-block text-[0.65rem] text-mist tracking-widest uppercase hover:text-slate-200"
-                >
-                  Cinematic replay →
-                </Link>
-              </div>
             </div>
           </div>
 
@@ -453,17 +445,17 @@ export function LandingDashboard() {
           accent="cyan"
         />
         <ActionCard
-          title="See the cinematic replay"
-          body="365-day equity ribbon, every trade plotted in 3D, the strategy grid, and the rule that won the search — liq-trend @ 1% compound."
-          cta="Open visualize →"
-          href="/visualize"
+          title="Read the architecture"
+          body="Six-layer system: Kiyotaka events → 27-agent swarm with self-backtest gate → Sharpe-weighted ensemble → quarter-Kelly sizing → meta-agent exits → evolved every N events. PSR/DSR/PBO certified."
+          cta="View SWARM.md →"
+          href="https://github.com/elysian-12/pythia-engine/blob/main/SWARM.md"
           accent="green"
         />
         <ActionCard
-          title="Read the rule"
-          body="Hourly net liquidation z-score, |z| > 2.5, ATR-scaled stop and 4h time-stop, 1% risk per trade compounded. Four lines of pseudocode, 75% win rate."
-          cta="View rule →"
-          href="/visualize"
+          title="See the trader's guide"
+          body="Capital tiers, position sizing, kill-switch layers, the meta-agent's seven exit rules, drawdown playbook. Operator handbook before you put real capital behind it."
+          cta="View TRADING_GUIDE.md →"
+          href="https://github.com/elysian-12/pythia-engine/blob/main/TRADING_GUIDE.md"
           accent="amber"
         />
       </section>

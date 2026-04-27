@@ -84,8 +84,8 @@ export function TradeSettingsPanel() {
       // We intentionally don't surface `persisted: false` as a warning. On
       // Vercel that's just the serverless filesystem being read-only; the
       // browser localStorage copy is the source of truth for the demo, and
-      // the AutoReplay + /visualize listen to the broadcast event above.
-      // Cross-device sync would need Vercel KV — out of scope here.
+      // the tournament page picks up the new config via the broadcast
+      // event above. Cross-device sync would need Vercel KV — out of scope.
       setSaved("ok");
       setTimeout(() => setSaved("idle"), 1800);
     } catch (e) {
@@ -117,13 +117,14 @@ export function TradeSettingsPanel() {
             Set your size · the swarm sizes for you
           </h3>
           <p className="text-xs text-mist mt-1.5 max-w-xl">
-            These knobs drive the auto-replay above and the trade replay on
-            <a className="text-cyan hover:underline mx-1" href="/visualize">
-              /visualize
+            These knobs drive the auto-replay above and the live tournament
+            on{" "}
+            <a className="text-cyan hover:underline mx-1" href="/tournament">
+              /tournament
             </a>
-            — change them and both views update instantly. Flip to{" "}
-            <span className="text-amber">live preview</span> to plug in a
-            Hyperliquid wallet (execution wiring lands next pass).
+            — change them and the swarm sizes accordingly on the next event.
+            Flip to <span className="text-amber">live preview</span> to plug
+            in a Hyperliquid wallet (execution wiring lands next pass).
           </p>
         </div>
         <ModeToggle mode={cfg.mode} onChange={(m) => set("mode", m)} />
