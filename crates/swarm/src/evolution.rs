@@ -249,18 +249,67 @@ impl Evolution {
             }
         }
 
-        // 3. Fill remainder with rank-weighted mutants / crossovers
-        //    drawn from the elite. Free-for-all subject to the cap.
+        // 3. Fill remainder with **family-balanced** mutants. For each
+        //    new slot, pick the family with the smallest current seat
+        //    count; tiebreak by alphabetical order so it's deterministic.
+        //    Then mutate (or crossover) within that family using its
+        //    best-ranked representative as parent.
+        //
+        //    The earlier implementation drew all parents from `elite`,
+        //    which is dominated by whichever family is winning right
+        //    now (vol-breakout in trending regimes). Result: every
+        //    spare seat became another vol-breakout mutant, the
+        //    population converged to one family after a handful of
+        //    generations, and other families never got the genetic
+        //    search budget needed to find their own optimum. The
+        //    leaderboard skew that prompted this fix:
+        //
+        //        family            seats  total_trades
+        //        vol-breakout         12      1813
+        //        liq-fade              2        11
+        //        liq-trend             2         8
+        //
+        //    Round-robin across families guarantees each one gets a
+        //    fair share of mutation slots; bias within a family still
+        //    rewards the local best parent. Falls back to elite parent
+        //    selection only when the chosen family has no
+        //    representatives at all (extinct mid-run).
+        let known_families = [
+            RuleFamilyKind::LiqTrend,
+            RuleFamilyKind::LiqFade,
+            RuleFamilyKind::FundingTrend,
+            RuleFamilyKind::FundingArb,
+            RuleFamilyKind::VolBreakout,
+            RuleFamilyKind::PolyEdge,
+        ];
         while next.len() < self.cfg.population_cap && !elite.is_empty() {
-            let parent_a = self.pick_parent(&elite);
+            // Pick the family with the fewest seats. Stable order
+            // (struct definition order) is the deterministic tiebreak.
+            let target = known_families
+                .iter()
+                .min_by_key(|kind| family_counts.get(kind).copied().unwrap_or(0))
+                .copied()
+                .unwrap_or(RuleFamilyKind::VolBreakout);
+
+            // Best representative of the target family across the full
+            // ranked list (not just elite). Falls back to top-of-elite
+            // if the family has no representatives this generation.
+            let in_family: Vec<&ScoredAgent> = ranked_all
+                .iter()
+                .filter(|a| target.matches(a.params.family))
+                .collect();
+            let parent_a: &ScoredAgent = in_family.first().copied().unwrap_or(&elite[0]);
+
             let new_id = self.new_id(&parent_a.id);
-            let params = if self.coin(self.cfg.crossover_prob) && elite.len() > 1 {
-                let parent_b = self.pick_parent(&elite);
+            let params = if self.coin(self.cfg.crossover_prob) && in_family.len() > 1 {
+                // Same-family crossover when the family has ≥2 reps.
+                let parent_b = in_family[1];
                 self.crossover(&parent_a.params, &parent_b.params)
             } else {
                 self.mutate(&parent_a.params)
             };
             next.push(Box::new(SystematicAgent::new(new_id, params)));
+            increment_family(&mut family_counts, parent_a.params.family);
         }
         next
     }
@@ -596,6 +645,102 @@ mod tests {
             assert!(
                 count >= 2,
                 "family {} fell below quota after 5 gens: {} agents",
+                family_label(kind),
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn fill_distributes_mutants_across_families_not_just_elite() {
+        // Regression for the family-skew bug: when one family has a
+        // commanding lifetime R lead, the elite slot is dominated by
+        // that family, and the prior step-3 fill drew every spare
+        // mutant slot from elite — so the dominant family got 12 of
+        // 20 seats while every other family stayed pinned at quota
+        // (2). The new round-robin fill should give each known family
+        // roughly equal representation in the new generation.
+        let sb = Scoreboard::new();
+        // Heavy lifetime R for vol-breakout-v0.
+        for i in 0..50 {
+            let d = crate::agent::AgentDecision {
+                id: format!("vb-{i}"),
+                agent_id: "vol-breakout-v0".into(),
+                ts: domain::time::EventTs::from_secs(0),
+                asset: domain::crypto::Asset::Btc,
+                direction: domain::signal::Direction::Long,
+                conviction: 80,
+                risk_fraction: 0.01,
+                horizon_s: 3600,
+                rationale: "t".into(),
+            };
+            sb.record(d);
+            sb.mark_outcome(&format!("vb-{i}"), 2.0, 100.0);
+        }
+        // Modest history on every other family — eligible (≥5
+        // decisions) but unimpressive.
+        for (agent, prefix) in [
+            ("liq-trend-v0", "lt"),
+            ("liq-fade-v0", "lf"),
+            ("funding-trend-v0", "ft"),
+            ("funding-arb-v0", "fa"),
+            ("polyedge-v0", "pe"),
+        ] {
+            for i in 0..6 {
+                let id = format!("{prefix}-{i}");
+                let d = crate::agent::AgentDecision {
+                    id: id.clone(),
+                    agent_id: agent.into(),
+                    ts: domain::time::EventTs::from_secs(0),
+                    asset: domain::crypto::Asset::Btc,
+                    direction: domain::signal::Direction::Long,
+                    conviction: 60,
+                    risk_fraction: 0.01,
+                    horizon_s: 3600,
+                    rationale: "t".into(),
+                };
+                sb.record(d);
+                sb.mark_outcome(&id, 0.05, 0.5);
+            }
+        }
+        let cfg = EvolutionCfg {
+            population_cap: 18,
+            min_decisions: 5,
+            ..Default::default()
+        };
+        let mut e = Evolution::new(cfg, 7);
+        let current = vec![
+            (SystematicParams::vol_breakout(), "vol-breakout-v0".to_string()),
+            (SystematicParams::liq_trend(), "liq-trend-v0".to_string()),
+            (SystematicParams::liq_fade(), "liq-fade-v0".to_string()),
+            (SystematicParams::funding_trend(), "funding-trend-v0".to_string()),
+            (SystematicParams::funding_arb(), "funding-arb-v0".to_string()),
+            (SystematicParams::polyedge(), "polyedge-v0".to_string()),
+        ];
+        let next = e.advance(current, &sb);
+        let mut by_kind: HashMap<RuleFamilyKind, usize> = HashMap::new();
+        for a in &next {
+            if let Some(p) = a.systematic_params() {
+                *by_kind.entry(family_kind(p.family)).or_insert(0) += 1;
+            }
+        }
+        // With cap=18 and 6 known families, round-robin fill should
+        // give each family roughly 3 seats. We assert ≥3 to catch the
+        // regression: under the old logic vol-breakout would have
+        // claimed 12+ seats and at least one other family would sit
+        // at the bare quota of 2.
+        for kind in [
+            RuleFamilyKind::LiqTrend,
+            RuleFamilyKind::LiqFade,
+            RuleFamilyKind::FundingTrend,
+            RuleFamilyKind::FundingArb,
+            RuleFamilyKind::VolBreakout,
+            RuleFamilyKind::PolyEdge,
+        ] {
+            let count = by_kind.get(&kind).copied().unwrap_or(0);
+            assert!(
+                count >= 3,
+                "family {} got only {} seats — round-robin fill regressed",
                 family_label(kind),
                 count
             );

@@ -120,21 +120,24 @@ async function fetchFunding(
 async function fetchLiquidations(
   key: string,
   rawSymbol: string,
-  hoursBack = 48,
+  minutesBack = 180,
 ): Promise<{ ok: true; liqs: LiqPoint[] } | { ok: false; reason: string }> {
-  // Real `LIQUIDATION_AGG` from Kiyotaka — the price/volume proxy in
-  // detectEvents stays as a backup, but when this feed is up the
-  // liq-spike detector uses real $-liquidated-per-hour numbers, which
-  // is what the Rust liq-trend / liq-fade agents are trained on.
+  // Real `LIQUIDATION_AGG` from Kiyotaka at MINUTE resolution. Hourly
+  // resolution gave one bar per hour → with the AutoPilot dedupe
+  // keyed on `(asset, kind, bar_ts)` the same event sat in the seen
+  // set for 360 polls and the rail looked frozen. 180 minutes of
+  // 1-minute bars gives ~180 z-score samples and a fresh bar every
+  // minute, so live polling actually fires events when one lands.
   const now = Math.floor(Date.now() / 1000);
-  const from = now - hoursBack * 3600;
+  const period = minutesBack * 60;
+  const from = now - period;
   const url = new URL("https://api.kiyotaka.ai/v1/points");
   url.searchParams.set("type", "LIQUIDATION_AGG");
   url.searchParams.set("exchange", "BINANCE_FUTURES");
   url.searchParams.set("rawSymbol", rawSymbol);
-  url.searchParams.set("interval", "HOUR");
+  url.searchParams.set("interval", "MINUTE");
   url.searchParams.set("from", String(from));
-  url.searchParams.set("period", String(hoursBack * 3600));
+  url.searchParams.set("period", String(period));
   const r = await fetchKiyotaka(url, key);
   if (!r.ok) return r;
   const data = r.data as {
@@ -210,17 +213,24 @@ async function fetchOpenInterest(
 async function fetchCandles(
   key: string,
   rawSymbol: string,
-  hoursBack = 48,
+  minutesBack = 180,
 ): Promise<{ ok: true; candles: Candle[] } | { ok: false; reason: string }> {
+  // Switched from HOUR → MINUTE resolution. Same 10 s polling cadence
+  // now sees fresh bars every minute instead of every hour, and the
+  // event-id dedupe (keyed on `last.ts`) no longer holds the same
+  // event in `seenRef` for an entire hour. ~180 1-minute samples is
+  // enough for a stable z-score baseline (3 hours of context) and
+  // keeps the response payload light.
   const now = Math.floor(Date.now() / 1000);
-  const from = now - hoursBack * 3600;
+  const period = minutesBack * 60;
+  const from = now - period;
   const url = new URL("https://api.kiyotaka.ai/v1/points");
   url.searchParams.set("type", "TRADE_SIDE_AGNOSTIC_AGG");
   url.searchParams.set("exchange", "BINANCE_FUTURES");
   url.searchParams.set("rawSymbol", rawSymbol);
-  url.searchParams.set("interval", "HOUR");
+  url.searchParams.set("interval", "MINUTE");
   url.searchParams.set("from", String(from));
-  url.searchParams.set("period", String(hoursBack * 3600));
+  url.searchParams.set("period", String(period));
   const r = await fetchKiyotaka(url, key);
   if (!r.ok) return r;
   const data = r.data as {
@@ -446,10 +456,12 @@ function detectEvents(asset: SimAsset, candles: Candle[], now: number): SimEvent
   }
 
   // Vol breakout: big move vs prior range, regardless of whether vol is big.
-  // Uses 24h high/low as a cheap Donchian proxy. Lowered from |z| ≥ 1.0
-  // → 0.8 with a 2.0 floor on the surfaced magnitude (the rule still
-  // filters at 2.0 inside SystematicAgent regardless).
-  const recent = candles.slice(-24);
+  // At MINUTE resolution we use a 60-bar window = a 1-hour Donchian,
+  // which gives the same "did price break the recent range" semantics
+  // the original 24-hour HOUR-resolution version had. Surfaced
+  // magnitude floor stays at 2.0 (the systematic agents apply their
+  // own internal z_threshold regardless).
+  const recent = candles.slice(-60);
   const hi = Math.max(...recent.slice(0, -1).map((c) => c.close));
   const lo = Math.min(...recent.slice(0, -1).map((c) => c.close));
   if (last.close > hi && Math.abs(rz) >= 0.8) {
