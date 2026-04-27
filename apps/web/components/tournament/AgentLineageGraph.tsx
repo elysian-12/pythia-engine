@@ -15,24 +15,23 @@ import {
 } from "d3-force";
 import { agentFamily, FAMILY_COLORS, type AgentStats } from "@/lib/swarm";
 
-// Force-directed lineage graph projected onto a slowly-rotating
-// virtual globe. SVG only — no three.js, but the orthographic
-// sphere projection + per-node depth scaling + dim-back-of-globe
-// gives a believable 3D feel.
+// Force-directed lineage graph projected onto a Pythian orb — the
+// agora of the swarm. SVG only; orthographic sphere projection plus
+// per-node depth scaling + dim-back-of-orb fading sells the 3D feel
+// without three.js. Visual theme is classical Greek: laurel-gold
+// laureate, bronze horizon, ochre haze.
 //
-// Interactions:
-//   - Drag empty space          → rotates the globe (yaw + pitch)
-//   - Drag a node               → moves the node on the underlying
-//                                 2D layout; sphere projection
-//                                 follows. Releases re-energise the
-//                                 force sim so neighbours rearrange.
-//   - Click / tap a node        → pins the details panel for that
-//                                 agent. Works on touch where hover
-//                                 doesn't fire.
-//   - Click empty space         → clears the selection
-//
-// Champion gets a 2x size halo + crown label + is always rendered on
-// top (no depth fade) so it's unmissable.
+// Gestures (mouse, trackpad, touch all work):
+//   - 1-finger drag empty space  → rotate globe (yaw + pitch)
+//   - 2-finger pinch             → zoom around the pinch midpoint
+//   - 2-finger drag              → pan
+//   - Scroll wheel / trackpad    → zoom around cursor
+//   - +/− / ⟲ buttons (top-left) → discrete zoom + reset
+//   - Drag a node                → reposition it; sphere reflows
+//   - Tap any node               → pin a stats panel for that agent
+//                                  (works on touch where hover doesn't
+//                                  fire)
+//   - Tap empty space            → clear selection
 
 type Props = {
   agents: AgentStats[];
@@ -46,7 +45,7 @@ type GraphNode = SimulationNodeDatum & {
   agent?: AgentStats;
   isChampion: boolean;
   isSeed: boolean;
-  size: number; // base radius in 2D space
+  size: number;
 };
 
 type GraphLink = SimulationLinkDatum<GraphNode>;
@@ -56,6 +55,9 @@ const HEIGHT = 560;
 const SPHERE_RADIUS = Math.min(WIDTH, HEIGHT) * 0.42;
 const CENTER_X = WIDTH / 2;
 const CENTER_Y = HEIGHT / 2;
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 4;
+const TAP_VS_DRAG_THRESHOLD = 8;
 
 function peelOneLevel(id: string): string | null {
   const m = id.match(/^gen\d+(?:-mut\d+)?-(.+)$/);
@@ -73,29 +75,25 @@ function resolveParent(id: string, liveIds: Set<string>): string | null {
   return null;
 }
 
-/** Map 2D layout (x ∈ [0, W], y ∈ [0, H]) to lon/lat on the sphere
- *  surface, then apply the current camera rotation, then orthographic-
- *  project to screen. Returns screen coords + a depth value in [-1, 1]
- *  where +1 = front of globe (closest to viewer), -1 = far back. */
+/** Map 2D layout (x ∈ [0, W], y ∈ [0, H]) to lon/lat, rotate by
+ *  yaw/pitch, orthographic-project to viewBox space. Pan + zoom are
+ *  applied via the wrapping <g transform>, not here. */
 function project(
   x2d: number,
   y2d: number,
   yaw: number,
   pitch: number,
 ): { sx: number; sy: number; depth: number } {
-  const lon = ((x2d - CENTER_X) / CENTER_X) * Math.PI; // [-π, π]
-  const lat = ((y2d - CENTER_Y) / CENTER_Y) * (Math.PI / 2); // [-π/2, π/2]
-  // Apply yaw to longitude, pitch to latitude.
+  const lon = ((x2d - CENTER_X) / CENTER_X) * Math.PI;
+  const lat = ((y2d - CENTER_Y) / CENTER_Y) * (Math.PI / 2);
   const adjLon = lon + yaw;
   const adjLat = lat + pitch;
-  // Sphere coords (R = 1).
   const cy = Math.cos(adjLat);
   const sx_sphere = cy * Math.sin(adjLon);
   const sy_sphere = Math.sin(adjLat);
   const sz_sphere = cy * Math.cos(adjLon);
-  // Orthographic projection to screen.
   const sx = CENTER_X + sx_sphere * SPHERE_RADIUS;
-  const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS; // flip Y for screen
+  const sy = CENTER_Y - sy_sphere * SPHERE_RADIUS;
   return { sx, sy, depth: sz_sphere };
 }
 
@@ -110,48 +108,67 @@ export function AgentLineageGraph({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Frozen view of the agents prop. The cron-driven snapshot refreshes
-  // every hour and `agents` updates whenever /api/swarm changes. If
-  // we let those refreshes propagate while the user is studying a
-  // selection, the layout reshuffles under their cursor and the
-  // selection disappears. So we mirror `agents` into `frozenAgents`
-  // only when the user isn't interacting (no selection + tab is
-  // visible). When they tab away and back, the visibilitychange
-  // listener catches up to the latest snapshot.
+  // Frozen view of the agents prop. We only sync to the latest snapshot
+  // when the user isn't interacting (no selection, no live drag, tab is
+  // visible). Stops layout reshuffles from yanking the cursor target
+  // mid-study after an hourly cron refresh.
   const [frozenAgents, setFrozenAgents] = useState(agents);
 
-  // Camera rotation. Refs (not state) so updating during a drag
-  // doesn't trigger React re-renders for every mouse move; the rAF
-  // loop drives the visual update.
+  // Camera state: rotation + zoom + pan. Refs so updates during a
+  // gesture don't trigger React re-renders for every move event;
+  // the rAF loop drives the visual update.
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
+  const scaleRef = useRef(1);
+  const panXRef = useRef(0);
+  const panYRef = useRef(0);
 
-  // Drag bookkeeping. dragMode tells the global pointermove handler
-  // whether to move a node or rotate the camera.
+  // All currently-down pointers on the SVG (mouse, touch fingers, pen).
+  // Two simultaneous → pinch/pan gesture; one → single drag (camera or
+  // node depending on what was hit).
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{
+    startDist: number;
+    startScale: number;
+    startCenterVB: { x: number; y: number };
+    startPanX: number;
+    startPanY: number;
+  } | null>(null);
+
   const dragRef = useRef<
-    | { mode: "node"; node: GraphNode; startX: number; startY: number; moved: boolean }
-    | { mode: "camera"; lastX: number; lastY: number }
+    | {
+        mode: "node";
+        pointerId: number;
+        node: GraphNode;
+        startX: number;
+        startY: number;
+        moved: boolean;
+      }
+    | { mode: "camera"; pointerId: number; lastX: number; lastY: number }
     | null
   >(null);
 
   const simRef = useRef<Simulation<GraphNode, GraphLink> | null>(null);
 
-  // Sync `frozenAgents` to the live `agents` prop only when safe.
   useEffect(() => {
-    const isInteracting = selectedId !== null || dragRef.current !== null;
+    const isInteracting =
+      selectedId !== null ||
+      dragRef.current !== null ||
+      pointersRef.current.size > 0;
     const tabHidden = typeof document !== "undefined" && document.hidden;
     if (!isInteracting && !tabHidden) {
       setFrozenAgents(agents);
     }
   }, [agents, selectedId]);
 
-  // On tab-becomes-visible, catch up to whatever's freshest. Stops
-  // the graph from showing a gen-old snapshot after the user has
-  // been away for a while.
   useEffect(() => {
     if (typeof document === "undefined") return;
     const onVisibility = () => {
-      if (!document.hidden && selectedId === null && dragRef.current === null) {
+      if (
+        !document.hidden &&
+        selectedId === null &&
+        dragRef.current === null
+      ) {
         setFrozenAgents(agents);
       }
     };
@@ -165,18 +182,14 @@ export function AgentLineageGraph({
     }
     const liveIds = new Set(frozenAgents.map((a) => a.agent_id));
     const maxR = Math.max(1, ...frozenAgents.map((a) => Math.abs(a.total_r)));
-    const liveNodes: GraphNode[] = frozenAgents.map((a) => {
-      const family = agentFamily(a.agent_id);
-      const sizeR = 7 + (Math.abs(a.total_r) / maxR) * 13;
-      return {
-        id: a.agent_id,
-        family,
-        agent: a,
-        isChampion: a.agent_id === championId,
-        isSeed: false,
-        size: sizeR,
-      };
-    });
+    const liveNodes: GraphNode[] = frozenAgents.map((a) => ({
+      id: a.agent_id,
+      family: agentFamily(a.agent_id),
+      agent: a,
+      isChampion: a.agent_id === championId,
+      isSeed: false,
+      size: 7 + (Math.abs(a.total_r) / maxR) * 13,
+    }));
 
     const linksOut: GraphLink[] = [];
     const seedNodes: GraphNode[] = [];
@@ -203,9 +216,6 @@ export function AgentLineageGraph({
     return { nodes: [...liveNodes, ...seedNodes], links: linksOut };
   }, [frozenAgents, championId]);
 
-  // Force simulation in 2D. The 2D positions feed sphere projection
-  // (lon = x, lat = y) so a balanced 2D layout maps to a balanced
-  // distribution on the globe.
   useEffect(() => {
     if (nodes.length === 0) return;
     const sim = forceSimulation<GraphNode>(nodes)
@@ -236,8 +246,6 @@ export function AgentLineageGraph({
 
     const margin = 8;
     const onTick = () => {
-      // Clamp 2D positions inside [margin, W-margin] × [margin, H-margin]
-      // so the projection stays well-defined and nothing escapes.
       for (const n of nodes) {
         if (n.x == null) n.x = CENTER_X;
         if (n.y == null) n.y = CENTER_Y;
@@ -253,50 +261,123 @@ export function AgentLineageGraph({
     };
   }, [nodes, links]);
 
-  // rAF loop — auto-rotation + render. Slows when interacting so
-  // the user's drag isn't fighting an auto-spin.
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
     const loop = (t: number) => {
       const dt = t - last;
       last = t;
-      // Auto-yaw at ~1 revolution / 90s, pause while user is dragging
-      // the camera. Pitch doesn't auto-spin.
-      if (!dragRef.current || dragRef.current.mode !== "camera") {
-        yawRef.current += (dt / 1000) * (Math.PI * 2 / 90);
+      // Auto-rotate only in the resting "default" view: nothing
+      // selected, no zoom or pan applied, no active gesture. Once the
+      // user has touched any control we stop spinning so we're not
+      // fighting their input.
+      const isIdle =
+        !dragRef.current &&
+        !pinchRef.current &&
+        selectedId === null &&
+        Math.abs(scaleRef.current - 1) < 0.01 &&
+        Math.abs(panXRef.current) < 1 &&
+        Math.abs(panYRef.current) < 1;
+      if (isIdle) {
+        yawRef.current += (dt / 1000) * ((Math.PI * 2) / 90);
       }
       tickCount.current++;
-      // Re-render every other frame is fine.
       if (tickCount.current % 2 === 0) forceRerender((c) => c + 1);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
+  }, [selectedId]);
+
+  // Single source of truth for client→viewBox conversion. Reads svgRef
+  // (stable) so a closure over this function is fine.
+  const screenToViewBox = (clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    return pt.matrixTransform(ctm.inverse());
+  };
+
+  const viewBoxToWorld = (vx: number, vy: number) => ({
+    x: (vx - panXRef.current) / scaleRef.current,
+    y: (vy - panYRef.current) / scaleRef.current,
+  });
+
+  const zoomAt = (factor: number, vbx: number, vby: number) => {
+    const oldScale = scaleRef.current;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, oldScale * factor));
+    if (newScale === oldScale) return;
+    // Anchor: world point under (vbx, vby) stays put across the zoom.
+    const worldX = (vbx - panXRef.current) / oldScale;
+    const worldY = (vby - panYRef.current) / oldScale;
+    panXRef.current = vbx - worldX * newScale;
+    panYRef.current = vby - worldY * newScale;
+    scaleRef.current = newScale;
+  };
+
+  // Wheel handler attached natively so we can preventDefault even when
+  // React's synthetic wheel event is passive.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const vb = screenToViewBox(e.clientX, e.clientY);
+      if (!vb) return;
+      zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, vb.x, vb.y);
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
   }, []);
 
-  // Window-level pointer handlers — work even when the cursor leaves
-  // the SVG, work on touch (pointercancel cleans up).
+  // Window-level pointer move/up handlers. Window-level so the gesture
+  // continues even if the cursor leaves the SVG.
   useEffect(() => {
-    const screenToSvg = (clientX: number, clientY: number) => {
-      const svg = svgRef.current;
-      if (!svg) return null;
-      const pt = svg.createSVGPoint();
-      pt.x = clientX;
-      pt.y = clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return null;
-      return pt.matrixTransform(ctm.inverse());
-    };
     const onMove = (e: PointerEvent) => {
+      if (!pointersRef.current.has(e.pointerId)) return;
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      // Pinch/pan beats single drag. Two pointers → zoom around the
+      // midpoint, pan with the midpoint, ignore individual moves.
+      if (pinchRef.current && pointersRef.current.size >= 2) {
+        const ps = Array.from(pointersRef.current.values());
+        const a = ps[0];
+        const b = ps[1];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        const ratio = dist / pinchRef.current.startDist;
+        const newScale = Math.max(
+          MIN_SCALE,
+          Math.min(MAX_SCALE, pinchRef.current.startScale * ratio),
+        );
+        const midClient = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const midVB = screenToViewBox(midClient.x, midClient.y);
+        if (!midVB) return;
+        const worldAnchor = {
+          x:
+            (pinchRef.current.startCenterVB.x - pinchRef.current.startPanX) /
+            pinchRef.current.startScale,
+          y:
+            (pinchRef.current.startCenterVB.y - pinchRef.current.startPanY) /
+            pinchRef.current.startScale,
+        };
+        panXRef.current = midVB.x - worldAnchor.x * newScale;
+        panYRef.current = midVB.y - worldAnchor.y * newScale;
+        scaleRef.current = newScale;
+        return;
+      }
+
       const drag = dragRef.current;
-      if (!drag) return;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+
       if (drag.mode === "camera") {
         const dx = e.clientX - drag.lastX;
         const dy = e.clientY - drag.lastY;
         drag.lastX = e.clientX;
         drag.lastY = e.clientY;
-        // Mouse moves 1px → 0.5° rotation. Scale to taste.
         yawRef.current += dx * 0.006;
         pitchRef.current = Math.max(
           -Math.PI / 2 + 0.1,
@@ -304,38 +385,58 @@ export function AgentLineageGraph({
         );
         return;
       }
-      // node drag — translate from screen to 2D layout coords through
-      // the inverse of the current camera projection. Approximation:
-      // assume small motion → just update the node's 2D x/y by the
-      // screen delta divided by SPHERE_RADIUS scale.
-      const local = screenToSvg(e.clientX, e.clientY);
-      if (!local) return;
+
+      // Node drag — only commit movement once the pointer has travelled
+      // past the tap radius, so a tap (with natural finger jitter)
+      // reliably selects instead of dragging by 1-2 pixels.
+      const totalDx = e.clientX - drag.startX;
+      const totalDy = e.clientY - drag.startY;
+      const distSq = totalDx * totalDx + totalDy * totalDy;
+      if (
+        !drag.moved &&
+        distSq < TAP_VS_DRAG_THRESHOLD * TAP_VS_DRAG_THRESHOLD
+      ) {
+        return;
+      }
+      drag.moved = true;
+      const vb = screenToViewBox(e.clientX, e.clientY);
+      if (!vb) return;
+      const local = viewBoxToWorld(vb.x, vb.y);
       const dxScreen = local.x - CENTER_X;
       const dyScreen = -(local.y - CENTER_Y);
-      // Reverse-project from screen → sphere (assume z = +1 hemisphere
-      // i.e. front of globe). For the back hemisphere the math
-      // degenerates; we accept the small inaccuracy because drags on
-      // back-of-globe nodes should rotate the camera first anyway.
-      const r = Math.min(SPHERE_RADIUS, Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen));
-      const lon =
-        Math.atan2(dxScreen, Math.sqrt(SPHERE_RADIUS * SPHERE_RADIUS - r * r));
-      const lat = Math.asin(dyScreen / SPHERE_RADIUS);
-      // Subtract the current camera rotation to get the underlying
-      // 2D layout position.
+      const r = Math.min(
+        SPHERE_RADIUS,
+        Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen),
+      );
+      const lon = Math.atan2(
+        dxScreen,
+        Math.sqrt(SPHERE_RADIUS * SPHERE_RADIUS - r * r),
+      );
+      const lat = Math.asin(
+        Math.max(-1, Math.min(1, dyScreen / SPHERE_RADIUS)),
+      );
       const adjLon = lon - yawRef.current;
       const adjLat = lat - pitchRef.current;
-      drag.node.fx =
-        CENTER_X + (adjLon / Math.PI) * CENTER_X;
-      drag.node.fy =
-        CENTER_Y + (adjLat / (Math.PI / 2)) * CENTER_Y;
-      drag.moved = true;
+      drag.node.fx = CENTER_X + (adjLon / Math.PI) * CENTER_X;
+      drag.node.fy = CENTER_Y + (adjLat / (Math.PI / 2)) * CENTER_Y;
       if (simRef.current) simRef.current.alphaTarget(0.25);
     };
-    const onUp = (_e: PointerEvent) => {
+
+    const onUp = (e: PointerEvent) => {
+      if (!pointersRef.current.has(e.pointerId)) return;
+      pointersRef.current.delete(e.pointerId);
+
+      if (pinchRef.current && pointersRef.current.size < 2) {
+        // Pinch ends. We don't promote a leftover pointer into a fresh
+        // single drag — user must lift fully and re-press to rotate
+        // again, which avoids unintended yaw spins on pinch release.
+        pinchRef.current = null;
+        return;
+      }
+
       const drag = dragRef.current;
-      if (!drag) return;
+      if (!drag || drag.pointerId !== e.pointerId) return;
       if (drag.mode === "node") {
-        // If the pointer barely moved, treat as a click → select.
         if (!drag.moved) {
           setSelectedId((cur) => (cur === drag.node.id ? null : drag.node.id));
         }
@@ -345,6 +446,7 @@ export function AgentLineageGraph({
       }
       dragRef.current = null;
     };
+
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
@@ -355,11 +457,41 @@ export function AgentLineageGraph({
     };
   }, []);
 
+  // Helper: snapshot pinch state from the current pointer set.
+  const tryStartPinch = () => {
+    if (pointersRef.current.size < 2) return;
+    const ps = Array.from(pointersRef.current.values());
+    const a = ps[0];
+    const b = ps[1];
+    const midVB = screenToViewBox((a.x + b.x) / 2, (a.y + b.y) / 2);
+    if (!midVB) return;
+    pinchRef.current = {
+      startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      startScale: scaleRef.current,
+      startCenterVB: { x: midVB.x, y: midVB.y },
+      startPanX: panXRef.current,
+      startPanY: panYRef.current,
+    };
+    // Cancel any in-progress single drag so the gesture is clean.
+    const cur = dragRef.current;
+    if (cur?.mode === "node") {
+      cur.node.fx = null;
+      cur.node.fy = null;
+      if (simRef.current) simRef.current.alphaTarget(0);
+    }
+    dragRef.current = null;
+  };
+
   const onPointerDownNode = (e: React.PointerEvent, n: GraphNode) => {
     e.stopPropagation();
-    e.preventDefault();
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size >= 2) {
+      tryStartPinch();
+      return;
+    }
     dragRef.current = {
       mode: "node",
+      pointerId: e.pointerId,
       node: n,
       startX: e.clientX,
       startY: e.clientY,
@@ -369,21 +501,36 @@ export function AgentLineageGraph({
     n.fy = n.y ?? CENTER_Y;
     if (simRef.current) simRef.current.alphaTarget(0.25).restart();
   };
+
   const onPointerDownBackground = (e: React.PointerEvent) => {
-    e.preventDefault();
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size >= 2) {
+      tryStartPinch();
+      return;
+    }
     dragRef.current = {
       mode: "camera",
+      pointerId: e.pointerId,
       lastX: e.clientX,
       lastY: e.clientY,
     };
   };
-  const onClickBackground = () => {
+
+  const onClickBackground = () => setSelectedId(null);
+
+  const resetView = () => {
+    scaleRef.current = 1;
+    panXRef.current = 0;
+    panYRef.current = 0;
+    yawRef.current = 0;
+    pitchRef.current = 0;
     setSelectedId(null);
   };
+  const zoomIn = () => zoomAt(1.25, WIDTH / 2, HEIGHT / 2);
+  const zoomOut = () => zoomAt(1 / 1.25, WIDTH / 2, HEIGHT / 2);
 
   if (nodes.length === 0) return null;
 
-  // Pre-compute projected positions for this render.
   const yaw = yawRef.current;
   const pitch = pitchRef.current;
   const projected = nodes.map((n) => {
@@ -392,8 +539,6 @@ export function AgentLineageGraph({
     const p = project(x, y, yaw, pitch);
     return { node: n, ...p };
   });
-  // Draw order: champion always last. Otherwise back-to-front by
-  // depth so the front-of-globe nodes appear on top.
   projected.sort((a, b) => {
     if (a.node.isChampion !== b.node.isChampion) return a.node.isChampion ? 1 : -1;
     return a.depth - b.depth;
@@ -405,18 +550,17 @@ export function AgentLineageGraph({
   return (
     <section className="panel p-4 sm:p-5 relative">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
-        <div className="text-xs uppercase tracking-[0.3em] text-mist">
-          Agent lineage · globe view
+        <div className="text-xs uppercase tracking-[0.3em] text-amber/80">
+          Pythian agora · lineage
         </div>
         <div className="text-[0.65rem] text-mist num">
           gen {generation} · {nodes.filter((n) => !n.isSeed).length} agents · {links.length} edges
         </div>
       </div>
       <p className="text-[0.65rem] text-mist mb-3 max-w-2xl leading-relaxed">
-        Drag empty space to rotate the globe, drag a node to reposition
-        it, tap a node for stats. Edges link mutants to their parents.
-        Champion glows gold and stays on top. Front-of-globe nodes sit
-        sharp; back-of-globe nodes dim with depth.
+        Drag the marble to turn it · pinch / scroll / +− to zoom ·
+        two-finger drag to pan · tap any node for the agent&apos;s
+        record. The laureate stays wreathed in gold.
       </p>
       <div className="relative">
         <svg
@@ -425,19 +569,20 @@ export function AgentLineageGraph({
           className="w-full h-auto rounded-sm bg-black/40 border border-edge/40 select-none touch-none"
           onPointerDown={onPointerDownBackground}
           onClick={onClickBackground}
-          aria-label="Agent lineage globe"
+          aria-label="Pythian agora — agent lineage orb"
         >
-          {/* Globe glow + horizon */}
           <defs>
+            {/* Greek palette: ochre-amber haze fading to dark wine.
+                Replaces the old indigo/space-blue gradient. */}
             <radialGradient id="globe-glow" cx="50%" cy="42%" r="55%">
-              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.18" />
-              <stop offset="55%" stopColor="#1e1b4b" stopOpacity="0.08" />
+              <stop offset="0%" stopColor="#d97706" stopOpacity="0.22" />
+              <stop offset="55%" stopColor="#7c2d12" stopOpacity="0.1" />
               <stop offset="100%" stopColor="#000" stopOpacity="0" />
             </radialGradient>
             <radialGradient id="champion-halo" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#fde68a" stopOpacity="0.95" />
-              <stop offset="60%" stopColor="#fbbf24" stopOpacity="0.5" />
-              <stop offset="100%" stopColor="#fbbf24" stopOpacity="0" />
+              <stop offset="60%" stopColor="#f59e0b" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#b45309" stopOpacity="0" />
             </radialGradient>
             <filter id="champion-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="6" result="coloredBlur" />
@@ -447,222 +592,292 @@ export function AgentLineageGraph({
               </feMerge>
             </filter>
           </defs>
-          {/* Background sphere outline + glow */}
-          <circle
-            cx={CENTER_X}
-            cy={CENTER_Y}
-            r={SPHERE_RADIUS + 12}
-            fill="url(#globe-glow)"
-          />
-          <circle
-            cx={CENTER_X}
-            cy={CENTER_Y}
-            r={SPHERE_RADIUS}
-            fill="none"
-            stroke="#475569"
-            strokeOpacity={0.25}
-            strokeWidth={1}
-            strokeDasharray="2 4"
-          />
 
-          {/* Edges. Each edge is a straight line in screen space; we
-              fade it by the average depth of its endpoints so back
-              edges sit visually behind front nodes. */}
-          <g>
-            {links.map((l, i) => {
-              const s = l.source as GraphNode;
-              const t = l.target as GraphNode;
-              const ps = projected.find((p) => p.node === s);
-              const pt = projected.find((p) => p.node === t);
-              if (!ps || !pt) return null;
-              const avg = (ps.depth + pt.depth) / 2;
-              const op = 0.12 + Math.max(0, avg) * 0.45;
-              return (
-                <line
-                  key={i}
-                  x1={ps.sx}
-                  y1={ps.sy}
-                  x2={pt.sx}
-                  y2={pt.sy}
-                  stroke="#4b5563"
-                  strokeOpacity={op}
-                  strokeWidth={0.7}
-                />
-              );
-            })}
-          </g>
+          {/* Everything that should pan/zoom together lives inside this
+              <g transform>. The sphere outline + edges + nodes + champion
+              callout all move with the camera. screenToViewBox uses the
+              outer <svg>'s CTM, then we divide by scale + subtract pan
+              for the inverse. */}
+          <g
+            transform={`translate(${panXRef.current} ${panYRef.current}) scale(${scaleRef.current})`}
+          >
+            <circle
+              cx={CENTER_X}
+              cy={CENTER_Y}
+              r={SPHERE_RADIUS + 12}
+              fill="url(#globe-glow)"
+            />
+            {/* Bronze horizon — subtle dashed circle frames the marble. */}
+            <circle
+              cx={CENTER_X}
+              cy={CENTER_Y}
+              r={SPHERE_RADIUS}
+              fill="none"
+              stroke="#a16207"
+              strokeOpacity={0.35}
+              strokeWidth={1}
+              strokeDasharray="2 4"
+            />
 
-          {/* Nodes — back-to-front, champion last (always on top).
-              The champion's persistent floating callout is drawn
-              after the node loop so it always sits on top, no matter
-              what's behind it. */}
-          <g>
-            {projected.map(({ node: n, sx, sy, depth }) => {
-              const fam = (FAMILY_COLORS as Record<string, string>)[n.family] ?? "#94a3b8";
-              const isSelected = selectedId === n.id;
-              // Depth scaling: front (depth=1) is 1.0×, back (depth=-1)
-              // is 0.55×. Champion is always full size.
-              const depthScale = n.isChampion ? 1.6 : 0.55 + Math.max(0, depth + 1) / 2 * 0.45;
-              const r = n.size * depthScale;
-              const opacity = n.isChampion
-                ? 1
-                : n.isSeed
-                  ? 0.4 + Math.max(0, depth) * 0.35
-                  : 0.4 + Math.max(0, depth + 1) / 2 * 0.6;
-              const stroke = isSelected ? "#22d3ee" : n.isChampion ? "#fbbf24" : n.isSeed ? fam : "#0b0f14";
-              return (
-                <g
-                  key={n.id}
-                  transform={`translate(${sx},${sy})`}
-                  className="cursor-pointer"
-                  onPointerDown={(e) => onPointerDownNode(e, n)}
-                  onPointerEnter={() => setHoveredId(n.id)}
-                  onPointerLeave={() =>
-                    setHoveredId((cur) => (cur === n.id ? null : cur))
-                  }
-                >
-                  {n.isChampion ? (
-                    <>
-                      {/* Outer halo gradient */}
-                      <circle r={r + 16} fill="url(#champion-halo)">
-                        <animate
-                          attributeName="r"
-                          values={`${r + 12};${r + 22};${r + 12}`}
-                          dur="3.6s"
-                          repeatCount="indefinite"
-                        />
-                      </circle>
-                      {/* Pulsing ring */}
+            <g>
+              {links.map((l, i) => {
+                const s = l.source as GraphNode;
+                const t = l.target as GraphNode;
+                const ps = projected.find((p) => p.node === s);
+                const pt = projected.find((p) => p.node === t);
+                if (!ps || !pt) return null;
+                const avg = (ps.depth + pt.depth) / 2;
+                const op = 0.12 + Math.max(0, avg) * 0.45;
+                return (
+                  <line
+                    key={i}
+                    x1={ps.sx}
+                    y1={ps.sy}
+                    x2={pt.sx}
+                    y2={pt.sy}
+                    stroke="#92400e"
+                    strokeOpacity={op}
+                    strokeWidth={0.7}
+                  />
+                );
+              })}
+            </g>
+
+            <g>
+              {projected.map(({ node: n, sx, sy, depth }) => {
+                const fam =
+                  (FAMILY_COLORS as Record<string, string>)[n.family] ??
+                  "#94a3b8";
+                const isSelected = selectedId === n.id;
+                const isHovered = hoveredId === n.id;
+                const depthScale = n.isChampion
+                  ? 1.6
+                  : 0.55 + (Math.max(0, depth + 1) / 2) * 0.45;
+                // Visible bump on hover/select so every node — not just
+                // the champion — feels touchable.
+                const interactionBump = isSelected ? 1.35 : isHovered ? 1.15 : 1;
+                const r = n.size * depthScale * interactionBump;
+                const opacity = n.isChampion
+                  ? 1
+                  : n.isSeed
+                    ? 0.4 + Math.max(0, depth) * 0.35
+                    : 0.4 + (Math.max(0, depth + 1) / 2) * 0.6;
+                const stroke = isSelected
+                  ? "#22d3ee"
+                  : n.isChampion
+                    ? "#fbbf24"
+                    : isHovered
+                      ? "#cbd5e1"
+                      : n.isSeed
+                        ? fam
+                        : "#0b0f14";
+                return (
+                  <g
+                    key={n.id}
+                    transform={`translate(${sx},${sy})`}
+                    className="cursor-pointer"
+                    onPointerDown={(e) => onPointerDownNode(e, n)}
+                    onPointerEnter={() => setHoveredId(n.id)}
+                    onPointerLeave={() =>
+                      setHoveredId((cur) => (cur === n.id ? null : cur))
+                    }
+                  >
+                    {n.isChampion ? (
+                      <>
+                        <circle r={r + 16} fill="url(#champion-halo)">
+                          <animate
+                            attributeName="r"
+                            values={`${r + 12};${r + 22};${r + 12}`}
+                            dur="3.6s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                        <circle
+                          r={r + 6}
+                          fill="none"
+                          stroke="#fbbf24"
+                          strokeWidth={2.5}
+                          opacity={0.85}
+                        >
+                          <animate
+                            attributeName="r"
+                            values={`${r + 4};${r + 12};${r + 4}`}
+                            dur="3.6s"
+                            repeatCount="indefinite"
+                          />
+                          <animate
+                            attributeName="opacity"
+                            values="0.95;0.35;0.95"
+                            dur="3.6s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      </>
+                    ) : null}
+                    {/* Selection ring on any non-champion picked node so
+                        users get strong visual confirmation of the tap. */}
+                    {isSelected && !n.isChampion ? (
                       <circle
-                        r={r + 6}
+                        r={r + 4}
                         fill="none"
-                        stroke="#fbbf24"
-                        strokeWidth={2.5}
+                        stroke="#22d3ee"
+                        strokeWidth={1.5}
+                        strokeDasharray="3 2"
                         opacity={0.85}
                       >
                         <animate
                           attributeName="r"
-                          values={`${r + 4};${r + 12};${r + 4}`}
-                          dur="3.6s"
-                          repeatCount="indefinite"
-                        />
-                        <animate
-                          attributeName="opacity"
-                          values="0.95;0.35;0.95"
-                          dur="3.6s"
+                          values={`${r + 3};${r + 7};${r + 3}`}
+                          dur="2.4s"
                           repeatCount="indefinite"
                         />
                       </circle>
-                    </>
-                  ) : null}
-                  <circle
-                    r={r}
-                    fill={n.isSeed ? "#1f2937" : fam}
-                    fillOpacity={opacity}
-                    stroke={stroke}
-                    strokeWidth={n.isChampion ? 2.5 : isSelected ? 2 : 1}
-                    filter={n.isChampion ? "url(#champion-glow)" : undefined}
-                  />
-                  {n.isChampion ? (
-                    <text
-                      y={-(r + 14)}
-                      textAnchor="middle"
-                      fontSize="14"
-                      fill="#fde68a"
-                      style={{ pointerEvents: "none", filter: "drop-shadow(0 0 4px #000)" }}
-                    >
-                      👑 CHAMPION
-                    </text>
-                  ) : null}
-                </g>
-              );
-            })}
-          </g>
+                    ) : null}
+                    <circle
+                      r={r}
+                      fill={n.isSeed ? "#1f2937" : fam}
+                      fillOpacity={opacity}
+                      stroke={stroke}
+                      strokeWidth={n.isChampion ? 2.5 : isSelected ? 2 : 1}
+                      filter={n.isChampion ? "url(#champion-glow)" : undefined}
+                    />
+                    {n.isChampion ? (
+                      <text
+                        y={-(r + 14)}
+                        textAnchor="middle"
+                        fontSize="14"
+                        fill="#fde68a"
+                        style={{
+                          pointerEvents: "none",
+                          filter: "drop-shadow(0 0 4px #000)",
+                        }}
+                      >
+                        🌿 LAUREATE
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+            </g>
 
-          {/* Persistent champion callout — always visible above the
-              champion's projected position, regardless of selection
-              state, hover, or which face of the globe it's on.
-              Drawn after the node loop so it sits on top of any
-              other element. Dims slightly when champion is on the
-              back of the globe (depth < 0). */}
-          {championProjection ? (
-            (() => {
-              const { sx, sy, depth, node } = championProjection;
-              const above = sy < CENTER_Y;
-              const labelDy = above ? 70 : -70;
-              const labelY = sy + labelDy;
-              const opacity = depth < 0 ? 0.7 : 1;
-              const champ = node.agent;
-              return (
-                <g
-                  opacity={opacity}
-                  style={{ pointerEvents: "none" }}
-                >
-                  <line
-                    x1={sx}
-                    y1={sy}
-                    x2={sx}
-                    y2={labelY + (above ? -10 : 10)}
-                    stroke="#fbbf24"
-                    strokeWidth={1}
-                    strokeDasharray="2 3"
-                    opacity={0.6}
-                  />
-                  <rect
-                    x={sx - 78}
-                    y={labelY - 18}
-                    width={156}
-                    height={36}
-                    rx={6}
-                    fill="rgba(11, 15, 20, 0.92)"
-                    stroke="#fbbf24"
-                    strokeWidth={1.5}
-                  />
-                  <text
-                    x={sx}
-                    y={labelY - 4}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fill="#fde68a"
-                    fontWeight={600}
-                  >
-                    👑 CHAMPION
-                  </text>
-                  <text
-                    x={sx}
-                    y={labelY + 11}
-                    textAnchor="middle"
-                    fontSize={10}
-                    fill="#cbd5e1"
-                    fontFamily="ui-monospace, monospace"
-                  >
-                    {champ
-                      ? `${champ.total_r >= 0 ? "+" : ""}${champ.total_r.toFixed(0)}R · ${(champ.win_rate * 100).toFixed(0)}% WR`
-                      : node.id.slice(0, 22)}
-                  </text>
-                </g>
-              );
-            })()
-          ) : null}
+            {championProjection
+              ? (() => {
+                  const { sx, sy, depth, node } = championProjection;
+                  const above = sy < CENTER_Y;
+                  const labelDy = above ? 70 : -70;
+                  const labelY = sy + labelDy;
+                  const opacity = depth < 0 ? 0.7 : 1;
+                  const champ = node.agent;
+                  return (
+                    <g opacity={opacity} style={{ pointerEvents: "none" }}>
+                      <line
+                        x1={sx}
+                        y1={sy}
+                        x2={sx}
+                        y2={labelY + (above ? -10 : 10)}
+                        stroke="#fbbf24"
+                        strokeWidth={1}
+                        strokeDasharray="2 3"
+                        opacity={0.6}
+                      />
+                      <rect
+                        x={sx - 78}
+                        y={labelY - 18}
+                        width={156}
+                        height={36}
+                        rx={6}
+                        fill="rgba(11, 15, 20, 0.92)"
+                        stroke="#fbbf24"
+                        strokeWidth={1.5}
+                      />
+                      <text
+                        x={sx}
+                        y={labelY - 4}
+                        textAnchor="middle"
+                        fontSize={11}
+                        fill="#fde68a"
+                        fontWeight={600}
+                      >
+                        🌿 LAUREATE
+                      </text>
+                      <text
+                        x={sx}
+                        y={labelY + 11}
+                        textAnchor="middle"
+                        fontSize={10}
+                        fill="#cbd5e1"
+                        fontFamily="ui-monospace, monospace"
+                      >
+                        {champ
+                          ? `${champ.total_r >= 0 ? "+" : ""}${champ.total_r.toFixed(0)}R · ${(champ.win_rate * 100).toFixed(0)}% WR`
+                          : node.id.slice(0, 22)}
+                      </text>
+                    </g>
+                  );
+                })()
+              : null}
+          </g>
         </svg>
 
-        {/* Pinned details panel — selection takes priority, hover
-            shows a lighter preview when no selection. Both are
-            anchored top-right so they don't follow the cursor. */}
+        {/* Zoom + reset overlay. Top-left so it doesn't fight the
+            details panel for space (which pins top-right on desktop,
+            bottom-anchored on mobile). */}
+        <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-10">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              zoomIn();
+            }}
+            className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-slate-100 text-lg leading-none flex items-center justify-center"
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              zoomOut();
+            }}
+            className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-slate-100 text-lg leading-none flex items-center justify-center"
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              resetView();
+            }}
+            className="w-9 h-9 rounded-sm bg-black/85 hover:bg-black border border-edge/60 hover:border-cyan/40 text-mist hover:text-slate-100 text-sm leading-none flex items-center justify-center"
+            aria-label="Reset view"
+            title="Reset"
+          >
+            ⟲
+          </button>
+        </div>
+
+        {/* Details panel.
+            Mobile: pinned to the bottom of the graph, full width minus
+            small margins, so it doesn't collide with the champion
+            callout above.
+            Desktop (sm+): top-right floating card. */}
         {selected ? (
           <div
-            className="absolute top-3 right-3 panel p-3 bg-black/95 backdrop-blur-sm max-w-[280px] text-[0.7rem] num shadow-2xl ring-1 ring-cyan/30"
+            className="absolute left-2 right-2 bottom-2 sm:left-auto sm:right-3 sm:top-3 sm:bottom-auto sm:max-w-[280px] panel p-3 bg-black/95 backdrop-blur-sm text-[0.7rem] num shadow-2xl ring-1 ring-cyan/30 z-20"
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-2 mb-1">
               <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-                {selected.isChampion ? "👑 " : ""}
+                {selected.isChampion ? "🌿 " : ""}
                 {selected.id.replace(/^gen\d+-mut\d+-/, "")}
               </div>
               <button
                 onClick={() => setSelectedId(null)}
-                className="text-mist hover:text-slate-100 text-base leading-none px-1"
+                className="text-mist hover:text-slate-100 text-base leading-none px-1 shrink-0"
                 aria-label="Close details"
               >
                 ×
@@ -677,7 +892,11 @@ export function AgentLineageGraph({
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <span>
                   <span className="text-mist">Σ R</span>{" "}
-                  <span className={selected.agent.total_r >= 0 ? "text-green" : "text-red"}>
+                  <span
+                    className={
+                      selected.agent.total_r >= 0 ? "text-green" : "text-red"
+                    }
+                  >
                     {selected.agent.total_r >= 0 ? "+" : ""}
                     {selected.agent.total_r.toFixed(2)}
                   </span>
@@ -696,7 +915,11 @@ export function AgentLineageGraph({
                 </span>
                 <span className="col-span-2">
                   <span className="text-mist">last R</span>{" "}
-                  <span className={selected.agent.last_r >= 0 ? "text-green" : "text-red"}>
+                  <span
+                    className={
+                      selected.agent.last_r >= 0 ? "text-green" : "text-red"
+                    }
+                  >
                     {selected.agent.last_r >= 0 ? "+" : ""}
                     {selected.agent.last_r.toFixed(2)}
                   </span>
@@ -706,7 +929,9 @@ export function AgentLineageGraph({
                     <span className="text-mist">E[R]</span>{" "}
                     <span
                       className={
-                        selected.agent.expectancy_r >= 0 ? "text-green" : "text-red"
+                        selected.agent.expectancy_r >= 0
+                          ? "text-green"
+                          : "text-red"
                       }
                     >
                       {selected.agent.expectancy_r >= 0 ? "+" : ""}
@@ -718,22 +943,16 @@ export function AgentLineageGraph({
             ) : null}
           </div>
         ) : hovered ? (
-          /* Hover preview — appears only when nothing is pinned.
-              Lighter chrome than the selected panel; no close button
-              because pointerleave dismisses it. Same anchored
-              top-right slot so the layout doesn't shift between
-              hover and selection. */
-          <div
-            className="absolute top-3 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40"
-          >
+          // Hover preview — desktop only (sm:block); mobile users get
+          // the pinned panel on tap instead. No close button because
+          // pointerleave dismisses it.
+          <div className="hidden sm:block absolute top-3 right-3 panel p-2.5 bg-black/90 backdrop-blur-sm max-w-[260px] text-[0.65rem] num pointer-events-none ring-1 ring-edge/40 z-10">
             <div className="font-mono text-slate-100 break-all text-[0.7rem]">
-              {hovered.isChampion ? "👑 " : ""}
+              {hovered.isChampion ? "🌿 " : ""}
               {hovered.id.replace(/^gen\d+-mut\d+-/, "")}
             </div>
             <div className="text-[0.55rem] text-mist mt-0.5 mb-1.5">
-              {hovered.isSeed
-                ? "phantom seed"
-                : `${hovered.family} · tap to pin`}
+              {hovered.isSeed ? "phantom seed" : `${hovered.family} · tap to pin`}
             </div>
             {hovered.agent ? (
               <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
@@ -767,11 +986,24 @@ export function AgentLineageGraph({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-3 text-[0.6rem] text-mist">
-        {(["liq-trend", "liq-fade", "vol-breakout", "funding-trend", "funding-arb", "polyedge", "polyfusion", "llm"] as const).map((f) => (
+        {(
+          [
+            "liq-trend",
+            "liq-fade",
+            "vol-breakout",
+            "funding-trend",
+            "funding-arb",
+            "polyedge",
+            "polyfusion",
+            "llm",
+          ] as const
+        ).map((f) => (
           <span key={f} className="inline-flex items-center gap-1.5">
             <span
               className="inline-block w-2 h-2 rounded-full"
-              style={{ background: (FAMILY_COLORS as Record<string, string>)[f] }}
+              style={{
+                background: (FAMILY_COLORS as Record<string, string>)[f],
+              }}
             />
             <span className="font-mono uppercase tracking-widest">{f}</span>
           </span>
