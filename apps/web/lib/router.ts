@@ -8,11 +8,12 @@ import type { SimEvent, SimEventKind, SimReaction } from "@/lib/simulate";
 /**
  * Trade-selection router.
  *
- * The global Σ R-champion is a fragile policy: vol-breakout-v0 dominates
- * the historical ranking but abstains on Polymarket leadership signals,
- * so a vol-breakout-only copy-trader misses every PM event the swarm
- * would otherwise have caught. The router below replaces that policy
- * with two layered decisions:
+ * The global champion is a fragile policy: even after Sharpe-ranking
+ * (which fixes the lifespan bias of Σ R), the single best agent on
+ * average still abstains on event kinds outside its family — a
+ * vol-breakout champion misses every Polymarket leadership signal
+ * the swarm would otherwise have caught. The router below replaces
+ * "follow champion" with two layered decisions:
  *
  *   1. Per-event-kind specialist — for a given event kind we pick the
  *      *best agent on that kind*. Polymarket leads route to polyedge,
@@ -55,7 +56,7 @@ function sharpeWeight(sharpe: number): number {
 
 /** Pick the specialist for an event kind. Among agents whose family
  *  matches the kind's preferred families, take the highest Sharpe with
- *  ≥10 decisions. Falls back to global Σ R champion if no eligible
+ *  ≥10 decisions. Falls back to global Sharpe champion if no eligible
  *  specialist exists yet (e.g. fresh swarm). */
 export function pickSpecialist(
   kind: SimEventKind,
@@ -70,8 +71,15 @@ export function pickSpecialist(
       .sort((a, b) => b.rolling_sharpe - a.rolling_sharpe);
     if (pool.length > 0) return pool[0];
   }
-  // Fallback: global champion by Σ R.
-  return [...agents].sort((a, b) => b.total_r - a.total_r)[0] ?? null;
+  // Fallback: global champion by Sharpe (mirrors Scoreboard::top_n
+  // in Rust). Σ R alone rewards lifespan over per-trade quality;
+  // Sharpe is variance-aware and lifespan-neutral.
+  return (
+    [...agents].sort(
+      (a, b) =>
+        b.rolling_sharpe - a.rolling_sharpe || b.total_r - a.total_r,
+    )[0] ?? null
+  );
 }
 
 export type EnsembleVote = {

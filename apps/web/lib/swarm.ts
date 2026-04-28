@@ -117,8 +117,23 @@ export function applySessionDelta(
       expectancy_r: decided > 0 ? total_r / decided : a.expectancy_r,
     };
   });
-  // Re-rank by total_r and update champion.
-  const sorted = [...nextAgents].sort((x, y) => y.total_r - x.total_r);
+  // Re-rank by per-trade Sharpe (mirrors Scoreboard::top_n in Rust),
+  // tiebreak by Σ R. Critical: must NOT sort by total_r alone, which
+  // accumulates with sample size and lets a long-lived mediocre agent
+  // beat a short-lived high-quality one. The session simulator above
+  // doesn't recompute rolling_sharpe (no per-trade history kept here),
+  // so Sharpe stays at the snapshot value through a session — making
+  // the champion stable across an event burst instead of oscillating
+  // when synthetic Σ R increments push different agents to the top.
+  // Without this fix the UI's displayed champion would flip from
+  // vol-breakout-v1 (Sharpe leader) back to vol-breakout-v0 (Σ R
+  // leader) every time the simulator added a synthetic trade — the
+  // exact bug the Rust executor was already fixed against.
+  const sorted = [...nextAgents].sort((x, y) => {
+    const sh = y.rolling_sharpe - x.rolling_sharpe;
+    if (sh !== 0) return sh;
+    return y.total_r - x.total_r;
+  });
   return {
     ...snap,
     agents: sorted,
