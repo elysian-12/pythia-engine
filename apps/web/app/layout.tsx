@@ -39,15 +39,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="/" className="block group">
               <PythiaWordmark size={36} />
             </a>
-            <nav className="flex items-center gap-2 sm:gap-3 text-xs flex-wrap">
+            <nav className="flex items-center gap-2 sm:gap-3 text-sm flex-wrap">
               <a
-                className="chip chip-mist hover:opacity-80 transition-opacity"
+                className="chip chip-mist hover:opacity-80 transition-opacity text-sm px-4 py-2 tracking-wider"
                 href="/performance"
               >
                 Agent details
               </a>
               <a
-                className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider px-3 py-1.5 ring-1 ring-cyan/40 shadow-[0_0_18px_rgba(34,211,238,0.25)]"
+                className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider text-sm px-5 py-2.5 ring-1 ring-cyan/40 shadow-[0_0_22px_rgba(34,211,238,0.3)]"
                 href="/tournament"
               >
                 Open tournament app →
