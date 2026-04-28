@@ -58,11 +58,21 @@ const OUTSIDE_COLOR = new THREE.Color("#4657de"); // purple rim
 const VERT = /* glsl */ `
 uniform float uTime;
 uniform float uSize;
+// 0 = collapsed at origin (big-bang start), 1 = fully settled into
+// the spiral disc. Driven from JS on every closed-loop pipeline
+// pulse: snapped to 0 then eased back to 1 over BANG_DURATION s.
+uniform float uExplosionT;
 attribute float aScale;
 attribute vec3 aColor;
 varying vec3 vColor;
+varying float vExplosion;
 void main() {
-  vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+  // Scale the resting position by the bang progress so every
+  // particle lerps from origin → its arm slot. Differential
+  // rotation still applies via uTime, so the dust ALSO spins
+  // outward as it expands — feels like the disc unfurling.
+  vec3 expandedPos = position * uExplosionT;
+  vec4 modelPosition = modelMatrix * vec4(expandedPos, 1.0);
   float distanceToCenter = length(modelPosition.xz);
   float angle = atan(modelPosition.x, modelPosition.z);
   float angleOffset = (1.0 / max(distanceToCenter, 0.1)) * uTime * 0.05;
@@ -72,18 +82,27 @@ void main() {
   vec4 viewPosition = viewMatrix * modelPosition;
   vec4 projectedPosition = projectionMatrix * viewPosition;
   gl_Position = projectedPosition;
-  gl_PointSize = uSize * aScale;
+  // Punch the points up early in the bang so the explosion reads
+  // as luminous, then settle to normal as uExplosionT → 1.
+  float bangBoost = 1.0 + (1.0 - uExplosionT) * 1.5;
+  gl_PointSize = uSize * aScale * bangBoost;
   gl_PointSize *= (1.0 / -viewPosition.z);
   vColor = aColor;
+  vExplosion = uExplosionT;
 }
 `;
 
 const FRAG = /* glsl */ `
 varying vec3 vColor;
+varying float vExplosion;
 void main() {
   float d = distance(gl_PointCoord, vec2(0.5));
   float strength = 1.0 - smoothstep(0.0, 0.5, d);
-  gl_FragColor = vec4(vColor * strength, strength);
+  // Add a brief white-hot tint at the front of the bang so the
+  // explosion reads as a flash rather than a gentle re-expansion.
+  float bangFlash = max(0.0, 1.0 - vExplosion) * 0.6;
+  vec3 col = vColor + vec3(bangFlash);
+  gl_FragColor = vec4(col * strength, strength);
 }
 `;
 
@@ -189,6 +208,10 @@ export function AgentLineageGraph({
   type SceneState = {
     updateAgents: (a: AgentStats[], champion: string | null) => void;
     pulse: (agentId: string | null) => void;
+    /** Trigger a big-bang re-expansion: particles + satellites
+     *  snap to the centre and ease back to their resting positions
+     *  over BANG_DURATION. Fired on every closed-loop pulse. */
+    bang: () => void;
     resetView: () => void;
     pickAgentAt: (clientX: number, clientY: number) => string | null;
   };
@@ -299,9 +322,17 @@ export function AgentLineageGraph({
     geom.setAttribute("aColor", new THREE.BufferAttribute(aColor, 3));
     geom.setAttribute("aScale", new THREE.BufferAttribute(aScale, 1));
 
-    const uniforms: { uTime: { value: number }; uSize: { value: number } } = {
+    const uniforms: {
+      uTime: { value: number };
+      uSize: { value: number };
+      uExplosionT: { value: number };
+    } = {
       uTime: { value: 0 },
       uSize: { value: 12 * renderer.getPixelRatio() },
+      // Default 1 = fully settled. Snapped to 0 by bang(), then
+      // eased back to 1 over BANG_DURATION seconds in the animate
+      // loop so the disc unfurls from the centre.
+      uExplosionT: { value: 1 },
     };
     const pMat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -616,12 +647,28 @@ export function AgentLineageGraph({
     // ── Animation loop.
     let raf = 0;
     const start = performance.now();
+    let lastFrameMs = start;
+    // Big-bang state. 1 = settled disc; bang() drops to 0 and the
+    // animate loop eases it back to 1 over BANG_DURATION seconds.
+    // Cubic-out so the explosion is violent at the front and settles
+    // gently — matches what an unfurling galaxy actually feels like.
+    const BANG_DURATION = 1.4;
+    let bangProgress = 1;
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
       const now = performance.now();
       const t = (now - start) / 1000;
+      const dt = Math.max(0, (now - lastFrameMs) / 1000);
+      lastFrameMs = now;
       uniforms.uTime.value = t;
+
+      // Advance the bang.
+      if (bangProgress < 1) {
+        bangProgress = Math.min(1, bangProgress + dt / BANG_DURATION);
+      }
+      const bangEased = 1 - Math.pow(1 - bangProgress, 3); // cubic-out
+      uniforms.uExplosionT.value = Math.max(0.01, bangEased);
 
       // Camera position on a sphere around (panX, 0, panZ).
       const tx = ctl.panX;
@@ -635,36 +682,59 @@ export function AgentLineageGraph({
       camera.lookAt(tx, 0, tz);
       if (!dragging) ctl.yaw += 0.0005;
 
-      // Sun breathe.
+      // Sun breathe + bang flash. Early in the bang the sun bursts
+      // bigger and brighter; settles to its baseline as the disc
+      // unfurls.
       const sunPulse = 1 + 0.06 * Math.sin(t * 1.1);
-      sunCore.scale.setScalar(sunPulse);
-      sunGlow.scale.set(2.4 * sunPulse, 2.4 * sunPulse, 1);
-      sunWash.scale.set(5.2 * sunPulse, 5.2 * sunPulse, 1);
-      sunGlowMat.opacity = 0.85 + 0.1 * Math.sin(t * 1.1);
+      const bangFlash = Math.max(0, 1 - bangEased) * 1.2;
+      sunCore.scale.setScalar(sunPulse * (1 + bangFlash * 0.8));
+      sunGlow.scale.set(
+        2.4 * sunPulse * (1 + bangFlash),
+        2.4 * sunPulse * (1 + bangFlash),
+        1,
+      );
+      sunWash.scale.set(
+        5.2 * sunPulse * (1 + bangFlash * 1.4),
+        5.2 * sunPulse * (1 + bangFlash * 1.4),
+        1,
+      );
+      sunGlowMat.opacity =
+        0.85 + 0.1 * Math.sin(t * 1.1) + bangFlash * 0.4;
+      sunWashMat.opacity = 0.45 + bangFlash * 0.35;
 
       // Decay activity and reposition each satellite along its arm.
-      // omegaScale (0.4–0.85) keeps satellites slower than the
-      // particle dust, with high-R agents catching up faster.
+      // omegaScale keeps satellites slower than particle dust; the
+      // bangEased factor pulls them in toward the centre at the
+      // front of a bang, then releases them back to their orbital
+      // slots in lockstep with the particle disc.
       for (const rec of records) {
         rec.activity *= 0.93;
         const ang = rec.theta + t * omegaAt(rec.r) * rec.omegaScale;
         rec.group.position.set(
-          Math.cos(ang) * rec.r,
+          Math.cos(ang) * rec.r * bangEased,
           0,
-          Math.sin(ang) * rec.r,
+          Math.sin(ang) * rec.r * bangEased,
         );
         const breathe = 1 + 0.07 * Math.sin(t * 1.5 + rec.theta);
         const isSelected = selectedRef.current === rec.id;
         const isHovered = hoveredRef.current === rec.id;
         const focusBoost = isSelected ? 1.5 : isHovered ? 1.2 : 1;
         const act = rec.activity;
-        rec.planet.scale.setScalar((1 + act * 1.6) * breathe * focusBoost);
+        // Compress the planet during the bang so it doesn't read as
+        // a stationary dot at the centre while the disc unfurls.
+        const bangShrink = 0.4 + 0.6 * bangEased;
+        rec.planet.scale.setScalar(
+          (1 + act * 1.6) * breathe * focusBoost * bangShrink,
+        );
         const baseHalo = 0.4;
-        const haloS = baseHalo + act * 0.9 + (isSelected ? 0.25 : 0);
+        const haloS =
+          (baseHalo + act * 0.9 + (isSelected ? 0.25 : 0)) * bangShrink;
         rec.halo.scale.set(haloS, haloS, 1);
         rec.haloMat.opacity =
-          0.55 + act * 0.45 + (isSelected ? 0.25 : isHovered ? 0.1 : 0);
-        rec.ringMat.opacity = act * 0.85 + (isSelected ? 0.35 : 0);
+          (0.55 + act * 0.45 + (isSelected ? 0.25 : isHovered ? 0.1 : 0)) *
+          bangEased;
+        rec.ringMat.opacity =
+          (act * 0.85 + (isSelected ? 0.35 : 0)) * bangEased;
         rec.ring.scale.setScalar(1 + act * 5 + (isSelected ? 1.6 : 0));
       }
 
@@ -682,6 +752,12 @@ export function AgentLineageGraph({
         if (!target)
           target = records[Math.floor(Math.random() * records.length)];
         target.activity = Math.max(target.activity, 1);
+      },
+      bang: () => {
+        // Snap to 0 → animate-loop eases back to 1 over BANG_DURATION
+        // so the disc unfurls from the centre on every closed-loop
+        // pipeline pulse.
+        bangProgress = 0;
       },
       resetView: () => Object.assign(ctl, DEFAULT_VIEW),
       pickAgentAt,
@@ -720,11 +796,14 @@ export function AgentLineageGraph({
     sceneRef.current?.updateAgents(frozenAgents, championId);
   }, [frozenAgents, championId]);
 
-  // ── Pulse on parent's pulseKey bump.
+  // ── Pulse + big-bang on parent's pulseKey bump. Each pipeline run
+  // triggers both: bang() unfurls the whole disc from the centre,
+  // pulse() lights up the specialist agent that handled the event.
   const lastPulseKey = useRef(pulseKey);
   useEffect(() => {
     if (pulseKey !== lastPulseKey.current && pulseKey > 0) {
       lastPulseKey.current = pulseKey;
+      sceneRef.current?.bang();
       sceneRef.current?.pulse(pulseAgentId ?? null);
     }
   }, [pulseKey, pulseAgentId]);
