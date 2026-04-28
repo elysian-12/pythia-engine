@@ -42,8 +42,10 @@ export function KiyotakaBadge() {
     );
   }
   const dot = h.ok ? "bg-green animate-pulse" : "bg-red";
+  // Drop the inline $price — BTC + ETH live in their own chip in
+  // the page header so both assets are visible side-by-side.
   const label = h.ok
-    ? `Kiyotaka live  ·  ${h.latency_ms}ms  ·  $${h.sample?.close?.toLocaleString(undefined, { maximumFractionDigits: 0 }) ?? "—"}`
+    ? `Kiyotaka live  ·  ${h.latency_ms}ms`
     : `Kiyotaka: ${h.reason ?? "down"}`;
   return (
     <span

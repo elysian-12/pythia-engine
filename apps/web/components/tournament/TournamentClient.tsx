@@ -1036,6 +1036,34 @@ export function TournamentClient() {
               header carries the snapshot age explicitly for visitors
               who care about it. */}
           <KiyotakaBadge />
+          {/* Live BTC + ETH marks side-by-side. Pulled from the
+              same `/api/marks` poll the paper ledger uses, so the
+              header reflects the prices the swarm is actually
+              trading against. */}
+          {marks.BTC != null || marks.ETH != null ? (
+            <span className="inline-flex items-center gap-2 num text-mist">
+              {marks.BTC != null ? (
+                <span>
+                  <span className="text-mist/60">BTC</span>{" "}
+                  <span className="text-slate-200">
+                    ${marks.BTC.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
+                </span>
+              ) : null}
+              {marks.ETH != null ? (
+                <span>
+                  <span className="text-mist/60">ETH</span>{" "}
+                  <span className="text-slate-200">
+                    ${marks.ETH.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
+                </span>
+              ) : null}
+            </span>
+          ) : null}
           <RegimeBadge regime={snap.regime} />
         </div>
       </header>

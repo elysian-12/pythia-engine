@@ -14,7 +14,7 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
           {agents.length} {agents.length === 1 ? "agent" : "agents"}
         </div>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto -mx-1 px-1">
+      <div className="flex-1 min-h-0 overflow-auto -mx-1 px-1 subtle-scroll">
         <table className="w-full text-xs">
           <caption className="sr-only">
             Pythia agent scoreboard, ranked by total R-multiple (Σ R).

@@ -359,20 +359,19 @@ export function LandingDashboard() {
           intrinsic height is zero in the row track calculation —
           row sizes off TradeSettingsPanel and AutoReplay's demo
           ledger scrolls internally if events overflow. */}
+      {/* AutoReplay on the LEFT (the wide demo loop is the focal
+          point); TradeSettings on the RIGHT (the narrow controls
+          panel that drives the demo). Same fixed-height pattern as
+          before — TradeSettings defines row height; AutoReplay
+          stretches to match and its demo ledger scrolls inside. */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 items-stretch">
-        <div className="lg:col-span-3">
-          <TradeSettingsPanel />
-        </div>
-        <div className="lg:col-span-9 lg:relative">
-          {/* Absolute inner pins AutoReplay's outer height to the
-              row track (defined by TradeSettingsPanel on the left).
-              AutoReplay then uses h-full + flex-col internally so
-              its demo ledger fills any remaining space and scrolls
-              inside that fixed slot — new events fill the visible
-              area and only that section overflows. */}
+        <div className="lg:col-span-9 lg:relative order-2 lg:order-1">
           <div className="lg:absolute lg:inset-0">
             <AutoReplay snap={snap} className="h-full" />
           </div>
+        </div>
+        <div className="lg:col-span-3 order-1 lg:order-2">
+          <TradeSettingsPanel />
         </div>
       </div>
 

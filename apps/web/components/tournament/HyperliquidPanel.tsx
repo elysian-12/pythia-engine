@@ -203,7 +203,7 @@ export function HyperliquidPanel({
           position opens here with stop + TP wired up.
         </div>
       ) : (
-        <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1 subtle-scroll">
           {[...open].reverse().map((p) => {
             const m = p.asset === "BTC" ? marks.BTC : marks.ETH;
             const pnl = m != null ? unrealizedPnl(p, m) : 0;
@@ -244,7 +244,7 @@ export function HyperliquidPanel({
               </button>
             ) : null}
           </div>
-          <div className="max-h-48 overflow-auto space-y-1 pr-1">
+          <div className="max-h-48 overflow-auto space-y-1 pr-1 subtle-scroll">
             {[...closed]
               .reverse()
               .slice(0, 30)
