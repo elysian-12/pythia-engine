@@ -910,7 +910,7 @@ export function TournamentClient() {
   // default since most repeat visitors don't need to re-read the
   // 8-step narrative.
   const descriptionPanel = (
-    <div className="panel overflow-hidden">
+    <div className="panel overflow-hidden shrink-0">
       <button
         type="button"
         onClick={() => setDescOpen((o) => !o)}
@@ -1110,7 +1110,10 @@ export function TournamentClient() {
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
           <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4 subtle-scroll">
-            <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40 shrink-0">
+            {/* Sticky tab header — keeps Trade settings / Portfolio
+                visible at the top of the sidebar even when the user
+                scrolls down through the active panel's content. */}
+            <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/85 backdrop-blur-sm shrink-0 sticky top-0 z-10">
               <button
                 type="button"
                 onClick={() => setRightTab("settings")}
@@ -1137,18 +1140,20 @@ export function TournamentClient() {
               </button>
             </div>
 
-            {rightTab === "settings" ? (
-              <SettingsForm />
-            ) : (
-              <HyperliquidPanel
-                open={openPositions}
-                closed={closedPositions}
-                marks={marks}
-                equity_usd={EQUITY_USD}
-                onClose={handleClosePosition}
-                onReset={handleReset}
-              />
-            )}
+            <div className="shrink-0">
+              {rightTab === "settings" ? (
+                <SettingsForm />
+              ) : (
+                <HyperliquidPanel
+                  open={openPositions}
+                  closed={closedPositions}
+                  marks={marks}
+                  equity_usd={EQUITY_USD}
+                  onClose={handleClosePosition}
+                  onReset={handleReset}
+                />
+              )}
+            </div>
 
             <CopyTradePanel
               agents={snap.agents}
@@ -1173,11 +1178,13 @@ export function TournamentClient() {
         >
           <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4 subtle-scroll">
             {descriptionPanel}
-            <AutoPilot
-              onFire={onFire}
-              onPrices={onPrices}
-              onStatus={setAutopilotOn}
-            />
+            <div className="shrink-0">
+              <AutoPilot
+                onFire={onFire}
+                onPrices={onPrices}
+                onStatus={setAutopilotOn}
+              />
+            </div>
             <EventSimulator
               onFire={onFire}
               lastFired={lastEvent}
