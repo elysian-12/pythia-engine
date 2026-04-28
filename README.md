@@ -307,21 +307,32 @@ generalises out-of-sample more than half the time.
 
 ## What's validated
 
-- **365 days · BTC + ETH perps via Kiyotaka · ~69k events** replayed through
-  the swarm in <1 s wall. Ranking + champion report at
-  `reports/swarm/<ts>/swarm.md`.
-- **Concurrent broadcast verified**: `broadcast_scales_constant_with_agent_count`
+Numbers below come from the deployed bundled snapshot
+(`apps/web/public/swarm-snapshot.json`) — what the `/performance` page
+actually shows, not a hypothetical backtest. Replay updates them every
+hour via cron.
+
+- **Deployed champion (gen 336):** `vol-breakout-v0` — 2,280 closed
+  trades, 62.85 % win rate, Σ R = **+1,694.83**, E[R] / trade =
+  **+0.74 R**, profit factor **3.01**, rolling Sharpe **0.54**.
+- **Statistical certification:** PSR ≈ **1.000**, DSR ≈ **1.000**
+  (multi-testing-corrected across all 27 agents), Sharpe 95 % CI =
+  **[0.42, 0.62]** — lower bound clears zero, so the edge survives
+  block-bootstrap resampling. Distribution: skew −0.41, kurt 1.28
+  (mild left-tail, not catastrophic). PBO computes once the
+  R-history matrix is dense enough for 8 splits × ≥32-trade columns.
+- **365 days · BTC + ETH perps via Kiyotaka · ~69 k events** replayed
+  through the swarm in **<1 s wall** on an M-series Mac. Ranking +
+  champion report at `reports/swarm/<ts>/swarm.md`.
+- **Concurrent broadcast verified:** `broadcast_scales_constant_with_agent_count`
   proves 25 agents complete in roughly the same wall-clock as 5 (single
-  cohort × 50 ms each) — i.e. agent observe() futures actually overlap
-  via `futures::join_all`, not iterate. Serial implementation would be
-  5× slower at n=25. Run `cargo test -p swarm broadcast` to verify
-  locally; all 4 broadcast tests + 19 other unit tests finish in 0.2 s.
-- Underlying systematic rules (grid-searched independently of the swarm) —
-  `liq-trend` at 1 % risk compound: $1k → $64k over the same year with
-  3 % max-DD, Sharpe 0.43, 75 % win rate across 578 trades.
-- The swarm currently **discovers** this champion autonomously without
-  being told which rule to run, then **gates each agent's next decision**
-  on its own recent expectancy so a once-good rule shuts itself off when
+  cohort × 50 ms each) — agent `observe()` futures actually overlap via
+  `futures::join_all`, not iterate. Serial would be 5× slower at n=25.
+  Run `cargo test -p swarm broadcast` locally; all 4 broadcast tests +
+  19 other unit tests finish in 0.2 s.
+- The swarm **discovered** the current champion autonomously (no rule
+  was hand-picked), then **gates each agent's next decision** on its
+  own recent expectancy, so a once-good rule shuts itself off when
   the regime stops paying.
 
 ## Docs
