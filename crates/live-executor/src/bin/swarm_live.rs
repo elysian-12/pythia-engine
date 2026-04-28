@@ -861,10 +861,18 @@ fn build_snapshot(
     generation: u64,
 ) -> Snapshot {
     let mut agents = scoreboard.all();
+    // Rank by per-trade Sharpe (variance-aware quality), then Σ R as
+    // tiebreak. Mirrors Scoreboard::top_n so the snapshot's `champion`
+    // field and per-leaderboard order match the executor's actual pick.
     agents.sort_by(|a, b| {
-        b.total_r
-            .partial_cmp(&a.total_r)
+        b.rolling_sharpe
+            .partial_cmp(&a.rolling_sharpe)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                b.total_r
+                    .partial_cmp(&a.total_r)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     // Pad with zero-stat placeholders for agents that haven't decided
     // yet, so the UI can still render all N slots.
@@ -881,7 +889,15 @@ fn build_snapshot(
             }
         }
     }
-    let champion = agents.first().cloned();
+    // Apply the same statistical floor as the executor's
+    // `Scoreboard::champion(min_decisions)` — under Sharpe ranking,
+    // <30-trade agents can have near-infinite Sharpe via zero-variance
+    // flukes. The leaderboard above still shows everyone; only the
+    // displayed champion respects the floor.
+    let champion = agents
+        .iter()
+        .find(|s| s.wins + s.losses >= 30)
+        .cloned();
     Snapshot {
         generated_at: chrono::Utc::now().timestamp(),
         generation,

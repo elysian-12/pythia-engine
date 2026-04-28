@@ -284,10 +284,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    // Rank by per-trade Sharpe (variance-aware quality), then Σ R as
+    // tiebreak. Mirrors Scoreboard::top_n so the printed CHAMPION and
+    // the snapshot's `champion` field match the live executor's pick
+    // — Σ R alone rewards lifespan over per-trade quality.
     ranked.sort_by(|a, b| {
-        b.total_r
-            .partial_cmp(&a.total_r)
+        b.rolling_sharpe
+            .partial_cmp(&a.rolling_sharpe)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                b.total_r
+                    .partial_cmp(&a.total_r)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     println!(
@@ -312,7 +321,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let champion = ranked.first();
+    // Apply the same min_decisions filter the executor uses — under
+    // Sharpe ranking, an agent with <30 trades can have near-infinite
+    // Sharpe via a zero-variance fluke. The full `ranked` is still
+    // shown above as a leaderboard, but the printed CHAMPION (and
+    // snapshot's `champion` field below) must respect the
+    // statistical floor that the live binary's `Scoreboard::champion`
+    // applies.
+    let champion = ranked
+        .iter()
+        .find(|s| s.wins + s.losses >= cons_cfg.min_decisions_for_champion);
     // Statistical certification of the champion's edge.
     //
     // Three orthogonal tests from `evaluation`:
@@ -451,7 +469,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "generated_at": ts,
         "generation": evolution.generation(),
         "n_agents": n_agents,
-        "champion": ranked.first(),
+        "champion": champion,
         "agents": ranked,
         "recent_decisions": [],
         "consensus": { "fires": consensus_count, "wins": consensus_wins },

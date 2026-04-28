@@ -33,7 +33,13 @@ impl Default for ConsensusCfg {
     fn default() -> Self {
         Self {
             top_k: 5,
-            min_decisions_for_champion: 3,
+            // Asymptotic-normality floor — under Sharpe ranking, agents
+            // with <30 trades can have near-infinite Sharpe via
+            // zero-variance flukes (3 wins in a row → Sharpe = ∞). 30
+            // is the conventional threshold where the central limit
+            // theorem makes the Sharpe estimate stable enough to
+            // compare across agents.
+            min_decisions_for_champion: 30,
             champion_agreement: 0.6,
             min_agent_count: 3,
             overall_agreement: 0.5,

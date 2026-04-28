@@ -262,17 +262,31 @@ impl Scoreboard {
         self.inner.lock().stats.values().cloned().collect()
     }
 
-    /// Top N agents by total R-multiple, breaking ties by win rate.
+    /// Top N agents by per-trade Sharpe (variance-aware quality), with
+    /// total R as tiebreaker. Sharpe is a ratio so it does NOT inflate
+    /// with lifespan — an agent with 50 trades and an agent with 500
+    /// trades, both with the same true edge, have the same expected
+    /// Sharpe (the 50-trade estimate is just noisier). That's why
+    /// Σ R was wrong: it accumulates with sample size and rewards
+    /// long-lived agents over per-trade quality.
+    ///
+    /// Empirical check across 9 ranking schemes (incl. raw Σ R, t-stat,
+    /// PSR, capped-fitness variants) on the live snapshot showed:
+    /// - Σ R, raw t-stat, raw PSR all produce the same lifespan-bug.
+    /// - Sharpe + min_decisions filter, capped-fitness, and PSR-gated
+    ///   schemes all converge on the same correct champion.
+    /// The simple Sharpe sort matches the sophisticated working
+    /// schemes' answer at a fraction of the complexity.
     pub fn top_n(&self, n: usize, min_decisions: usize) -> Vec<AgentStats> {
         let mut all = self.all();
         all.retain(|s| s.wins + s.losses >= min_decisions);
         all.sort_by(|a, b| {
-            b.total_r
-                .partial_cmp(&a.total_r)
+            b.rolling_sharpe
+                .partial_cmp(&a.rolling_sharpe)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    b.win_rate
-                        .partial_cmp(&a.win_rate)
+                    b.total_r
+                        .partial_cmp(&a.total_r)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         });
@@ -280,8 +294,8 @@ impl Scoreboard {
         all
     }
 
-    /// The best single agent — whoever has the highest total R with
-    /// at least `min_decisions` closed trades.
+    /// The best single agent — highest per-trade Sharpe with at least
+    /// `min_decisions` closed trades.
     pub fn champion(&self, min_decisions: usize) -> Option<AgentStats> {
         self.top_n(1, min_decisions).into_iter().next()
     }
@@ -308,16 +322,32 @@ mod tests {
     }
 
     #[test]
-    fn champion_by_total_r() {
+    fn champion_by_sharpe_not_total_r() {
+        // Regression: previously ranked by Σ R, which let a
+        // long-lived mediocre agent beat a short-lived high-quality
+        // one purely by accumulation. Now ranks by per-trade Sharpe.
+        //
+        // "old": 10 alternating ±, total_r = +2.5, Sharpe ≈ 0.32
+        // "young": 3 small wins, total_r = +1.8, Sharpe ≈ 6.0
+        //
+        // Σ R says "old" wins (2.5 > 1.8). Sharpe says "young" wins
+        // (per-trade quality is much higher despite smaller total).
+        // Champion must be "young" under the new sort order.
         let s = Scoreboard::new();
-        s.record(mkd("d1", "a"));
-        s.record(mkd("d2", "a"));
-        s.record(mkd("d3", "b"));
-        s.mark_outcome("d1", 2.0, 100.0);
-        s.mark_outcome("d2", 1.5, 80.0);
-        s.mark_outcome("d3", 3.0, 150.0);
-        let c = s.champion(1).unwrap();
-        assert_eq!(c.agent_id, "a"); // 2.0 + 1.5 = 3.5 vs 3.0
+        let old_seq: &[f64] = &[1.0, -0.5, 1.0, -0.5, 1.0, -0.5, 1.0, -0.5, 1.0, -0.5];
+        for (i, r) in old_seq.iter().enumerate() {
+            let id = format!("o{i}");
+            s.record(mkd(&id, "old"));
+            s.mark_outcome(&id, *r, *r * 100.0);
+        }
+        let young_seq: &[f64] = &[0.5, 0.6, 0.7];
+        for (i, r) in young_seq.iter().enumerate() {
+            let id = format!("y{i}");
+            s.record(mkd(&id, "young"));
+            s.mark_outcome(&id, *r, *r * 100.0);
+        }
+        let c = s.champion(3).unwrap();
+        assert_eq!(c.agent_id, "young", "champion should rank by Sharpe (per-trade quality), not Σ R (accumulation)");
     }
 
     #[test]
