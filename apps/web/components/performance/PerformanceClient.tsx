@@ -86,6 +86,21 @@ function Header({ snap }: { snap: SwarmSnapshot }) {
     (a, x) => a + x.wins + x.losses,
     0,
   );
+  const ageMin =
+    snap.generated_at != null
+      ? Math.max(0, Math.floor((Date.now() / 1000 - snap.generated_at) / 60))
+      : null;
+  // Stale = older than 90 minutes (cron is hourly with some lag).
+  const staleness =
+    ageMin == null ? "unknown" : ageMin > 90 ? "stale" : "fresh";
+  const ageText =
+    ageMin == null
+      ? "unknown"
+      : ageMin < 1
+        ? "just now"
+        : ageMin < 60
+          ? `${ageMin} min ago`
+          : `${Math.floor(ageMin / 60)} h ${ageMin % 60} min ago`;
   return (
     <section className="panel p-3 sm:p-4 h-full flex flex-col">
       <div className="flex items-baseline gap-3 flex-wrap mb-1.5">
@@ -94,6 +109,26 @@ function Header({ snap }: { snap: SwarmSnapshot }) {
         </span>
         <span className="text-[0.65rem] tracking-[0.4em] text-purple-300 uppercase">
           gen {snap.generation ?? 0} · {snap.agents.length} agents
+        </span>
+        {/* Liveness indicator — explicit to the visitor that this
+            page is NOT a live feed. The cron rebuilds the snapshot
+            once an hour via cron-job.org → GitHub Actions →
+            swarm-backtest. The dot turns amber when the last refresh
+            is older than 90 minutes (cron probably skipped a tick). */}
+        <span
+          className={`inline-flex items-center gap-1.5 text-[0.6rem] tracking-[0.25em] uppercase ml-auto px-2 py-0.5 rounded-sm border ${
+            staleness === "stale"
+              ? "border-amber/50 text-amber"
+              : "border-edge/60 text-mist"
+          }`}
+          title="The /performance page is not a live feed. The bundled snapshot is rebuilt once an hour via cron-job.org → GitHub Actions → swarm-backtest, then committed and Vercel auto-redeploys. Tournament events you fire don't update these numbers."
+        >
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full ${
+              staleness === "stale" ? "bg-amber" : "bg-cyan animate-pulse"
+            }`}
+          />
+          Hourly · last refresh {ageText}
         </span>
       </div>
       <div className="flex items-baseline justify-between gap-3 flex-wrap">
