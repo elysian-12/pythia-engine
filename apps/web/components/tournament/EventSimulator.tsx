@@ -6,6 +6,11 @@ import type { SimAsset, SimDirection, SimEvent, SimEventKind } from "@/lib/simul
 type Props = {
   onFire: (ev: SimEvent) => void;
   lastFired?: SimEvent | null;
+  /** Optional class merged onto the panel root — used by the
+   *  tournament left sidebar to tell the panel to fill remaining
+   *  vertical space ("h-full flex flex-col") so the visible bottom
+   *  edge aligns with the centre column. */
+  className?: string;
 };
 
 const EVENT_KIND_META: Record<SimEventKind, { label: string; hint: string }> = {
@@ -31,7 +36,7 @@ const EVENT_KIND_META: Record<SimEventKind, { label: string; hint: string }> = {
   },
 };
 
-export function EventSimulator({ onFire, lastFired }: Props) {
+export function EventSimulator({ onFire, lastFired, className }: Props) {
   const [asset, setAsset] = useState<SimAsset>("BTC");
   const [kind, setKind] = useState<SimEventKind>("liq-spike");
   const [direction, setDirection] = useState<SimDirection>("long");
@@ -50,7 +55,7 @@ export function EventSimulator({ onFire, lastFired }: Props) {
   };
 
   return (
-    <div className="panel p-5">
+    <div className={`panel p-5 ${className ?? ""}`}>
       <div className="text-xs uppercase tracking-[0.3em] text-mist mb-1">
         Event simulator
       </div>

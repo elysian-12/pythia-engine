@@ -1027,16 +1027,16 @@ export function TournamentClient() {
           </h2>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap text-[0.65rem] text-mist shrink-0">
-          {/* SourceBadge dropped — saying "Backtest replay" was
-              confusing because there's no live backtest running on
-              this page. The bundled snapshot's source is technically
-              "backtest" (the cron's swarm-backtest binary writes it)
-              but visitors read it as a separate concept. KiyotakaBadge
-              already covers the live-feed status. */}
+          {/* Header pruned: KiyotakaBadge covers the live-feed
+              status, RegimeBadge characterises the market mode.
+              SourceBadge / PhaseBadge / snapshot-time clock all
+              dropped — they were ceremony chrome (intro animation
+              phase, "Backtest replay" tag, snapshot-generated time)
+              that confused more than they informed. The /performance
+              header carries the snapshot age explicitly for visitors
+              who care about it. */}
           <KiyotakaBadge />
           <RegimeBadge regime={snap.regime} />
-          <PhaseBadge phase={phase} />
-          <span className="num">{fmt(snap.generated_at)}</span>
         </div>
       </header>
 
@@ -1109,8 +1109,8 @@ export function TournamentClient() {
             order-2
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
-          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 space-y-3 md:space-y-4 subtle-scroll">
-            <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
+          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4 subtle-scroll">
+            <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40 shrink-0">
               <button
                 type="button"
                 onClick={() => setRightTab("settings")}
@@ -1160,6 +1160,7 @@ export function TournamentClient() {
               eth_price={marks.ETH ?? DEFAULT_ETH}
               reactions={reactions}
               lastEvent={lastEvent}
+              className="md:flex-1 md:flex md:flex-col"
             />
           </div>
         </aside>
@@ -1170,14 +1171,18 @@ export function TournamentClient() {
             order-3
             md:col-span-2 md:col-start-1 md:row-start-1"
         >
-          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 space-y-3 md:space-y-4 subtle-scroll">
+          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4 subtle-scroll">
             {descriptionPanel}
             <AutoPilot
               onFire={onFire}
               onPrices={onPrices}
               onStatus={setAutopilotOn}
             />
-            <EventSimulator onFire={onFire} lastFired={lastEvent} />
+            <EventSimulator
+              onFire={onFire}
+              lastFired={lastEvent}
+              className="md:flex-1 md:flex md:flex-col"
+            />
           </div>
         </aside>
       </div>

@@ -18,6 +18,10 @@ type Props = {
   eth_price: number;
   reactions: SimReaction[];
   lastEvent: SimEvent | null;
+  /** Optional class merged onto the panel root — used by the
+   *  tournament right sidebar to tell the panel to fill remaining
+   *  vertical space ("h-full flex flex-col"). */
+  className?: string;
 };
 
 export function CopyTradePanel({
@@ -30,6 +34,7 @@ export function CopyTradePanel({
   eth_price,
   reactions,
   lastEvent,
+  className,
 }: Props) {
   const champion = agents[0] ?? null;
   const mirrored = useMemo(() => {
@@ -61,7 +66,7 @@ export function CopyTradePanel({
   };
 
   return (
-    <div className="panel p-5">
+    <div className={`panel p-5 ${className ?? ""}`}>
       <div className="flex items-center justify-between mb-3">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
           Trade
