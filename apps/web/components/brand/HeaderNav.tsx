@@ -24,7 +24,7 @@ export function HeaderNav() {
       </a>
       {onTournament ? null : (
         <a
-          className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider text-sm sm:text-base px-5 sm:px-6 py-2.5 sm:py-3 ring-1 ring-cyan/40 shadow-[0_0_22px_rgba(34,211,238,0.3)]"
+          className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider text-xs sm:text-sm px-4 sm:px-5 py-2 sm:py-2.5 ring-1 ring-cyan/40 shadow-[0_0_18px_rgba(34,211,238,0.25)]"
           href="/tournament"
         >
           Open tournament app →
