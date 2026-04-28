@@ -636,7 +636,13 @@ export function TournamentClient() {
       const stopDist = 2.0 * atr;
       const riskUsd =
         EQUITY_USD * riskFractionRef.current * route.decision.size_factor;
-      const n = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 3);
+      // Cap at 2× equity per single trade (down from 3×). With
+      // max_open_positions = 8 the previous 3× cap allowed up to
+      // 24× notional total — too aggressive even with stops.
+      // Quarter-Kelly + conviction × PF already keeps typical sizing
+      // ≤ 50 % of equity; the cap only bites when the user dials
+      // riskFraction up explicitly. 2× is the conservative ceiling.
+      const n = Math.min((riskUsd * price) / stopDist, EQUITY_USD * 2);
       if (n <= 0) return;
       direction = route.decision.direction;
       agentId = route.specialist.agent_id;

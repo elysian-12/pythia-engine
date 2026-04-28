@@ -230,7 +230,10 @@ export function simulateCopyTrade(
   // Scale risk by regime fitness so the paper notional matches what the
   // real Rust agent would size at — keeps the UI's what-if honest.
   const risk_usd = equity_usd * risk_fraction * react.fitness;
-  const notional = Math.min((risk_usd * price) / stop_dist, equity_usd * 3);
+  // 2× equity per-trade cap matches TournamentClient's router-path cap
+  // — keeps the user's pinned mirror path from being more aggressive
+  // than the default specialist path.
+  const notional = Math.min((risk_usd * price) / stop_dist, equity_usd * 2);
   const size_contracts = notional / price;
   const entry = price;
   const stop = react.direction === "long" ? entry - stop_dist : entry + stop_dist;
