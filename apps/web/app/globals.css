@@ -52,28 +52,39 @@ html, body {
   box-shadow: 0 0 8px #a855f7;
 }
 
-/* Subtle scrollbar styling for the sidebar overflow containers.
-   Default browser scrollbars are loud against the dark panels; thin
-   them down with a translucent thumb that brightens slightly on
-   hover. Works in Firefox via scrollbar-width and in WebKit via
+/* Subtle scrollbar — almost invisible at rest, fades in only when
+   the user is hovering the scroll container or actively scrolling.
+   Tightened from a 6 px / 22 %-opacity always-on thumb to a 4 px
+   thumb that's transparent by default and only at 28 % opacity on
+   hover. Works in Firefox via scrollbar-color and WebKit via
    ::-webkit-scrollbar. */
 .subtle-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 200ms ease;
+}
+.subtle-scroll:hover,
+.subtle-scroll:focus-within {
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
 }
 .subtle-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 .subtle-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .subtle-scroll::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.22);
-  border-radius: 3px;
+  background-color: transparent;
+  border-radius: 2px;
+  transition: background-color 200ms ease;
+}
+.subtle-scroll:hover::-webkit-scrollbar-thumb,
+.subtle-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.28);
 }
 .subtle-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(148, 163, 184, 0.45);
+  background-color: rgba(148, 163, 184, 0.5);
 }
 
 /* Screen-reader-only utility (for table captions, aria-text). */
