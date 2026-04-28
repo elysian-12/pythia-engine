@@ -22,7 +22,7 @@ import {
 import type { SimEvent } from "@/lib/simulate";
 import { simulateReactions, simulateCopyTrade } from "@/lib/simulate";
 import { checkTriggers, sumRealized, type PaperPosition } from "@/lib/paper";
-import { routeTrade } from "@/lib/router";
+import { routeTradeChampion } from "@/lib/router";
 import {
   DEFAULT_PORTFOLIO_CONFIG,
   decideEntry,
@@ -505,10 +505,19 @@ export function TournamentClient() {
     const rxs = simulateReactions(ev, currentSnap.agents, currentSnap.regime);
     const championId = currentSnap.champion?.agent_id ?? null;
 
-    // Route via the new specialist + ensemble policy. Replaces "follow
-    // global champion" with "follow this kind's specialist if the
-    // weighted-Sharpe ensemble agrees with conviction > 0.25".
-    const route = routeTrade(ev, rxs, currentSnap.agents);
+    // Champion-only routing — the demo's core thesis. The swarm's
+    // job is to surface the single best trader; once it has, we
+    // follow that one agent (and only that agent, unless the user
+    // explicitly pins a different one in the CopyTradePanel).
+    // Each agent's own evaluation (family rule + regime fitness)
+    // still runs upstream in simulateReactions, so the champion can
+    // sit events out — that's its decision, not ours.
+    const route = routeTradeChampion(
+      ev,
+      rxs,
+      currentSnap.agents,
+      championId,
+    );
     const userOverride = copyAgentRef.current; // explicit pin from CopyTradePanel
 
     // Keep float precision — performance.now() reports sub-ms (clamped

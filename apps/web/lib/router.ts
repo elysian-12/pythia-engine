@@ -234,3 +234,97 @@ export function routeTrade(
     },
   };
 }
+
+/** Champion-only trade routing — the demo pitch.
+ *
+ *  The point of the swarm IS to surface the single best trader. Once
+ *  the scoreboard has crowned a champion (highest Sharpe, ≥30 closed
+ *  trades), the copy-trader follows that one agent and only that
+ *  agent. No ensemble blending, no per-event-kind specialist
+ *  substitution. Each agent still runs its own evaluation in
+ *  simulateReactions (family rule + regime fitness gate), so the
+ *  champion can sit out an event it doesn't have an edge on — that's
+ *  the agent's own decision, not ours.
+ *
+ *  We still compute the Sharpe-weighted ensemble vote for two
+ *  reasons: (a) so the swarm-flip exit rule in `manageOnEvent` can
+ *  close a position when the rest of the swarm disagrees with the
+ *  champion at high conviction, and (b) so the trade feed can show
+ *  the full reaction context (how many fired, how the population
+ *  splits) for transparency. The vote does NOT drive entries.
+ *
+ *  Sizing: quarter-Kelly on the champion's lifetime profit factor.
+ *  No conviction multiplier — champion-only mode trusts the
+ *  champion's binary decision (it fired or it didn't). The user's
+ *  configured riskFraction sets the absolute risk budget.
+ */
+export function routeTradeChampion(
+  event: SimEvent,
+  reactions: SimReaction[],
+  agents: AgentStats[],
+  championAgentId: string | null,
+): RouteDecision {
+  // Ensemble vote still computed — manageOnEvent's swarm-flip exit
+  // rule reads it, and the trade feed renders it as context. Doesn't
+  // drive entries in this mode.
+  const vote = weightedVote(reactions, agents);
+
+  if (!championAgentId) {
+    return {
+      event,
+      specialist: null,
+      vote,
+      decision: {
+        direction: null,
+        size_factor: 0,
+        rationale: "no qualified champion yet (scoreboard still warming up)",
+      },
+    };
+  }
+
+  const champ = agents.find((a) => a.agent_id === championAgentId) ?? null;
+  const champReaction = reactions.find((r) => r.agent_id === championAgentId);
+
+  if (!champ || !champReaction || !champReaction.reacted) {
+    const short =
+      champ?.agent_id.replace(/^gen\d+-mut\d+-/, "") ?? championAgentId;
+    return {
+      event,
+      specialist: champ,
+      vote,
+      decision: {
+        direction: null,
+        size_factor: 0,
+        rationale: champ
+          ? `champion ${short} sat this event out (own gate)`
+          : "champion not present in this snapshot",
+      },
+    };
+  }
+
+  // Quarter-Kelly on the champion's profit factor. Same curve as
+  // specialist mode: PF=2 → ~25 % of risk-budget; PF=1 → 0; PF→∞
+  // caps at 100 %. No ensemble-conviction multiplier — in
+  // champion-only mode the agent's binary fire/no-fire decision IS
+  // the conviction signal.
+  const pf = champ.profit_factor ?? 1;
+  const kellyFrac = pf > 1 ? Math.min(1.0, 0.25 * Math.log2(pf) * 2) : 0;
+
+  const champShort = champ.agent_id.replace(/^gen\d+-mut\d+-/, "");
+  const direction: "long" | "short" = champReaction.direction;
+  const rationale = `champion ${champShort} · PF ${pf.toFixed(2)} · ${direction.toUpperCase()} · swarm vote ${vote.fired_count}/${reactions.length}`;
+
+  return {
+    event,
+    // `specialist` field repurposed as "the agent driving this trade"
+    // so downstream code (rationale rendering, position attribution)
+    // doesn't need to branch.
+    specialist: champ,
+    vote,
+    decision: {
+      direction,
+      size_factor: kellyFrac,
+      rationale,
+    },
+  };
+}
