@@ -14,10 +14,17 @@ type SignalsResponse = {
 
 type Status = "running" | "paused" | "error";
 
+export type AutoPilotHealth = {
+  status: Status;
+  failStreak: number;
+  lastError: string | null;
+};
+
 type Props = {
   onFire: (ev: SimEvent) => void;
   onPrices?: (p: { BTC: number | null; ETH: number | null }) => void;
   onStatus?: (running: boolean) => void;
+  onHealth?: (h: AutoPilotHealth) => void;
 };
 
 // Live-feed cadence presets. Default lands on 10s so visitors see the
@@ -29,7 +36,7 @@ const INTERVALS = [10, 15, 30, 60, 120, 300] as const;
 type IntervalSec = (typeof INTERVALS)[number];
 const DEFAULT_INTERVAL_SEC: IntervalSec = 10;
 
-export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
+export function AutoPilot({ onFire, onPrices, onStatus, onHealth }: Props) {
   // Live by default — no manual start. The cron is a self-managing
   // setInterval that wakes up every `intervalSec` seconds, calls
   // `/api/signals`, and dispatches new SimEvents downstream. Users can
@@ -59,6 +66,11 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
   const onFireRef = useRef(onFire);
   const onPricesRef = useRef(onPrices);
   const onStatusRef = useRef(onStatus);
+  const onHealthRef = useRef(onHealth);
+  // One-shot fast-retry timer. When a poll fails, we schedule a single
+  // immediate retry (~2 s) instead of waiting the full interval, so the
+  // feed recovers within ~2 s of a transient blip rather than 10 s.
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     onFireRef.current = onFire;
   }, [onFire]);
@@ -68,6 +80,39 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
   useEffect(() => {
     onStatusRef.current = onStatus;
   }, [onStatus]);
+  useEffect(() => {
+    onHealthRef.current = onHealth;
+  }, [onHealth]);
+
+  const emitHealth = useCallback(
+    (status: Status, lastError: string | null) => {
+      onHealthRef.current?.({
+        status,
+        failStreak: errStreakRef.current,
+        lastError,
+      });
+    },
+    [],
+  );
+
+  // Holds the latest `poll` so the retry timer can call it without
+  // re-creating the callback (which would force armTimer / start to
+  // re-build on every render).
+  const pollRef = useRef<() => Promise<void>>(async () => {});
+
+  // Schedule a one-shot fast retry after a failed poll. Without this,
+  // a single transient fetch failure leaves the user staring at the
+  // "Reconnecting" badge for the full poll interval (10s+) before the
+  // next regular tick. 2s is the sweet spot: long enough for momentary
+  // network blips to clear, short enough to feel responsive.
+  const scheduleRetry = useCallback(() => {
+    if (retryRef.current) return; // already pending
+    retryRef.current = setTimeout(() => {
+      retryRef.current = null;
+      // Only retry if the regular timer is still armed (i.e. not paused).
+      if (timerRef.current) void pollRef.current();
+    }, 2000);
+  }, []);
 
   const poll = useCallback(async () => {
     try {
@@ -78,8 +123,11 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       setLastPollTs(data.ts);
       if (!data.ok) {
         errStreakRef.current += 1;
-        setErr(data.reason ?? "detector error");
+        const reason = data.reason ?? "detector error";
+        setErr(reason);
         setStatus("error");
+        emitHealth("error", reason);
+        scheduleRetry();
         return;
       }
       errStreakRef.current = 0;
@@ -94,6 +142,7 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
         setErr(null);
       }
       setStatus("running");
+      emitHealth("running", null);
       if (data.prices && onPricesRef.current) {
         onPricesRef.current({
           BTC: data.prices.BTC ?? null,
@@ -113,10 +162,18 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
       }
     } catch (e) {
       errStreakRef.current += 1;
-      setErr((e as Error).message);
+      const reason = (e as Error).message;
+      setErr(reason);
       setStatus("error");
+      emitHealth("error", reason);
+      scheduleRetry();
     }
-  }, []);
+  }, [emitHealth, scheduleRetry]);
+
+  // Mirror latest poll into the ref so scheduleRetry can call it.
+  useEffect(() => {
+    pollRef.current = poll;
+  }, [poll]);
 
   const armTimer = useCallback(
     (sec: number) => {
@@ -139,8 +196,11 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
   const stop = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
+    if (retryRef.current) clearTimeout(retryRef.current);
+    retryRef.current = null;
     setStatus("paused");
     onStatusRef.current?.(false);
+    onHealthRef.current?.({ status: "paused", failStreak: 0, lastError: null });
   }, []);
 
   const togglePaused = useCallback(() => {
@@ -158,6 +218,8 @@ export function AutoPilot({ onFire, onPrices, onStatus }: Props) {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = null;
+      if (retryRef.current) clearTimeout(retryRef.current);
+      retryRef.current = null;
     };
     // intentionally only on mount — the interval-change effect below
     // re-arms when `intervalSec` updates so we don't double-tick here.

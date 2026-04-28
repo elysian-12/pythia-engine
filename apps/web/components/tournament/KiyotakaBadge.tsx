@@ -11,7 +11,22 @@ type Health = {
   ts: number;
 };
 
-export function KiyotakaBadge() {
+type Props = {
+  /** Live feed status from AutoPilot. When the feed is failing the
+   *  badge degrades to amber even if the once-a-minute /api/kiyotaka
+   *  probe is still green — otherwise the header shows "live" while
+   *  the page-level live feed shows "Reconnecting", which is the
+   *  exact contradiction visitors flagged. */
+  feedStatus?: "running" | "paused" | "error" | null;
+  feedFailStreak?: number;
+  feedError?: string | null;
+};
+
+export function KiyotakaBadge({
+  feedStatus,
+  feedFailStreak = 0,
+  feedError,
+}: Props = {}) {
   const [h, setH] = useState<Health | null>(null);
 
   useEffect(() => {
@@ -41,23 +56,42 @@ export function KiyotakaBadge() {
       </span>
     );
   }
-  const dot = h.ok ? "bg-green animate-pulse" : "bg-red";
-  // Drop the inline $price — BTC + ETH live in their own chip in
-  // the page header so both assets are visible side-by-side.
-  const label = h.ok
-    ? `Kiyotaka live  ·  ${h.latency_ms}ms`
-    : `Kiyotaka: ${h.reason ?? "down"}`;
+
+  // Reconcile the once-a-minute probe with the live feed's poll cadence.
+  // If the feed is in error state we surface "degraded" rather than the
+  // probe's stale "live" — the feed is the better real-time signal.
+  const probeOk = h.ok;
+  const feedOk = feedStatus !== "error";
+  const live = probeOk && feedOk;
+  const degraded = probeOk && !feedOk;
+
+  let dot: string;
+  let textColor: string;
+  let label: string;
+  let title: string | undefined;
+
+  if (live) {
+    dot = "bg-green animate-pulse";
+    textColor = "text-green";
+    label = `Kiyotaka live  ·  ${h.latency_ms}ms`;
+    title = `GET /v1/points · ${h.sample?.symbol} @ ${h.sample?.exchange} · candle ${h.sample?.candle_ts}`;
+  } else if (degraded) {
+    dot = "bg-amber animate-pulse";
+    textColor = "text-amber";
+    const streak = feedFailStreak > 0 ? ` (${feedFailStreak} fail${feedFailStreak === 1 ? "" : "s"})` : "";
+    label = `Kiyotaka degraded${streak}`;
+    title = `Live feed failing: ${feedError ?? "unknown"} — probe still OK`;
+  } else {
+    dot = "bg-red";
+    textColor = "text-red";
+    label = `Kiyotaka: ${h.reason ?? "down"}`;
+    title = h.reason;
+  }
+
   return (
-    <span
-      className="inline-flex items-center gap-2 text-[0.65rem]"
-      title={
-        h.ok
-          ? `GET /v1/points · ${h.sample?.symbol} @ ${h.sample?.exchange} · candle ${h.sample?.candle_ts}`
-          : h.reason
-      }
-    >
+    <span className="inline-flex items-center gap-2 text-[0.65rem]" title={title}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-      <span className={h.ok ? "text-green" : "text-red"}>{label}</span>
+      <span className={textColor}>{label}</span>
     </span>
   );
 }

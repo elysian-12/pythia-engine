@@ -8,7 +8,7 @@ import { EventSimulator } from "./EventSimulator";
 import { CopyTradePanel } from "./CopyTradePanel";
 import { LiveTradeFeed, type FeedEntry } from "./LiveTradeFeed";
 import { KiyotakaBadge } from "./KiyotakaBadge";
-import { AutoPilot } from "./AutoPilot";
+import { AutoPilot, type AutoPilotHealth } from "./AutoPilot";
 import { HyperliquidPanel } from "./HyperliquidPanel";
 import { PipelineRail } from "./PipelineRail";
 import {
@@ -140,6 +140,10 @@ export function TournamentClient() {
   const [pulseKey, setPulseKey] = useState(0);
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
   const [autopilotOn, setAutopilotOn] = useState(false);
+  // Health of the live feed (Kiyotaka poll loop). Used so the header
+  // KiyotakaBadge can degrade in lock-step with the in-page feed
+  // instead of showing "live" while the feed shows "Reconnecting".
+  const [feedHealth, setFeedHealth] = useState<AutoPilotHealth | null>(null);
   // Right-sidebar tabbed view: settings ⇄ portfolio. Default to
   // portfolio because once positions are open that's what the user
   // checks most. The CopyTrader sits below the tabs so it's always
@@ -1035,7 +1039,11 @@ export function TournamentClient() {
               that confused more than they informed. The /performance
               header carries the snapshot age explicitly for visitors
               who care about it. */}
-          <KiyotakaBadge />
+          <KiyotakaBadge
+            feedStatus={feedHealth?.status ?? null}
+            feedFailStreak={feedHealth?.failStreak ?? 0}
+            feedError={feedHealth?.lastError ?? null}
+          />
           {/* Live BTC + ETH marks side-by-side. Pulled from the
               same `/api/marks` poll the paper ledger uses, so the
               header reflects the prices the swarm is actually
@@ -1212,6 +1220,7 @@ export function TournamentClient() {
                 onFire={onFire}
                 onPrices={onPrices}
                 onStatus={setAutopilotOn}
+                onHealth={setFeedHealth}
               />
             </div>
             <EventSimulator

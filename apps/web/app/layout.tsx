@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { PythiaWordmark } from "@/components/brand/PythiaWordmark";
+import { HeaderNav } from "@/components/brand/HeaderNav";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -39,21 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="/" className="block group">
               <PythiaWordmark size={36} />
             </a>
-            <nav className="flex items-center gap-2 sm:gap-3 text-base flex-wrap">
-              <a
-                className="chip chip-mist hover:opacity-80 transition-opacity text-base px-5 py-2.5 tracking-wider"
-                href="/performance"
-              >
-                Agent details
-              </a>
-              <a
-                className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider text-base px-6 py-3 ring-1 ring-cyan/40 shadow-[0_0_26px_rgba(34,211,238,0.35)]"
-                href="/tournament"
-              >
-                Open tournament app →
-              </a>
-              <span className="num text-mist hidden sm:inline">v0.3.0</span>
-            </nav>
+            <HeaderNav />
           </header>
           <main className="mt-6 sm:mt-8">{children}</main>
           <footer className="mt-10 sm:mt-12 text-xs text-mist flex items-center justify-between flex-wrap gap-2">
