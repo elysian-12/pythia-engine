@@ -242,12 +242,15 @@ export function AutoPilot({ onFire, onPrices, onStatus, onHealth }: Props) {
         ? "bg-red"
         : "bg-amber";
 
+  // "Live ·" prefix dropped — the green pulsing dot + "Live feed"
+  // header next to this label already conveys the live state.
+  // Repeating it on the right side was redundant.
   const statusLabel =
     status === "running"
-      ? `Live · polling every ${fmtInterval(intervalSec)}`
+      ? `polling every ${fmtInterval(intervalSec)}`
       : status === "error"
-        ? `Reconnecting (${errStreakRef.current} fail${errStreakRef.current === 1 ? "" : "s"})`
-        : "Paused";
+        ? `reconnecting (${errStreakRef.current} fail${errStreakRef.current === 1 ? "" : "s"})`
+        : "paused";
 
   return (
     <div className="panel p-5 relative overflow-hidden">

@@ -1037,10 +1037,10 @@ export function TournamentClient() {
           intentionally small so the globe remains the centerpiece. */}
       <header className="flex items-center justify-between gap-3 flex-wrap pb-2 border-b border-edge/40">
         <div className="flex items-center gap-3 flex-wrap min-w-0">
-          <span className="inline-flex items-center gap-1.5 chip chip-cyan text-[0.6rem] shrink-0">
-            <span className="w-1 h-1 rounded-full bg-cyan animate-pulse" />
-            Live
-          </span>
+          {/* Page-level "Live" pill removed — KiyotakaBadge on the
+              right already carries the canonical outside-indicator
+              with feed health + latency. The standalone pill was
+              cosmetic redundancy. */}
           <h2 className="text-sm sm:text-base lg:text-lg font-semibold text-slate-100 tracking-tight">
             Events → Swarm → Champion → Your trade
           </h2>
