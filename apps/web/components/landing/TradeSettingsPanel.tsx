@@ -106,9 +106,16 @@ export function TradeSettingsPanel() {
       }}
       id="trade-settings"
     >
-      <div className="absolute -top-3 left-5 px-3 py-0.5 bg-ink ring-1 ring-cyan/40 rounded-sm">
-        <span className="text-[0.55rem] tracking-[0.4em] text-cyan uppercase">
+      <div className="absolute -top-3 left-5 flex items-center gap-2">
+        <span className="px-3 py-0.5 bg-ink ring-1 ring-cyan/40 rounded-sm text-[0.55rem] tracking-[0.4em] text-cyan uppercase">
           ⚙ tune your portfolio
+        </span>
+        {/* Unmissable simulation tag — these knobs only drive the
+            paper auto-replay + paper tournament. Nothing here trades
+            real money. The amber color matches the existing "live
+            preview" hint used elsewhere when a wallet would attach. */}
+        <span className="px-2 py-0.5 bg-ink ring-1 ring-amber/60 rounded-sm text-[0.55rem] tracking-[0.4em] text-amber uppercase">
+          simulation only
         </span>
       </div>
       <div className="flex items-start justify-between flex-wrap gap-2 mb-3">
@@ -117,12 +124,14 @@ export function TradeSettingsPanel() {
             Tune your size
           </h3>
           <p className="text-[0.7rem] text-mist mt-1 leading-relaxed">
-            Drives the auto-replay above and the live tournament on{" "}
+            <span className="text-amber">Paper sim only · no real funds.</span>{" "}
+            These knobs drive the auto-replay above and the live
+            tournament on{" "}
             <a className="text-cyan hover:underline" href="/tournament">
               /tournament
             </a>
-            . Flip to <span className="text-amber">live preview</span> for
-            a Hyperliquid wallet.
+            . Flip to <span className="text-amber">live preview</span> to
+            stage a Hyperliquid wallet (execution wiring lands later).
           </p>
         </div>
         <ModeToggle mode={cfg.mode} onChange={(m) => set("mode", m)} />

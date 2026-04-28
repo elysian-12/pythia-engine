@@ -151,6 +151,41 @@ export function TournamentClient() {
   // styling makes the disclosure unmissable.
   const [descOpen, setDescOpen] = useState(false);
 
+  // Track the centre column's rendered height so the left + right
+  // sidebars can cap their max-height to it and overflow-y inside.
+  // Without this, settings/portfolio + autopilot/sim grow taller
+  // than the globe + pipeline column, opening a vertical gap below
+  // the centre and leaving the bottom edges of the three columns
+  // misaligned. ResizeObserver fires on every layout-affecting
+  // change (window resize, font load, snapshot refresh) so the
+  // sidebars stay aligned without polling. Disabled below md so
+  // mobile gets a natural single-column flow.
+  const mainColRef = useRef<HTMLElement | null>(null);
+  const [mainColHeight, setMainColHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = mainColRef.current;
+    if (!el || typeof window === "undefined") return;
+    const update = () => {
+      if (window.innerWidth >= 768) {
+        setMainColHeight(el.offsetHeight);
+      } else {
+        setMainColHeight(null);
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+  const sidebarStyle: React.CSSProperties =
+    mainColHeight != null
+      ? { maxHeight: mainColHeight, overflowY: "auto" }
+      : {};
+
   // Paper HL ledger — opens when the copy-trader's agent reacts to an event.
   const [openPositions, setOpenPositions] = useState<PaperPosition[]>([]);
   const [closedPositions, setClosedPositions] = useState<PaperPosition[]>([]);
@@ -1041,9 +1076,12 @@ export function TournamentClient() {
           L-shape gap that used to appear below a short sidebar
           before row 2 began. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-stretch">
-        {/* CENTER — globe + pipeline. Mobile order 1. */}
+        {/* CENTER — globe + pipeline. Mobile order 1. mainColRef is
+            measured by the parent so the sidebars can cap their height
+            to match this column. */}
         <main
-          className="space-y-3 md:space-y-4 min-w-0 h-full flex flex-col
+          ref={mainColRef}
+          className="space-y-3 md:space-y-4 min-w-0
             order-1
             md:col-span-7 md:col-start-3 md:row-start-1"
         >
@@ -1089,7 +1127,9 @@ export function TournamentClient() {
             context. Active tab gets a solid cyan slab so the change
             is unmissable; the inactive label is dim. */}
         <aside
+          style={sidebarStyle}
           className="space-y-3 md:space-y-4 min-w-0
+            md:pr-1
             order-2
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
@@ -1148,7 +1188,9 @@ export function TournamentClient() {
 
         {/* LEFT SIDEBAR — description + autopilot + simulator. Mobile order 3. */}
         <aside
-          className="space-y-3 md:space-y-4
+          style={sidebarStyle}
+          className="space-y-3 md:space-y-4 min-w-0
+            md:pr-1
             order-3
             md:col-span-2 md:col-start-1 md:row-start-1"
         >

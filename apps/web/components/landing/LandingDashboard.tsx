@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   agentFamily,
   FAMILY_COLORS,
@@ -149,6 +149,38 @@ export function LandingDashboard() {
   const [snapErr, setSnapErr] = useState<string | null>(null);
   const [marks, setMarks] = useState<Marks>({ BTC: null, ETH: null });
   const [equity, setEquity] = useState<EquityPoint[]>([]);
+
+  // Track TradeSettingsPanel's rendered height so the AutoReplay
+  // widget on the right can cap its height to match and overflow
+  // its demo ledger internally. Without this, every new event
+  // expands AutoReplay vertically and breaks the row's bottom-edge
+  // alignment with the settings panel on the left. Disabled below
+  // lg (where the two panels stack into a single column anyway).
+  const settingsRef = useRef<HTMLDivElement | null>(null);
+  const [settingsHeight, setSettingsHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = settingsRef.current;
+    if (!el || typeof window === "undefined") return;
+    const update = () => {
+      if (window.innerWidth >= 1024) {
+        setSettingsHeight(el.offsetHeight);
+      } else {
+        setSettingsHeight(null);
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+  const autoReplayStyle: React.CSSProperties =
+    settingsHeight != null
+      ? { maxHeight: settingsHeight, overflowY: "auto" }
+      : {};
 
   useEffect(() => {
     let alive = true;
@@ -348,13 +380,14 @@ export function LandingDashboard() {
       </section>
 
       {/* TradeSettings ⇄ AutoReplay — side-by-side at 3/9 split on
-          desktop so the small input widget hugs the left edge while
-          the demo loop fills the rest of the row. Stacks on mobile. */}
+          desktop. AutoReplay caps its height to the TradeSettings
+          panel and scrolls its demo ledger internally so new events
+          fill the existing widget rather than pushing the row taller. */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 items-start">
-        <div className="lg:col-span-3">
+        <div ref={settingsRef} className="lg:col-span-3">
           <TradeSettingsPanel />
         </div>
-        <div className="lg:col-span-9">
+        <div className="lg:col-span-9 lg:pr-1" style={autoReplayStyle}>
           <AutoReplay snap={snap} />
         </div>
       </div>
