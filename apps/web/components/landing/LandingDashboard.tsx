@@ -364,8 +364,14 @@ export function LandingDashboard() {
           <TradeSettingsPanel />
         </div>
         <div className="lg:col-span-9 lg:relative">
-          <div className="lg:absolute lg:inset-0 lg:overflow-y-auto lg:pr-1">
-            <AutoReplay snap={snap} />
+          {/* Absolute inner pins AutoReplay's outer height to the
+              row track (defined by TradeSettingsPanel on the left).
+              AutoReplay then uses h-full + flex-col internally so
+              its demo ledger fills any remaining space and scrolls
+              inside that fixed slot — new events fill the visible
+              area and only that section overflows. */}
+          <div className="lg:absolute lg:inset-0">
+            <AutoReplay snap={snap} className="h-full" />
           </div>
         </div>
       </div>

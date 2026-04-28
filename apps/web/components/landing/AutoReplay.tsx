@@ -120,7 +120,17 @@ const DEFAULT_SETTINGS: AutoReplaySettings = {
   wallet_address: "",
 };
 
-export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
+export function AutoReplay({
+  snap,
+  className,
+}: {
+  snap: SwarmSnapshot | null;
+  /** Optional class merged onto the section root. The landing page
+   *  passes "h-full" so AutoReplay fills the height of the row track
+   *  defined by TradeSettingsPanel on the left, and the inner trade
+   *  ledger scrolls instead of pushing the row taller. */
+  className?: string;
+}) {
   const [seed, setSeed] = useState(1);
   const [stage, setStage] = useState<Stage>("event-fired");
   const [trades, setTrades] = useState<DemoTrade[]>([]);
@@ -304,7 +314,7 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
   if (!snap) return null;
 
   return (
-    <section className="panel p-5 md:p-6 relative overflow-hidden">
+    <section className={`panel p-5 md:p-6 relative overflow-hidden flex flex-col ${className ?? ""}`}>
       <div
         className="pointer-events-none absolute inset-0 opacity-30"
         style={{
@@ -312,7 +322,7 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
             "radial-gradient(circle at 15% 50%, rgba(34,211,238,0.10), transparent 40%)",
         }}
       />
-      <div className="relative">
+      <div className="relative flex-1 min-h-0 flex flex-col">
         <div className="flex items-start justify-between flex-wrap gap-2 mb-4">
           <div>
             <div className="text-[0.6rem] tracking-[0.4em] text-cyan uppercase">
@@ -488,9 +498,13 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
           />
         </div>
 
-        {/* Trade ledger */}
-        <div className="rounded-sm border border-edge/60 bg-black/20">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-edge/50">
+        {/* Trade ledger — flex-1 grows to fill the remaining height
+            of the panel; only the row list inside scrolls. The
+            demo-events stream fills the existing widget instead of
+            pushing the panel taller and breaking row alignment with
+            TradeSettingsPanel on the left. */}
+        <div className="rounded-sm border border-edge/60 bg-black/20 flex-1 min-h-[200px] flex flex-col min-w-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-edge/50 shrink-0">
             <div className="text-[0.6rem] uppercase tracking-widest text-mist">
               Demo ledger · last {trades.length}
             </div>
@@ -501,11 +515,11 @@ export function AutoReplay({ snap }: { snap: SwarmSnapshot | null }) {
             </div>
           </div>
           {trades.length === 0 ? (
-            <div className="px-3 py-6 text-center text-[0.7rem] text-mist">
+            <div className="px-3 py-6 text-center text-[0.7rem] text-mist flex-1 flex items-center justify-center">
               First trade settles in a few seconds…
             </div>
           ) : (
-            <div className="divide-y divide-edge/40 max-h-[260px] overflow-auto">
+            <div className="divide-y divide-edge/40 flex-1 min-h-0 overflow-auto subtle-scroll">
               {trades.map((t) => (
                 <TradeRow key={t.id} t={t} />
               ))}
