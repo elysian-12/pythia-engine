@@ -748,7 +748,7 @@ export function AgentLineageGraph({
     <section className="panel p-4 sm:p-5 relative">
       <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div className="text-xs uppercase tracking-[0.3em] text-amber/80">
-          Pythian galaxy · swarm field
+          Pythian agora · swarm field
         </div>
         <div className="text-[0.65rem] text-mist num">
           gen {generation} · {frozenAgents.length} agents
@@ -764,7 +764,7 @@ export function AgentLineageGraph({
         <div
           ref={mountRef}
           className="w-full aspect-[16/10] rounded-sm bg-black border border-edge/40 select-none touch-none overflow-hidden"
-          aria-label="Pythian galaxy — agent satellites"
+          aria-label="Pythian agora — agent satellites"
         />
 
         {/* Reset view button. */}
