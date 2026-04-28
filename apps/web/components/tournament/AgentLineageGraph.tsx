@@ -852,7 +852,7 @@ export function AgentLineageGraph({
       <div className="relative">
         <div
           ref={mountRef}
-          className="w-full aspect-[16/10] md:aspect-[16/9] rounded-sm bg-black border border-edge/40 select-none touch-none overflow-hidden"
+          className="w-full aspect-[16/10] md:aspect-[5/3] rounded-sm bg-black border border-edge/40 select-none touch-none overflow-hidden"
           aria-label="Pythian agora — agent satellites"
         />
 

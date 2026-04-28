@@ -24,8 +24,6 @@ const DEFAULTS: LandingConfig = {
   updated_at: 0,
 };
 
-const EVM_ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
-
 export function TradeSettingsPanel() {
   const [cfg, setCfg] = useState<LandingConfig>(DEFAULTS);
   const [saved, setSaved] = useState<"idle" | "saving" | "ok">("idle");
@@ -58,9 +56,6 @@ export function TradeSettingsPanel() {
     setCfg((prev) => ({ ...prev, [k]: v }));
     setSaved("idle");
   };
-
-  const walletValid =
-    cfg.wallet_address.length === 0 || EVM_ADDR_RE.test(cfg.wallet_address);
 
   const save = async () => {
     setSaved("saving");
@@ -110,10 +105,10 @@ export function TradeSettingsPanel() {
         <span className="px-3 py-0.5 bg-ink ring-1 ring-cyan/40 rounded-sm text-[0.55rem] tracking-[0.4em] text-cyan uppercase">
           ⚙ tune your portfolio
         </span>
-        {/* Unmissable simulation tag — these knobs only drive the
-            paper auto-replay + paper tournament. Nothing here trades
-            real money. The amber color matches the existing "live
-            preview" hint used elsewhere when a wallet would attach. */}
+        {/* Unmissable simulation tag — landing is now purely a
+            paper sandbox. The live-preview / wallet input lived
+            here previously; it's moved to the tournament's
+            Hyperliquid panel where actual trade flow happens. */}
         <span className="px-2 py-0.5 bg-ink ring-1 ring-amber/60 rounded-sm text-[0.55rem] tracking-[0.4em] text-amber uppercase">
           simulation only
         </span>
@@ -130,11 +125,10 @@ export function TradeSettingsPanel() {
             <a className="text-cyan hover:underline" href="/tournament">
               /tournament
             </a>
-            . Flip to <span className="text-amber">live preview</span> to
-            stage a Hyperliquid wallet (execution wiring lands later).
+            . The Hyperliquid wallet preview lives there too —
+            execution wiring lands later (no EIP-712 signer yet).
           </p>
         </div>
-        <ModeToggle mode={cfg.mode} onChange={(m) => set("mode", m)} />
       </div>
 
       {/* Single column — this panel sits in a narrow 3/12 sidebar on
@@ -195,59 +189,17 @@ export function TradeSettingsPanel() {
         </label>
       </div>
 
-      {/* Live mode reveals wallet input */}
-      {cfg.mode === "live" ? (
-        <div className="mt-5 rounded-sm border border-amber/30 bg-amber/5 p-4">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <div className="text-[0.6rem] uppercase tracking-widest text-amber">
-                Live preview
-              </div>
-              <p className="text-xs text-mist mt-1 max-w-xl">
-                Real-money execution is gated behind a manual review step — no
-                EIP-712 signer wired here yet. Add your Hyperliquid address to
-                preview where copy-trades would route. We never store keys.
-              </p>
-            </div>
-            <span className="chip chip-mist">disconnected</span>
-          </div>
-          <div className="mt-3">
-            <input
-              value={cfg.wallet_address}
-              onChange={(e) => set("wallet_address", e.target.value.trim())}
-              placeholder="0x… your EVM wallet (Hyperliquid uses Ethereum-style addresses)"
-              className={`w-full font-mono text-sm bg-black/40 border rounded-sm px-3 py-2 outline-none transition-colors ${
-                walletValid
-                  ? "border-edge/60 focus:border-cyan/60"
-                  : "border-red/60 focus:border-red"
-              }`}
-              maxLength={42}
-            />
-            {!walletValid ? (
-              <div className="text-[0.65rem] text-red mt-1">
-                Looks malformed — expecting 42 chars starting with 0x.
-              </div>
-            ) : null}
-            <div className="text-[0.65rem] text-mist mt-1">
-              Find yours at app.hyperliquid.xyz → Subaccount → Trader Address.
-              Read-only here; nothing leaves your browser yet.
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <div className="mt-5 flex items-center justify-between flex-wrap gap-2">
         <button
           onClick={save}
-          disabled={saved === "saving" || !walletValid}
+          disabled={saved === "saving"}
           className="chip chip-cyan px-4 py-1.5 hover:opacity-90 transition-opacity disabled:opacity-40"
         >
           {saved === "saving" ? "Saving…" : saved === "ok" ? "Saved" : "Save settings"}
         </button>
         <div className="text-[0.65rem] text-mist num">
-          mode <span className="text-slate-200">{cfg.mode}</span>
           {cfg.updated_at
-            ? ` · updated ${new Date(cfg.updated_at * 1000).toLocaleTimeString()}`
+            ? `updated ${new Date(cfg.updated_at * 1000).toLocaleTimeString()}`
             : ""}
         </div>
       </div>
@@ -256,37 +208,6 @@ export function TradeSettingsPanel() {
         <p className="mt-2 text-[0.7rem] text-amber">{warning}</p>
       ) : null}
     </section>
-  );
-}
-
-function ModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: "paper" | "live";
-  onChange: (m: "paper" | "live") => void;
-}) {
-  return (
-    <div className="inline-flex rounded-sm border border-edge/60 bg-black/30 p-0.5 text-[0.7rem]">
-      {(["paper", "live"] as const).map((m) => {
-        const active = mode === m;
-        return (
-          <button
-            key={m}
-            onClick={() => onChange(m)}
-            className={`px-3 py-1 rounded-sm uppercase tracking-widest transition-colors ${
-              active
-                ? m === "live"
-                  ? "bg-amber/15 text-amber"
-                  : "bg-cyan/15 text-cyan"
-                : "text-mist hover:text-slate-200"
-            }`}
-          >
-            {m === "live" ? "Live preview" : "Paper"}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 

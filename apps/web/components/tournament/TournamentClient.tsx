@@ -1040,12 +1040,13 @@ export function TournamentClient() {
         </div>
       </header>
 
-      {/* CHAMPION BANNER — full-width strip below the top header so
-          the champion's stat block sits in the user's eyeline before
-          the grid. Moving it out of the centre column also closes the
-          cross-column visual gap that appeared when one sidebar was
-          taller than the centre. */}
-      {championCard}
+      {/* Champion banner intentionally removed — was redundant
+          chrome above the galaxy. The champion is already visible
+          inside the galaxy as the central sun, and the family
+          legend below the canvas tells the user which color the
+          champion's family is. Leaderboard at the bottom shows
+          full champion stats. Removing this strip gives the galaxy
+          the vertical space it deserves. */}
 
       {/* MAIN GRID — 2/7/3 at md+, single col at mobile. Trade feed
           + scoreboard span the full page width below the 3 sidebar

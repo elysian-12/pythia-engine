@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PaperPosition } from "@/lib/paper";
 import { realizedPnl, sumRealized, unrealizedPnl } from "@/lib/paper";
 
@@ -13,6 +13,12 @@ type Props = {
   onReset?: () => void;
 };
 
+type HlMode = "paper" | "live";
+
+const HL_MODE_KEY = "pythia-hl-mode";
+const HL_WALLET_KEY = "pythia-hl-wallet";
+const EVM_ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+
 export function HyperliquidPanel({
   open,
   closed,
@@ -21,6 +27,42 @@ export function HyperliquidPanel({
   onClose,
   onReset,
 }: Props) {
+  // Mode + wallet address moved here from TradeSettingsPanel — the
+  // landing page is now purely a simulation; the live-preview toggle
+  // belongs on the page that actually shows trade flow. Persist
+  // locally only (no /api/config round-trip) since this is preview
+  // chrome until execution wiring exists.
+  const [mode, setMode] = useState<HlMode>("paper");
+  const [wallet, setWallet] = useState("");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const m = localStorage.getItem(HL_MODE_KEY);
+      if (m === "live" || m === "paper") setMode(m);
+      const w = localStorage.getItem(HL_WALLET_KEY) ?? "";
+      setWallet(w);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const setModePersist = (m: HlMode) => {
+    setMode(m);
+    try {
+      localStorage.setItem(HL_MODE_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  };
+  const setWalletPersist = (w: string) => {
+    setWallet(w);
+    try {
+      localStorage.setItem(HL_WALLET_KEY, w);
+    } catch {
+      /* ignore */
+    }
+  };
+  const walletValid = wallet.length === 0 || EVM_ADDR_RE.test(wallet);
+
   const realized = useMemo(() => sumRealized(closed), [closed]);
   const unrealized = useMemo(
     () =>
@@ -40,18 +82,93 @@ export function HyperliquidPanel({
 
   return (
     <div className="panel p-5 relative overflow-hidden">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-cyan animate-pulse" />
-          <div className="text-xs uppercase tracking-[0.3em] text-mist">
-            Hyperliquid paper
-          </div>
+      {/* BTC / ETH mark chips dropped from this header — the
+          KiyotakaBadge in the page top strip already shows live BTC
+          price, and the per-position rows below show their own
+          marks. Repeating them here was just visual noise. */}
+      <div className="flex items-center gap-2 mb-3">
+        <span
+          className={`inline-block w-2 h-2 rounded-full ${
+            mode === "live" ? "bg-amber animate-pulse" : "bg-cyan animate-pulse"
+          }`}
+        />
+        <div className="text-xs uppercase tracking-[0.3em] text-mist truncate">
+          Hyperliquid {mode === "live" ? "live" : "paper"}
         </div>
-        <div className="flex items-center gap-2 text-[0.65rem] text-mist num">
-          <MarkChip asset="BTC" px={marks.BTC} />
-          <MarkChip asset="ETH" px={marks.ETH} />
-        </div>
+        {mode === "live" ? (
+          <span className="chip chip-mist text-[0.55rem] tracking-widest">
+            disconnected
+          </span>
+        ) : null}
       </div>
+
+      {/* Mode toggle — paper is the working sandbox, live previews
+          where a Hyperliquid wallet would attach when execution
+          wiring lands. */}
+      <div className="flex items-center gap-1 p-0.5 rounded-md border border-edge/60 bg-black/30 mb-3">
+        <button
+          type="button"
+          onClick={() => setModePersist("paper")}
+          aria-pressed={mode === "paper"}
+          className={`flex-1 px-3 py-1.5 rounded text-[0.6rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+            mode === "paper"
+              ? "bg-cyan/15 text-cyan font-bold ring-1 ring-cyan/40"
+              : "text-mist hover:text-slate-100"
+          }`}
+        >
+          Paper
+        </button>
+        <button
+          type="button"
+          onClick={() => setModePersist("live")}
+          aria-pressed={mode === "live"}
+          className={`flex-1 px-3 py-1.5 rounded text-[0.6rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+            mode === "live"
+              ? "bg-amber/15 text-amber font-bold ring-1 ring-amber/40"
+              : "text-mist hover:text-slate-100"
+          }`}
+        >
+          Live preview
+        </button>
+      </div>
+
+      {/* Live-preview reveal — wallet input + plain-English disclaimer
+          that real execution isn't wired yet. Read-only; the address
+          is persisted to localStorage for the preview only. */}
+      {mode === "live" ? (
+        <div className="rounded-sm border border-amber/30 bg-amber/5 p-3 mb-4">
+          <div className="text-[0.55rem] uppercase tracking-[0.3em] text-amber">
+            Not wired up
+          </div>
+          <p className="text-[0.7rem] text-mist mt-1 leading-relaxed">
+            Real-money execution is gated behind a manual review —
+            no EIP-712 signer is hooked here yet. Paste a Hyperliquid
+            address to preview where copy-trades would route.
+            Read-only; nothing leaves your browser.
+          </p>
+          <input
+            value={wallet}
+            onChange={(e) => setWalletPersist(e.target.value.trim())}
+            placeholder="0x… your EVM wallet"
+            className={`mt-2 w-full font-mono text-[0.7rem] bg-black/40 border rounded-sm px-2.5 py-1.5 outline-none transition-colors ${
+              walletValid
+                ? "border-edge/60 focus:border-amber/60"
+                : "border-red/60 focus:border-red"
+            }`}
+            maxLength={42}
+          />
+          {!walletValid ? (
+            <div className="text-[0.6rem] text-red mt-1">
+              Looks malformed — expected 42 chars starting with 0x.
+            </div>
+          ) : (
+            <div className="text-[0.6rem] text-mist mt-1">
+              Find yours at app.hyperliquid.xyz → Subaccount → Trader
+              Address.
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-4 gap-2 text-[0.7rem] num mb-4">
         <Stat label="Equity" value={`$${equityLive.toFixed(0)}`} tone="neutral" />

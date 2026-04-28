@@ -7,7 +7,7 @@ export function Leaderboard({ agents }: { agents: AgentStats[] }) {
     <div className="panel p-4 flex flex-col h-[520px]">
       <div className="flex items-center justify-between mb-3 shrink-0">
         <div className="text-xs uppercase tracking-[0.3em] text-mist">
-          Scoreboard
+          Swarm scoreboard
         </div>
         <div className="text-[0.65rem] text-mist num">
           ranked by Σ R · {" "}
