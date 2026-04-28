@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchSwarm, agentFamily, FAMILY_COLORS, type AgentStats, type SwarmSnapshot } from "@/lib/swarm";
+import {
+  fetchSwarm,
+  agentFamily,
+  FAMILY_COLORS,
+  FAMILY_LABEL,
+  type AgentStats,
+  type SwarmSnapshot,
+} from "@/lib/swarm";
 
 // /performance — quant audit of the *deployed* swarm. Distinct from
 // /tournament (live decision loop) and the landing page (marketing
@@ -65,6 +72,7 @@ export function PerformanceClient() {
           <RDistribution agents={snap.agents} />
         </div>
       </div>
+      <FamilyPlaybook agents={snap.agents} />
       <ProvenanceFooter snap={snap} />
     </div>
   );
@@ -594,6 +602,149 @@ function RDistribution({ agents }: { agents: AgentStats[] }) {
         <div className="col-span-6">win R · loss R</div>
         <div className="col-span-1 text-right">PF</div>
         <div className="col-span-1 text-right">Σ R</div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+// Plain-English description of what each rule family is hunting.
+// Pairs with FAMILY_LABEL (the short tagline) and FAMILY_COLORS in
+// lib/swarm.ts. Updated when the swarm gets new families.
+const FAMILY_DESCRIPTION: Record<string, string> = {
+  "liq-trend":
+    "Forced-liquidation cascades push price hard in the flow direction. liq-trend rides the cascade — long when shorts get wiped, short when longs do — and scales out as momentum fades.",
+  "liq-fade":
+    "Once a cascade exhausts its forced sellers, price overshoots fair value. liq-fade fades the spike: short the panic top, long the panic flush. Mean-reversion against forced flow.",
+  "vol-breakout":
+    "Donchian-channel breakouts of the recent N-bar high or low signal a genuine regime shift. vol-breakout enters on the close beyond the channel and rides the new volatility regime.",
+  "funding-trend":
+    "Persistent positive funding means longs are paying shorts to stay in — overcrowded long positioning that often mean-reverts. funding-trend rides the prevailing funding sign on perps.",
+  "funding-arb":
+    "Fades extreme funding prints. Spike to +0.05% per 8 h? Step the other side and harvest the convergence as funding decays back toward zero.",
+  polyedge:
+    "Polymarket prediction-market prices often lead spot by 60–300 s on event-bound contracts. polyedge reads the SWP-mid gap and trades the directional implication on perps before spot catches up.",
+  polyfusion:
+    "The strictest, lowest-frequency setup. Requires a liquidation cascade, a funding extreme, and a Polymarket lead all aligned before firing. Highest conviction, fewest entries.",
+  llm: "LLM personas reasoning in plain English — five distinct dispositions (cautious risk manager, momentum chaser, contrarian fader, degen scalper, macro ranger). Their disagreements feed the ensemble vote.",
+  other: "Catch-all for any agents not yet classified into a named family.",
+};
+
+const FAMILY_ORDER = [
+  "liq-trend",
+  "liq-fade",
+  "vol-breakout",
+  "funding-trend",
+  "funding-arb",
+  "polyedge",
+  "polyfusion",
+  "llm",
+] as const;
+
+function FamilyPlaybook({ agents }: { agents: AgentStats[] }) {
+  const stats = useMemo(() => {
+    const m = new Map<
+      string,
+      { count: number; trades: number; r: number; sharpeNum: number }
+    >();
+    for (const a of agents) {
+      const f = agentFamily(a.agent_id);
+      const cur = m.get(f) ?? { count: 0, trades: 0, r: 0, sharpeNum: 0 };
+      const t = a.wins + a.losses;
+      cur.count += 1;
+      cur.trades += t;
+      cur.r += a.total_r;
+      cur.sharpeNum += a.rolling_sharpe * t;
+      m.set(f, cur);
+    }
+    const out: Record<
+      string,
+      { count: number; trades: number; r: number; sharpe: number }
+    > = {};
+    for (const [k, v] of m) {
+      out[k] = {
+        count: v.count,
+        trades: v.trades,
+        r: v.r,
+        sharpe: v.trades > 0 ? v.sharpeNum / v.trades : 0,
+      };
+    }
+    return out;
+  }, [agents]);
+
+  return (
+    <section className="panel p-3 sm:p-4 w-full">
+      <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <div className="text-xs uppercase tracking-[0.3em] text-mist">
+          Agent family playbook
+        </div>
+        <div className="text-[0.6rem] text-mist">
+          What each rule family is hunting · live counts from the snapshot
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {FAMILY_ORDER.map((f) => {
+          const hex = (FAMILY_COLORS as Record<string, string>)[f] ?? "#94a3b8";
+          const label = FAMILY_LABEL[f];
+          const desc = FAMILY_DESCRIPTION[f] ?? "";
+          const s = stats[f];
+          const rTone =
+            !s
+              ? "text-mist"
+              : s.r > 0
+                ? "text-green"
+                : s.r < 0
+                  ? "text-red"
+                  : "text-mist";
+          return (
+            <div
+              key={f}
+              className="rounded-sm border border-edge/60 bg-black/20 p-3 flex flex-col gap-2"
+            >
+              <div className="flex items-baseline gap-2">
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ background: hex, boxShadow: `0 0 6px ${hex}` }}
+                />
+                <span className="font-mono uppercase tracking-widest text-[0.65rem] text-slate-100">
+                  {f}
+                </span>
+                <span className="text-[0.55rem] text-mist num ml-auto">
+                  {s ? `${s.count} agents` : "—"}
+                </span>
+              </div>
+              <div className="text-[0.6rem] uppercase tracking-wider text-amber/80 leading-snug">
+                {label}
+              </div>
+              <p className="text-[0.7rem] text-slate-300 leading-relaxed flex-1">
+                {desc}
+              </p>
+              <div className="grid grid-cols-3 gap-2 text-[0.6rem] num pt-1.5 border-t border-edge/40">
+                <span>
+                  <span className="text-mist">Σ R</span>{" "}
+                  <span className={rTone}>
+                    {s
+                      ? `${s.r >= 0 ? "+" : ""}${s.r.toFixed(0)}`
+                      : "—"}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-mist">trades</span>{" "}
+                  <span className="text-slate-200">
+                    {s ? s.trades.toLocaleString() : "—"}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-mist">Sharpe</span>{" "}
+                  <span className="text-slate-200">
+                    {s && s.trades > 0 ? s.sharpe.toFixed(2) : "—"}
+                  </span>
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
