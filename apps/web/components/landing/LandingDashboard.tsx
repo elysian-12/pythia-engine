@@ -251,7 +251,7 @@ export function LandingDashboard() {
                   <span className="text-purple-300">Oracle of the Swarm</span>
                 </div>
                 <h2 className="mt-2 text-3xl md:text-4xl font-semibold text-slate-100 leading-[1.05] tracking-tight">
-                  25 agents.{" "}
+                  {snap?.agents.length ?? snap?.n_agents ?? "—"} agents.{" "}
                   <span
                     className="bg-gradient-to-r from-amber-300 via-purple-400 to-cyan bg-clip-text text-transparent"
                   >
@@ -276,22 +276,8 @@ export function LandingDashboard() {
                 the hero so it doesn't read as one wide column with a
                 bare wall on the right. */}
             <div className="lg:col-span-5 space-y-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center justify-end gap-3 flex-wrap">
                 <MarkTicker marks={marks} />
-                <div className="flex items-center gap-3">
-                  <Link
-                    href="/tournament"
-                    className="inline-flex items-center gap-1.5 chip chip-cyan hover:opacity-80 transition-opacity"
-                  >
-                    Open tournament →
-                  </Link>
-                  <Link
-                    href="/performance"
-                    className="text-[0.65rem] text-mist tracking-widest uppercase hover:text-slate-200"
-                  >
-                    Audit →
-                  </Link>
-                </div>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Stat

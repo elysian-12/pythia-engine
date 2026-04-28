@@ -7,7 +7,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Pythia — agent-swarm crypto trading",
   description:
-    "25 agents compete on Kiyotaka liquidations, funding, volume, and Polymarket leadership. Champion drives a paper Hyperliquid trade. PSR / DSR certified, regime-gated, evolved across runs.",
+    "An evolving swarm of agents competes on Kiyotaka liquidations, funding, volume, and Polymarket leadership. Champion drives a paper Hyperliquid trade. PSR / DSR certified, regime-gated, evolved across runs.",
   icons: {
     icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
   },
@@ -41,16 +41,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </a>
             <nav className="flex items-center gap-2 sm:gap-3 text-xs flex-wrap">
               <a
-                className="chip chip-cyan hover:opacity-80 transition-opacity"
-                href="/tournament"
-              >
-                Tournament
-              </a>
-              <a
                 className="chip chip-mist hover:opacity-80 transition-opacity"
                 href="/performance"
               >
-                Performance
+                Agent details
+              </a>
+              <a
+                className="chip chip-cyan hover:opacity-90 transition-all hover:scale-[1.03] font-semibold tracking-wider px-3 py-1.5 ring-1 ring-cyan/40 shadow-[0_0_18px_rgba(34,211,238,0.25)]"
+                href="/tournament"
+              >
+                Open tournament app →
               </a>
               <span className="num text-mist hidden sm:inline">v0.3.0</span>
             </nav>

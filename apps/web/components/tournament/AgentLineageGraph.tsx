@@ -514,7 +514,13 @@ export function AgentLineageGraph({
       });
     }
 
-    // ── Camera controls (orbit + pan + wheel zoom)
+    // ── Camera controls (orbit + pan + wheel zoom + pinch-zoom).
+    // Multi-touch is handled via a pointer Map: when 2 pointers are
+    // active we suspend orbit/pan and treat the pair as a pinch
+    // gesture, mapping distance-ratio onto ctl.dist. Mobile users
+    // were stuck in pan-only before — only one finger ever did
+    // anything because the original handler bailed if pointerId
+    // didn't match the captured drag.
     const ctl = { ...DEFAULT_VIEW };
     let dragging:
       | {
@@ -529,12 +535,34 @@ export function AgentLineageGraph({
           moved: boolean;
         }
       | null = null;
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let pinch:
+      | { startDist: number; startCtlDist: number }
+      | null = null;
     const dom = renderer.domElement;
     dom.style.touchAction = "none";
     dom.style.cursor = "grab";
 
+    const pinchDistance = (): number => {
+      const pts = Array.from(activePointers.values());
+      if (pts.length < 2) return 0;
+      const [a, b] = pts;
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       dom.setPointerCapture(e.pointerId);
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // Two fingers down → enter pinch mode, drop any single-pointer drag.
+      if (activePointers.size >= 2) {
+        dragging = null;
+        pinch = {
+          startDist: pinchDistance(),
+          startCtlDist: ctl.dist,
+        };
+        dom.style.cursor = "grab";
+        return;
+      }
       dom.style.cursor = "grabbing";
       const pan = e.button === 2 || e.shiftKey;
       dragging = {
@@ -550,6 +578,18 @@ export function AgentLineageGraph({
       };
     };
     const onPointerMove = (e: PointerEvent) => {
+      if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      // Pinch gesture wins over single-pointer drag while 2+ active.
+      if (pinch && activePointers.size >= 2) {
+        const cur = pinchDistance();
+        if (cur > 0 && pinch.startDist > 0) {
+          const ratio = pinch.startDist / cur;
+          ctl.dist = Math.max(2.5, Math.min(25, pinch.startCtlDist * ratio));
+        }
+        return;
+      }
       if (!dragging || dragging.id !== e.pointerId) return;
       const dx = e.clientX - dragging.startX;
       const dy = e.clientY - dragging.startY;
@@ -570,6 +610,18 @@ export function AgentLineageGraph({
       }
     };
     const onPointerUp = (e: PointerEvent) => {
+      activePointers.delete(e.pointerId);
+      // Drop out of pinch mode once a finger lifts; if one finger
+      // remains, don't restart a single-pointer drag mid-gesture —
+      // wait for the user to lift fully and put a finger down again.
+      if (pinch) {
+        pinch = null;
+        if (activePointers.size === 0) {
+          dragging = null;
+          dom.style.cursor = "grab";
+        }
+        return;
+      }
       if (!dragging || dragging.id !== e.pointerId) return;
       const wasDrag = dragging.moved;
       dragging = null;
@@ -844,10 +896,10 @@ export function AgentLineageGraph({
         </div>
       </div>
       <p className="text-[0.65rem] text-mist mb-3 max-w-2xl leading-relaxed">
-        Drag to orbit · scroll to zoom · shift-drag (or right-drag) to pan.
-        Champion is the sun at the core; satellites sit on the spiral
-        arms in rank order, brightest closest in. Tap a satellite for
-        its record.
+        Drag to orbit · scroll or pinch to zoom · shift-drag (or
+        right-drag) to pan. Champion is the sun at the core;
+        satellites sit on the spiral arms in rank order, brightest
+        closest in. Tap a satellite for its record.
       </p>
       <div className="relative">
         <div
