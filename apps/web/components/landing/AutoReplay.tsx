@@ -357,8 +357,12 @@ export function AutoReplay({
           </div>
         </div>
 
-        {/* Pipeline rail with per-stage latency stamps */}
-        <div className="flex items-stretch gap-2 mb-4">
+        {/* Pipeline rail with per-stage latency stamps. On mobile we
+            grid 2 cells per row so the 5 stages don't get squished
+            into 60-px cells where the label + latency stamp clip
+            ("1. champion-l…"). At sm+ each row holds all 5 cells
+            so the rail reads as a single linear pipeline.  */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
           {STAGES.map((s, idx) => {
             const here = stage === s;
             const passed = STAGES.indexOf(stage) > idx;
@@ -366,7 +370,7 @@ export function AutoReplay({
             return (
               <div
                 key={s}
-                className={`flex-1 rounded-sm border px-2 py-1.5 text-[0.6rem] uppercase tracking-widest transition-colors ${
+                className={`rounded-sm border px-2 py-1.5 text-[0.6rem] uppercase tracking-widest transition-colors ${
                   here
                     ? "border-cyan/60 text-cyan bg-cyan/5"
                     : passed
@@ -374,12 +378,12 @@ export function AutoReplay({
                       : "border-edge/40 text-mist/60"
                 }`}
               >
-                <div className="flex items-baseline justify-between gap-1">
-                  <span>
+                <div className="flex items-baseline justify-between gap-1 min-w-0">
+                  <span className="truncate">
                     <span className="num">{idx + 1}.</span> {labelOf(s)}
                   </span>
                   {t != null ? (
-                    <span className="num text-[0.6rem]">+{t}ms</span>
+                    <span className="num text-[0.6rem] shrink-0">+{t}ms</span>
                   ) : null}
                 </div>
               </div>
