@@ -16,44 +16,53 @@ surfaces the rule that is actually paying out under the current regime.
 ### The feedback loop in one sentence
 
 > **Kiyotaka events (liquidation, funding, vol-breakout, Polymarket
-> SWP-vs-mid lead, fusion) → 27 quant personas vote independently →
-> scoreboard tallies per-event-kind expertise → router picks the
-> specialist for *this* event kind → Sharpe-weighted ensemble vote sets
-> direction + conviction → quarter-Kelly sizes the trade → executor
-> copy-trades on Hyperliquid → realised PnL feeds back → every agent
-> gates its next decision on its own recent expectancy → every N events,
-> `Evolution` replaces the weakest half with mutated + crossed elite.**
+> SWP-vs-mid lead, fusion) → 27 quant personas evaluate independently →
+> scoreboard ranks them by **per-trade Sharpe** (≥30 closed trades to
+> qualify) → the single highest-Sharpe agent is the **champion** →
+> when the champion fires, the executor copy-trades it on Hyperliquid
+> at quarter-Kelly on the champion's profit factor → realised PnL feeds
+> back → every agent gates its next decision on its own recent
+> expectancy → every N events, `Evolution` replaces the weakest half
+> with mutated + crossed elite.**
 
 ### The eight steps in plain English
 
 1. **Event** — A market tick from Kiyotaka: forced liquidation, funding
    spike, price breakout, Polymarket lead, or two of those at once.
-2. **Vote** — All 27 agents see it at the same time. Each one decides
-   independently: trade or sit out. 7 follow rules, 5 reason as LLM
-   personas in plain English.
-3. **Self-check** — Before voting, every agent reads its own recent
+2. **Evaluate** — All 27 agents see the event simultaneously. Each one
+   decides independently: trade or sit out. 22 follow rules, 5 reason
+   as LLM personas in plain English.
+3. **Self-check** — Before deciding, every agent reads its own recent
    results. Losing money lately? It benches itself until it recovers.
+   The regime fitness gate also throws out trades hostile to the
+   current regime classifier.
 4. **Scoreboard** — When trades close, the realised win or loss flows
    back. Each agent's running profit, win rate, and statistical
-   confidence (Sharpe / PSR / DSR) update.
-5. **Specialist** — For *this* event kind, who has the best track
-   record? Polymarket leads → polyedge; liquidation cascades →
-   liq-trend; funding spikes → funding-trend. Specialists, not
-   generalists.
-6. **Ensemble** — Among the agents that did fire, sum the votes
-   weighted by track record. Strong agreement → trade in that
-   direction; split → sit out. Size by how confident the specialist
-   usually is when right (quarter-Kelly).
+   confidence (per-trade Sharpe / PSR / DSR) update.
+5. **Champion** — The single highest-Sharpe agent with ≥30 closed
+   trades wins the crown. **Sharpe is a ratio, so lifespan can't
+   inflate it** — a long-lived mediocre agent doesn't beat a
+   short-lived high-quality one (the way Σ R would have ranked it).
+   No champion exists until at least one agent clears the 30-trade
+   floor; the executor sits out until then.
+6. **Copy-trade** — When (and only when) the champion reacts to an
+   event, the executor follows: same direction, sized at quarter-Kelly
+   on the champion's profit factor, scaled by the user's risk budget,
+   capped at 2× equity per trade. Rest of the swarm vote is computed
+   for transparency and for the swarm-flip exit signal but does NOT
+   gate the entry — the champion's own decision is the conviction
+   signal.
 7. **Evolution** — Every N events, the worst agents get replaced by
-   tweaked copies of the best (small parameter shifts + swaps within
-   the same family). Each family keeps at least 2 seats so good
-   competition doesn't accidentally kill diversity.
-8. **Trade** — Direction + size opens a paper position on Hyperliquid.
-   The portfolio meta-agent then manages it: trails the stop to
-   break-even at +1 R, force-exits stale entries at the time stop, and
-   closes the position when the swarm flips opposite at high
-   conviction (no orphan positions). When it closes, the result flows
-   back to step 4 — the loop closes.
+   tweaked copies of the best (small parameter shifts + same-family
+   crossover). Fitness-ranked by `recent_expectancy × √n_recent` so
+   a fresh winner can rotate into the elite slot, not just the
+   long-lived seed.
+8. **Manage** — The paper position lives until: (a) stop or take
+   profit hits, (b) trailing stop trails to break-even at +1 R then
+   ratchets up, (c) time stop force-exits stale entries, or (d) the
+   rest of the swarm votes opposite at high conviction (swarm-flip
+   exit). When it closes, realised R flows back to step 4 — the loop
+   closes.
 
 - **PeerView** = what agents see *of each other* within one event
   (momentum / contrarian meta-behaviour) plus their *own* recent
@@ -186,44 +195,59 @@ apps/web/                    Next.js 15 · three.js · Vercel-deployed
 
 ## Trade selection — how a single event becomes a paper trade
 
-A common failure mode of swarm trading: one agent dominates the global
-ranking, but its rule family doesn't react to *every* event kind. The
-"global champion" copy-trader then misses entire categories — a
-vol-breakout-only champion abstains on every Polymarket leadership
-signal, and the user wonders why the swarm went quiet. The router
-in `apps/web/lib/router.ts` (mirroring the Rust path in
-`crates/swarm/src/scoring.rs`) replaces that policy with three
-layered decisions:
+The demo's thesis: **out of 27 agents the swarm surfaces the single
+best trader, and you copy that one.** The path is intentionally
+simple so the narrative reads cleanly:
 
-1. **Specialist for the event kind.** Each event arrives tagged with a
-   kind (`liq-spike`, `funding-spike`, `vol-breakout`, `polymarket-lead`,
-   `fusion`). The router picks the agent whose rule family is
-   preferred for that kind *and* whose rolling Sharpe is highest among
-   peers with ≥10 closed decisions. Falls back to the global Σ R
-   leader if no eligible specialist exists yet.
+1. **All 27 agents evaluate the event independently.** Each one runs
+   its own family rule (z-threshold, Donchian breakout, three-gate
+   polyedge, etc.) and its own gates (regime fitness gate, recent
+   expectancy gate). It either fires (with a direction) or sits out.
 
-2. **Sharpe-weighted ensemble vote.** Among the agents that fired on
-   this event, each one's vote is weighted by `clip(rolling_sharpe,
-   -2, +2) + 2`. Negative-Sharpe agents barely vote. The signed
-   conviction is `(weight_long − weight_short) / total_weight ∈
-   [−1, +1]`; if its absolute value is below 0.25, the copy-trader
-   sits the event out (split votes are noise).
+2. **Champion check.** The global champion is the highest-Sharpe
+   agent with ≥30 closed trades — Sharpe is a ratio so lifespan
+   doesn't inflate it the way Σ R would. **If the champion did NOT
+   fire on this event, the copy-trader skips it entirely.** Every
+   trade in the demo can be attributed to one specific agent: the
+   champion at that moment.
 
-3. **Quarter-Kelly sizing.** Final notional is
-   `equity × user_risk_fraction × kelly_frac × |conviction|`, where
-   `kelly_frac = clip(0.5 · log₂(specialist_PF), 0, 1)`. A specialist
-   with PF=2 gets 0.5 of the risk budget, PF=4 gets 1.0, PF<1 sits
-   out. Conviction further scales the size so a 0.3-conviction trade
-   is smaller than a 0.9-conviction one with the same specialist.
+3. **Quarter-Kelly sizing on the champion.** When the champion fires,
+   notional = `equity × user_risk_fraction × kelly_frac` where
+   `kelly_frac = clip(0.5 · log₂(champion_PF), 0, 1)`. PF=2 gets 0.5
+   of the risk budget, PF=4 gets 1.0. No ensemble-conviction
+   multiplier — the champion's binary fire/no-fire IS the conviction
+   signal in champion-only mode. Hard cap at 2× equity per trade.
+
+4. **Mirror agent override.** A dropdown on the `/tournament` page
+   lets the user pin any agent — the system follows that pin instead
+   of the champion until it's cleared. This is the only way to copy
+   a non-champion. Useful for "what if I followed polyedge-v0
+   instead of the champion this week?" comparisons.
+
+5. **Ensemble vote is still computed but doesn't gate entries.**
+   The Sharpe-weighted vote across firing agents (in
+   [`apps/web/lib/router.ts::weightedVote`](apps/web/lib/router.ts))
+   feeds two downstream uses: (a) the swarm-flip exit rule in
+   `manageOnEvent` closes a position when the rest of the swarm
+   strongly disagrees with the champion's existing position, (b) the
+   trade feed renders it as transparency context. It does NOT decide
+   whether to enter.
 
 Every event the user fires (manually or via autopilot) walks this
 exact path on the Vercel-deployed `/tournament` page; the trade-feed
-footer surfaces the chosen specialist, fired count, vote direction,
-conviction, and size factor. The Rust `Scoreboard` exposes a
-`recent_expectancy(agent_id, n, min_sample)` that already feeds the
-self-backtest gate; threading the same per-kind expectancy table into
-`Scoreboard::champion_for_kind()` is the next-pass migration so the
-live executor can use the same policy without TS-side mirroring.
+footer shows the champion's name, the swarm vote (e.g. `12/27`), the
+direction, and the size factor.
+
+> **Why champion-only and not per-event-kind specialist?** An
+> earlier design picked a specialist for each event kind (polyedge
+> for Polymarket events, liq-trend for liquidation cascades, etc.)
+> with a Sharpe-weighted ensemble vote setting conviction. It worked,
+> but it diluted the demo narrative ("who is the swarm telling me to
+> copy?" had a different answer per event). Champion-only is one
+> name, one trade-driver, the cleanest expression of the thesis.
+> The specialist-mode router (`routeTrade` in `lib/router.ts`) is
+> kept for the research scripts in `apps/web/scripts/backtest/`
+> that compare routing strategies offline.
 
 ### Portfolio meta-agent — exits + portfolio balancing
 
@@ -252,13 +276,13 @@ Every threshold is exposed in Settings and persists through
 | UI step | Where it runs in Rust | Where it runs in TS (UI mirror) |
 |---|---|---|
 | 1. Event | `Swarm::broadcast(&Event)` | `simulateReactions(ev, agents)` |
-| 2. Vote | each `SwarmAgent::observe` independently | each agent's reaction emitted in `lib/simulate.ts` |
+| 2. Evaluate | each `SwarmAgent::observe` independently | each agent's reaction emitted in `lib/simulate.ts` |
 | 3. PeerView + self-backtest gate | `PeerView { regime, self_recent_expectancy }` populated by `Swarm.with_scoreboard()` | regime fitness mirror in `lib/simulate.ts::regimeFitness` |
-| 4. Scoreboard | `Scoreboard::mark_outcome` updates per-trade R, Sharpe, PSR, DSR | `applySessionDelta` mutates the local snapshot live so the leaderboard re-ranks during a session |
-| 5. Specialist | (next-pass: `Scoreboard::champion_for_kind`) | `router::pickSpecialist(kind, agents)` |
-| 6. Ensemble | (next-pass) | `router::weightedVote(reactions, agents)` |
+| 4. Scoreboard | `Scoreboard::mark_outcome` updates per-trade R, Sharpe, PSR, DSR | `applySessionDelta` mutates local snapshot — sorts by Sharpe to match Rust |
+| 5. Champion | `Scoreboard::top_n(1, 30)` ranks by `rolling_sharpe`, Σ R as tiebreak (`min_decisions_for_champion = 30` floor) | `applySessionDelta` mirrors the same sort key |
+| 6. Copy trade routing | (next-pass: per-trade Kelly in Rust) | `router::routeTradeChampion(ev, rxs, agents, championId)` |
 | 7. Evolution | `Evolution::advance` every `PYTHIA_EVOLVE_EVERY` events | snapshot bundler injects evolved population at deploy time |
-| 8. Copy trade | `live-executor` signs EIP-712 + sends to Hyperliquid | TournamentClient opens a paper position with stop + TP, marks live PnL against Kiyotaka prices |
+| 8. Manage | `live-executor` signs EIP-712 + sends to Hyperliquid + manages exits | TournamentClient opens paper position with 2× equity cap + 2 ATR stop / 3 ATR TP, portfolio meta-agent (`apps/web/lib/portfolio.ts`) handles trail / time-stop / swarm-flip / DD breaker |
 
 ## Quantitative integration
 
@@ -271,10 +295,11 @@ trusting any number — research code drifts, this list does not.
 | Concept | Crate / fn | Wired into the swarm? | Where it fires |
 |---|---|:-:|---|
 | **R-multiple ledger** (Van Tharp expectancy) | `swarm::scoring::Scoreboard::mark_outcome` | ✅ live | every closed trade in `swarm-backtest` and `pythia-swarm-live` |
+| **Per-trade Sharpe ranking** (champion = highest Sharpe, ≥30 closed trades, Σ R as tiebreak) | `swarm::scoring::Scoreboard::top_n` | ✅ live | every event in both bins; **fixes the lifespan bias of raw Σ R ranking** — a long-lived mediocre agent can no longer beat a short-lived high-quality one |
 | **Probabilistic Sharpe Ratio** (Bailey & López de Prado 2012) | `evaluation::probabilistic_sharpe_ratio` | ✅ live | end-of-run certification block in `swarm-backtest`; PSR shown on the champion HUD and in the snapshot |
 | **Deflated Sharpe Ratio** (B&LdP 2014, multiple-testing correction) | `evaluation::deflated_sharpe_ratio` | ✅ live | same call site as PSR; uses every agent's Sharpe as the trial set |
 | **Block-bootstrap CI on Sharpe** (block size 7) | `evaluation::block_bootstrap_sharpe` | ✅ live | 95% CI lower/upper around the champion's Sharpe |
-| **Quarter-Kelly position sizing** | `live-executor::pythia-swarm-live` | ✅ live, opt-in | toggled by `kelly_enabled` in user settings; falls back to risk-fraction sizing |
+| **Quarter-Kelly position sizing** | `apps/web/lib/router.ts::routeTradeChampion` (UI) · `live-executor::pythia-swarm-live` (Rust) | ✅ live | UI: `kelly_frac = clip(0.5·log₂(champion_PF), 0, 1)`, capped at 2× equity; Rust: same curve, opt-in via `kelly_enabled` |
 | **Regime classifier** (Trending / Ranging / Chaotic / Calm) | `regime::classify` | ✅ live | rolling BTC candle buffer feeds `Swarm.current_regime`; agents see it via `PeerView.regime` |
 | **Per-family regime fitness gate** | `swarm::systematic::SystematicAgent::regime_fitness` | ✅ live | every `decide_for_asset()` — agents abstain when fitness < 0.3, scale risk by fitness otherwise |
 | **Self-backtest gate** (live recent-expectancy filter) | `swarm::scoring::Scoreboard::recent_expectancy` → `PeerView.self_recent_expectancy` | ✅ live | `Swarm::with_scoreboard(...)` populates per-agent before each `observe()`; `decide_for_asset()` abstains on E[R] < −0.05R |
@@ -312,15 +337,17 @@ Numbers below come from the deployed bundled snapshot
 actually shows, not a hypothetical backtest. Replay updates them every
 hour via cron.
 
-- **Deployed champion (gen 336):** `vol-breakout-v0` — 2,280 closed
-  trades, 62.85 % win rate, Σ R = **+1,694.83**, E[R] / trade =
-  **+0.74 R**, profit factor **3.01**, rolling Sharpe **0.54**.
+- **Deployed champion (gen 168):** `vol-breakout-v1` — 738 closed
+  trades, 67.5 % win rate, Σ R = **+650.11**, E[R] / trade =
+  **+0.88 R**, profit factor **3.66**, per-trade Sharpe **0.647**.
+  Selected by Sharpe-rank with a ≥30-trade floor, so newer agents
+  with genuine edge can rotate in without being overshadowed by
+  long-lived seeds with more accumulated R.
 - **Statistical certification:** PSR ≈ **1.000**, DSR ≈ **1.000**
   (multi-testing-corrected across all 27 agents), Sharpe 95 % CI =
-  **[0.42, 0.62]** — lower bound clears zero, so the edge survives
-  block-bootstrap resampling. Distribution: skew −0.41, kurt 1.28
-  (mild left-tail, not catastrophic). PBO computes once the
-  R-history matrix is dense enough for 8 splits × ≥32-trade columns.
+  **[0.541, 0.759]** — lower bound clears zero, so the edge survives
+  block-bootstrap resampling. PBO computes once the R-history
+  matrix is dense enough for 8 splits × ≥32-trade columns.
 - **365 days · BTC + ETH perps via Kiyotaka · ~69 k events** replayed
   through the swarm in **<1 s wall** on an M-series Mac. Ranking +
   champion report at `reports/swarm/<ts>/swarm.md`.

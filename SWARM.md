@@ -281,9 +281,16 @@ pub struct AgentStats {
 
 `Scoreboard::top_n(k, min_decisions)` and
 `Scoreboard::champion(min_decisions)` expose the oracle the executor
-and evolution both read.
+and evolution both read. **Ranking is by per-trade Sharpe with Σ R
+as tiebreak** (default `min_decisions_for_champion = 30`). Σ R alone
+would reward lifespan over per-trade quality — a long-lived mediocre
+agent could beat a short-lived high-quality one purely by accumulation.
+Sharpe is a ratio so it has no lifespan inflation; the 30-trade floor
+is the asymptotic-normality threshold below which Sharpe is too noisy
+(a 3-trade agent with 3 wins has near-infinite Sharpe by zero-variance
+fluke).
 
-## Executor routing
+## Executor routing — champion-only
 
 Each event, after `Swarm::broadcast()` returns the slate of
 `AgentDecision`s:
@@ -302,31 +309,42 @@ One agent drives trading at a time. If the champion passes on this
 event, no trade. If a different agent climbs the scoreboard, the
 executor follows it smoothly — no config change, no restart.
 
-## Consensus and the new ensemble router
+The Vercel UI mirrors this exactly via
+[`routeTradeChampion`](apps/web/lib/router.ts) in
+`apps/web/lib/router.ts`. The user can override champion-following
+through the **CopyTradePanel** dropdown — pinning a specific agent
+makes the system mirror that one until the pin is cleared. That's
+the only way to copy a non-champion.
 
-The original Rust `consensus()` is **equal-weight majority voting**
-across all firing agents. On 365 days of replayed data it fired 751×
-with **49 % directional wins (coin-flip)** — averaging 27 votes
-destroys signal because weak agents drown the strong. That's why the
-live executor is champion-driven rather than consensus-driven.
+### Why champion-only and not specialist + ensemble
 
-The Vercel UI ships a smarter alternative in
-[`apps/web/lib/router.ts`](apps/web/lib/router.ts):
+An earlier UI design (`routeTrade` in `apps/web/lib/router.ts`) ran
+specialist + ensemble routing: pick the highest-Sharpe agent in the
+family preferred for that event kind (polyedge for Polymarket
+events, liq-trend for liq cascades), Sharpe-weighted ensemble vote
+across all firing agents, conviction floor 0.25, quarter-Kelly on
+the specialist's PF. It was technically smarter — captures
+per-event-kind expertise — but it diluted the demo narrative:
+"who are we copying?" had a different answer per event kind.
 
-1. **Per-event-kind specialist** — pick the highest-Sharpe agent in
-   the family preferred for *this* event kind. Polymarket leads → polyedge,
-   liq cascades → liq-trend, funding spikes → funding-trend, etc.
-2. **Sharpe-weighted ensemble vote** across the agents that fired, not
-   equal-weight. Negative-Sharpe agents barely vote; positive-Sharpe
-   agents dominate. Trade only when conviction > 0.25.
-3. **Quarter-Kelly** sizing on the specialist's profit factor.
+Champion-only routing is the cleanest expression of the swarm's
+thesis: **the swarm exists to surface the single best trader, and
+you copy that one**. The specialist router is preserved in
+`routeTrade()` for the research scripts in
+`apps/web/scripts/backtest/` that compare routing strategies
+offline.
 
-This is what the `/tournament` page actually executes today. The Rust
-`consensus()` is preserved as a diagnostic counter (it still fires per
-event so backtests can compare champion-vs-consensus PnL) but does not
-drive execution. The next-pass migration is to expose
-`Scoreboard::champion_for_kind()` + `weighted_vote()` from Rust so the
-live executor uses the same router.
+The Sharpe-weighted ensemble vote is still computed every event for
+two non-entry uses: (a) the swarm-flip exit rule in
+`manageOnEvent` closes a position when the rest of the swarm
+strongly disagrees with the champion's existing position, (b) the
+trade feed renders it as transparency context (e.g. "swarm vote
+12/27"). It does NOT decide whether to enter.
+
+The Rust `consensus()` (equal-weight majority voting) is preserved
+as a diagnostic counter for completeness — fires per event so
+backtests can compare champion-vs-consensus PnL — but does not
+drive execution.
 
 ## Portfolio meta-agent — exits + position management
 
@@ -391,9 +409,12 @@ see the effect on session PnL without redeploying Rust.
 
 ```rust
 // Diagnostic only — surfaced in the snapshot for research, not execution.
+// `min_decisions_for_champion = 30` is the asymptotic-normality floor;
+// raised from 3 when ranking switched to Sharpe (a 3-trade agent with
+// 3 wins has near-infinite Sharpe via zero-variance fluke).
 let cfg = ConsensusCfg {
     top_k: 5,
-    min_decisions_for_champion: 3,
+    min_decisions_for_champion: 30,
     champion_agreement: 0.6,
     min_agent_count: 3,
     overall_agreement: 0.5,

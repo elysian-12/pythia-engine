@@ -248,9 +248,13 @@ signals were below-average, so Sharpe went up.
 
 ## Bottom line
 
-- The strategy isn't fixed — the swarm elects a champion each generation.
-- Today's champion in the 2025–2026 regime: `liq-trend` family (75 %
-  win rate, 2:1 reward:risk, 4 h horizon).
+- The strategy isn't fixed — the swarm elects a champion each
+  generation by **per-trade Sharpe** (not lifetime Σ R). Newer
+  agents with genuine edge can rotate in instead of being
+  overshadowed by long-lived seeds with more accumulated R.
+- Today's champion in the 2025–2026 regime: `vol-breakout-v1`
+  family (67.5 % win rate, +0.88 R/trade, profit factor 3.66,
+  Sharpe 0.65 over 738 closed trades).
 - Minimum practical equity: $500 – $1,000 on Hyperliquid, $2k+ elsewhere.
 - Sizing: ATR-risk 1 % per trade. Portfolio vol target 1.5 % daily.
 - Risk: 7 layers automated, 2 operator.

@@ -39,7 +39,7 @@ Binance WS ──────▶ live-executor ───────────
 | PSR / DSR / PBO / bootstrap | `evaluation` | Quant-grade significance tests; PBO is wired into `swarm-backtest` certification (matrix from agent R-histories ÷ 8 splits) |
 | Grid search, ablations | `strategy` | Calls `backtest` + `evaluation` |
 | Cointegration, Granger F, Hasbrouck IS | `econometrics` | Wired into `RuleFamily::PolyEdge` — `decide_for_asset` runs `cointegration_test` → `granger_f` → `information_share_proxy` against `PeerView::polymarket_history` before firing |
-| Agent roster, scoreboard, evolution | `swarm` | The tournament runtime — `Evolution::advance` ranks elites by `recent_expectancy_r × √n_recent` (NOT lifetime `total_r`), so long-running seeds don't permanently lock the elite slot |
+| Agent roster, scoreboard, evolution | `swarm` | The tournament runtime. `Scoreboard::top_n` ranks champion by **per-trade Sharpe** with Σ R as tiebreak (NOT raw Σ R, which rewards lifespan over per-trade quality). `min_decisions_for_champion = 30` floor protects against zero-variance flukes. `Evolution::advance` ranks elites by `recent_expectancy_r × √n_recent` so newer mutants can rotate into the elite slot. |
 | WS + HL execution | `live-executor`, `exchange-hyperliquid` | `swarm_live.rs` binary is canonical |
 | HTTP API for the UI | `api` (axum) | `/overview`, `/markets`, `/rate` |
 | Regime tagging | `regime` | Trending/ranging/chaotic/calm |
@@ -123,6 +123,22 @@ in the diff). Group related changes into a single commit.
   are exposed in `SettingsForm`, and persist through `/api/config`.
   Once the live executor gets a real HL key, the same rules port to
   Rust as `crates/portfolio/src/meta.rs` with identical semantics.
+- Trade routing in `lib/router.ts` is **champion-only** via
+  `routeTradeChampion` — only fires when the global Sharpe champion
+  reacted to the event; sizing is quarter-Kelly on the champion's
+  PF, capped at 2× equity per trade. The CopyTradePanel pin is the
+  only override (mirrors a user-chosen agent instead of the
+  champion). The older `routeTrade` (specialist + ensemble) is kept
+  for the research scripts in `apps/web/scripts/backtest/` only.
+- The Sharpe-weighted ensemble vote is still computed on every event
+  but is non-entry-gating: feeds (a) the swarm-flip exit rule in
+  `manageOnEvent`, (b) trade-feed transparency display.
+- `lib/swarm.ts::applySessionDelta` must sort by `rolling_sharpe`
+  (Σ R as tiebreak) to mirror `Scoreboard::top_n` in Rust. Sorting
+  by `total_r` reintroduces the lifespan bias the Rust fix was
+  meant to eliminate and causes the displayed champion to oscillate
+  mid-session as synthetic R increments push different agents to
+  the top.
 
 ## Tournament page layout (apps/web/components/tournament/TournamentClient.tsx)
 

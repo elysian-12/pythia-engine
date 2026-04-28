@@ -84,8 +84,11 @@ scoreboard into a live filter.
 `Scoreboard::record(decision)` then later `mark_outcome(id, r, pnl)`
 once the horizon elapses. Per-agent `AgentStats` aggregates:
 
-- `total_r` — sum of realised R-multiples
-- `win_rate` and `rolling_sharpe` (rolling last N decisions)
+- `total_r` — sum of realised R-multiples (informational; **not**
+  the ranking key)
+- `rolling_sharpe` — per-trade Sharpe (mean R / sample-stdev of R) —
+  the **ranking key** for `Scoreboard::top_n` and `champion()`
+- `win_rate`, `profit_factor`, `expectancy_r`, `max_drawdown_r`
 - `total_pnl_usd`, `last_r`, `total_decisions`, `active` flag
 
 The scoreboard is the **oracle**. Evolution reads it; the executor
@@ -93,9 +96,15 @@ reads it to resolve the current champion; the UI reads it.
 
 ### 5. Executor — champion-driven
 
-The scoreboard picks the champion (highest `total_r` among agents with
-`>= min_decisions`). On every event the swarm broadcasts to, if the
-champion emits a decision, the executor places the trade:
+The scoreboard picks the champion (highest **per-trade Sharpe**
+among agents with `>= min_decisions_for_champion` closed trades,
+default 30; Σ R is the tiebreaker). Sharpe is a ratio so lifespan
+doesn't inflate it the way Σ R would. The 30-trade floor is the
+asymptotic-normality threshold below which Sharpe estimates are too
+noisy to compare across agents (a 3-win 0-loss agent has
+near-infinite Sharpe by zero-variance fluke). On every event the
+swarm broadcasts to, if the champion emits a decision, the executor
+places the trade:
 
 1. Translate `(Asset, Direction)` → HL asset index + `OrderSide`.
 2. Size via ATR-risk on the champion's preferred `risk_fraction`,
