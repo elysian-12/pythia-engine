@@ -348,35 +348,40 @@ export function AgentLineageGraph({
 
     const sprite = softSprite();
 
-    // ── Champion sun at the galactic centre.
+    // ── Champion sun at the galactic centre. Toned down vs the
+    // earlier draft: smaller core (0.28 → 0.22), darker amber tint
+    // on the core (cream-yellow → soft amber), reduced glow opacity
+    // (0.95 → 0.55) and wash opacity (0.45 → 0.25), tighter scales.
+    // The sun still reads as the focal point but no longer washes
+    // out the inner spiral or burns retinas at idle.
     const sunGroup = new THREE.Group();
     scene.add(sunGroup);
     const sunCore = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28, 32, 32),
-      new THREE.MeshBasicMaterial({ color: 0xfff1c8 }),
+      new THREE.SphereGeometry(0.22, 32, 32),
+      new THREE.MeshBasicMaterial({ color: 0xffd98a }),
     );
     sunGroup.add(sunCore);
     const sunGlowMat = new THREE.SpriteMaterial({
       map: sprite,
-      color: new THREE.Color("#fbbf24"),
+      color: new THREE.Color("#f59e0b"),
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.55,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
     const sunGlow = new THREE.Sprite(sunGlowMat);
-    sunGlow.scale.set(2.4, 2.4, 1);
+    sunGlow.scale.set(2.0, 2.0, 1);
     sunGroup.add(sunGlow);
     const sunWashMat = new THREE.SpriteMaterial({
       map: sprite,
-      color: new THREE.Color("#f59e0b"),
+      color: new THREE.Color("#b45309"),
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.25,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
     const sunWash = new THREE.Sprite(sunWashMat);
-    sunWash.scale.set(5.2, 5.2, 1);
+    sunWash.scale.set(4.4, 4.4, 1);
     sunGroup.add(sunWash);
 
     // ── Agent satellites — populated in updateAgents.
@@ -653,8 +658,10 @@ export function AgentLineageGraph({
     // animate loop eases it back to 1 over BANG_DURATION seconds.
     // Cubic-out so the explosion is violent at the front and settles
     // gently — matches what an unfurling galaxy actually feels like.
+    // Start at 0 so the very first mount plays the bang animation
+    // — the swarm "explodes into existence" when the page loads.
     const BANG_DURATION = 1.4;
-    let bangProgress = 1;
+    let bangProgress = 0;
 
     const animate = () => {
       raf = requestAnimationFrame(animate);
@@ -684,24 +691,26 @@ export function AgentLineageGraph({
       if (!dragging) ctl.yaw += 0.0005;
 
       // Sun breathe + bang flash. Early in the bang the sun bursts
-      // bigger and brighter; settles to its baseline as the disc
-      // unfurls.
+      // bigger and brighter; settles to dimmer baseline as the disc
+      // unfurls. Baselines match the toned-down sun materials —
+      // glow 0.55 / wash 0.25 — so the resting state doesn't burn
+      // out the inner spiral.
       const sunPulse = 1 + 0.06 * Math.sin(t * 1.1);
       const bangFlash = Math.max(0, 1 - bangEased) * 1.2;
       sunCore.scale.setScalar(sunPulse * (1 + bangFlash * 0.8));
       sunGlow.scale.set(
-        2.4 * sunPulse * (1 + bangFlash),
-        2.4 * sunPulse * (1 + bangFlash),
+        2.0 * sunPulse * (1 + bangFlash),
+        2.0 * sunPulse * (1 + bangFlash),
         1,
       );
       sunWash.scale.set(
-        5.2 * sunPulse * (1 + bangFlash * 1.4),
-        5.2 * sunPulse * (1 + bangFlash * 1.4),
+        4.4 * sunPulse * (1 + bangFlash * 1.4),
+        4.4 * sunPulse * (1 + bangFlash * 1.4),
         1,
       );
       sunGlowMat.opacity =
-        0.85 + 0.1 * Math.sin(t * 1.1) + bangFlash * 0.4;
-      sunWashMat.opacity = 0.45 + bangFlash * 0.35;
+        0.5 + 0.08 * Math.sin(t * 1.1) + bangFlash * 0.35;
+      sunWashMat.opacity = 0.22 + bangFlash * 0.3;
 
       // Decay activity and reposition each satellite along its arm.
       // omegaScale keeps satellites slower than particle dust; the

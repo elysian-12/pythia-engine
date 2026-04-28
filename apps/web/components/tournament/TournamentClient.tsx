@@ -151,37 +151,13 @@ export function TournamentClient() {
   // styling makes the disclosure unmissable.
   const [descOpen, setDescOpen] = useState(false);
 
-  // Track the centre column's *content* height (it has md:self-start
-  // so it doesn't stretch with the row) and cap each sidebar to that
-  // height with overflow-y. The browser respects max-height when
-  // sizing the row track, so the row collapses to the centre's
-  // height instead of the tallest sidebar — bottoms align, sidebars
-  // scroll if their content overflows. Disabled below md.
-  const mainColRef = useRef<HTMLElement | null>(null);
-  const [mainColHeight, setMainColHeight] = useState<number | null>(null);
-  useEffect(() => {
-    const el = mainColRef.current;
-    if (!el || typeof window === "undefined") return;
-    const update = () => {
-      if (window.innerWidth >= 768) {
-        setMainColHeight(el.offsetHeight);
-      } else {
-        setMainColHeight(null);
-      }
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-  const sidebarStyle: React.CSSProperties =
-    mainColHeight != null
-      ? { maxHeight: mainColHeight, overflowY: "auto" }
-      : {};
+  // Sidebar alignment is pure CSS now — the inner content of each
+  // sidebar is wrapped in an absolutely-positioned div on md+, so
+  // the <aside> grid cell contributes zero intrinsic height to the
+  // grid row. The row track sizes purely off the centre column's
+  // natural content; sidebars stretch (default items-stretch) to
+  // match, and the inner absolute div scrolls if its content
+  // exceeds the row height. No measurement needed.
 
   // Paper HL ledger — opens when the copy-trader's agent reacts to an event.
   const [openPositions, setOpenPositions] = useState<PaperPosition[]>([]);
@@ -1073,15 +1049,12 @@ export function TournamentClient() {
           L-shape gap that used to appear below a short sidebar
           before row 2 began. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-stretch">
-        {/* CENTER — globe + pipeline. Mobile order 1. md:self-start
-            stops the cell from stretching with row height — that way
-            mainColRef.offsetHeight reflects the content height the
-            sidebars cap themselves to, and the row track collapses
-            to the centre's natural size instead of the tallest
-            sidebar. */}
+        {/* CENTER — globe + pipeline. Mobile order 1. This column's
+            natural height defines the row track; sidebars wrap their
+            inner content in absolute boxes so they don't push the
+            row taller. */}
         <main
-          ref={mainColRef}
-          className="space-y-3 md:space-y-4 min-w-0 md:self-start
+          className="space-y-3 md:space-y-4 min-w-0
             order-1
             md:col-span-7 md:col-start-3 md:row-start-1"
         >
@@ -1127,80 +1100,80 @@ export function TournamentClient() {
             context. Active tab gets a solid cyan slab so the change
             is unmissable; the inactive label is dim. */}
         <aside
-          style={sidebarStyle}
-          className="space-y-3 md:space-y-4 min-w-0
-            md:pr-1
+          className="min-w-0 md:relative
             order-2
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
-          <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
-            <button
-              type="button"
-              onClick={() => setRightTab("settings")}
-              aria-pressed={rightTab === "settings"}
-              className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
-                rightTab === "settings"
-                  ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
-                  : "text-mist hover:text-slate-100"
-              }`}
-            >
-              Trade settings
-            </button>
-            <button
-              type="button"
-              onClick={() => setRightTab("portfolio")}
-              aria-pressed={rightTab === "portfolio"}
-              className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
-                rightTab === "portfolio"
-                  ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
-                  : "text-mist hover:text-slate-100"
-              }`}
-            >
-              Portfolio
-            </button>
-          </div>
+          <div className="space-y-3 md:space-y-4 md:absolute md:inset-0 md:overflow-y-auto md:pr-1">
+            <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
+              <button
+                type="button"
+                onClick={() => setRightTab("settings")}
+                aria-pressed={rightTab === "settings"}
+                className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+                  rightTab === "settings"
+                    ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
+                    : "text-mist hover:text-slate-100"
+                }`}
+              >
+                Trade settings
+              </button>
+              <button
+                type="button"
+                onClick={() => setRightTab("portfolio")}
+                aria-pressed={rightTab === "portfolio"}
+                className={`flex-1 px-3 py-2 rounded text-[0.65rem] uppercase tracking-[0.25em] transition-all duration-200 ${
+                  rightTab === "portfolio"
+                    ? "bg-cyan text-ink font-bold shadow-md ring-1 ring-cyan"
+                    : "text-mist hover:text-slate-100"
+                }`}
+              >
+                Portfolio
+              </button>
+            </div>
 
-          {rightTab === "settings" ? (
-            <SettingsForm />
-          ) : (
-            <HyperliquidPanel
-              open={openPositions}
-              closed={closedPositions}
-              marks={marks}
+            {rightTab === "settings" ? (
+              <SettingsForm />
+            ) : (
+              <HyperliquidPanel
+                open={openPositions}
+                closed={closedPositions}
+                marks={marks}
+                equity_usd={EQUITY_USD}
+                onClose={handleClosePosition}
+                onReset={handleReset}
+              />
+            )}
+
+            <CopyTradePanel
+              agents={snap.agents}
+              selected={copyAgent}
+              onSelect={setCopyAgent}
               equity_usd={EQUITY_USD}
-              onClose={handleClosePosition}
-              onReset={handleReset}
+              risk_fraction={riskFraction}
+              btc_price={marks.BTC ?? DEFAULT_BTC}
+              eth_price={marks.ETH ?? DEFAULT_ETH}
+              reactions={reactions}
+              lastEvent={lastEvent}
             />
-          )}
-
-          <CopyTradePanel
-            agents={snap.agents}
-            selected={copyAgent}
-            onSelect={setCopyAgent}
-            equity_usd={EQUITY_USD}
-            risk_fraction={riskFraction}
-            btc_price={marks.BTC ?? DEFAULT_BTC}
-            eth_price={marks.ETH ?? DEFAULT_ETH}
-            reactions={reactions}
-            lastEvent={lastEvent}
-          />
+          </div>
         </aside>
 
         {/* LEFT SIDEBAR — description + autopilot + simulator. Mobile order 3. */}
         <aside
-          style={sidebarStyle}
-          className="space-y-3 md:space-y-4 min-w-0
-            md:pr-1
+          className="min-w-0 md:relative
             order-3
             md:col-span-2 md:col-start-1 md:row-start-1"
         >
-          {descriptionPanel}
-          <AutoPilot
-            onFire={onFire}
-            onPrices={onPrices}
-            onStatus={setAutopilotOn}
-          />
-          <EventSimulator onFire={onFire} lastFired={lastEvent} />
+          <div className="space-y-3 md:space-y-4 md:absolute md:inset-0 md:overflow-y-auto md:pr-1">
+            {descriptionPanel}
+            <AutoPilot
+              onFire={onFire}
+              onPrices={onPrices}
+              onStatus={setAutopilotOn}
+            />
+            <EventSimulator onFire={onFire} lastFired={lastEvent} />
+          </div>
         </aside>
       </div>
     </div>

@@ -150,37 +150,11 @@ export function LandingDashboard() {
   const [marks, setMarks] = useState<Marks>({ BTC: null, ETH: null });
   const [equity, setEquity] = useState<EquityPoint[]>([]);
 
-  // Track TradeSettingsPanel's rendered height so the AutoReplay
-  // widget on the right can cap its height to match and overflow
-  // its demo ledger internally. Without this, every new event
-  // expands AutoReplay vertically and breaks the row's bottom-edge
-  // alignment with the settings panel on the left. Disabled below
-  // lg (where the two panels stack into a single column anyway).
-  const settingsRef = useRef<HTMLDivElement | null>(null);
-  const [settingsHeight, setSettingsHeight] = useState<number | null>(null);
-  useEffect(() => {
-    const el = settingsRef.current;
-    if (!el || typeof window === "undefined") return;
-    const update = () => {
-      if (window.innerWidth >= 1024) {
-        setSettingsHeight(el.offsetHeight);
-      } else {
-        setSettingsHeight(null);
-      }
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-  const autoReplayStyle: React.CSSProperties =
-    settingsHeight != null
-      ? { maxHeight: settingsHeight, overflowY: "auto" }
-      : {};
+  // AutoReplay alignment is pure CSS — its inner content is
+  // wrapped in an absolutely-positioned div on lg+, so the
+  // wrapping cell contributes zero intrinsic height. The grid row
+  // sizes purely off TradeSettingsPanel on the left, and the
+  // demo ledger scrolls inside the absolute box if it overflows.
 
   useEffect(() => {
     let alive = true;
@@ -380,15 +354,19 @@ export function LandingDashboard() {
       </section>
 
       {/* TradeSettings ⇄ AutoReplay — side-by-side at 3/9 split on
-          desktop. AutoReplay caps its height to the TradeSettings
-          panel and scrolls its demo ledger internally so new events
-          fill the existing widget rather than pushing the row taller. */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 items-start">
-        <div ref={settingsRef} className="lg:col-span-3">
+          desktop. The AutoReplay cell uses lg:relative + an inner
+          lg:absolute lg:inset-0 lg:overflow-y-auto wrapper so its
+          intrinsic height is zero in the row track calculation —
+          row sizes off TradeSettingsPanel and AutoReplay's demo
+          ledger scrolls internally if events overflow. */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 items-stretch">
+        <div className="lg:col-span-3">
           <TradeSettingsPanel />
         </div>
-        <div className="lg:col-span-9 lg:pr-1" style={autoReplayStyle}>
-          <AutoReplay snap={snap} />
+        <div className="lg:col-span-9 lg:relative">
+          <div className="lg:absolute lg:inset-0 lg:overflow-y-auto lg:pr-1">
+            <AutoReplay snap={snap} />
+          </div>
         </div>
       </div>
 
