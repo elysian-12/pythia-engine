@@ -1104,7 +1104,7 @@ export function TournamentClient() {
             order-2
             md:col-span-3 md:col-start-10 md:row-start-1"
         >
-          <div className="space-y-3 md:space-y-4 md:absolute md:inset-0 md:overflow-y-auto md:pr-1">
+          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4">
             <div className="flex gap-1 p-1 rounded-md border border-edge/60 bg-black/40">
               <button
                 type="button"
@@ -1156,6 +1156,41 @@ export function TournamentClient() {
               reactions={reactions}
               lastEvent={lastEvent}
             />
+            {/* Session footer panel — flex-1 grows to fill the rest
+                of the sidebar so the visible bottom edge aligns with
+                the closed-loop pipeline rail in the centre column.
+                Carries minimal but useful status (pulse count,
+                generation, last latency) instead of being pure
+                whitespace. */}
+            <div className="hidden md:flex flex-1 panel p-3 bg-black/15 flex-col justify-between min-h-0">
+              <div>
+                <div className="text-[0.55rem] tracking-[0.35em] text-mist uppercase">
+                  Session
+                </div>
+                <div className="text-[0.65rem] text-mist mt-1.5 leading-relaxed">
+                  Paper-trading sandbox. Settings drive sizing on the
+                  next event the swarm fires.
+                </div>
+              </div>
+              <div className="flex flex-col gap-1 text-[0.6rem] text-mist num">
+                <div className="flex items-center justify-between">
+                  <span>Pulses</span>
+                  <span className="text-slate-200">{pulseKey}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Generation</span>
+                  <span className="text-slate-200">{snap.generation ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Last cycle</span>
+                  <span className="text-cyan">
+                    {lastLatencyMs != null
+                      ? `${lastLatencyMs.toFixed(0)} ms`
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </aside>
 
@@ -1165,7 +1200,7 @@ export function TournamentClient() {
             order-3
             md:col-span-2 md:col-start-1 md:row-start-1"
         >
-          <div className="space-y-3 md:space-y-4 md:absolute md:inset-0 md:overflow-y-auto md:pr-1">
+          <div className="md:absolute md:inset-0 md:overflow-y-auto md:pr-1 flex flex-col gap-3 md:gap-4">
             {descriptionPanel}
             <AutoPilot
               onFire={onFire}
@@ -1173,6 +1208,38 @@ export function TournamentClient() {
               onStatus={setAutopilotOn}
             />
             <EventSimulator onFire={onFire} lastFired={lastEvent} />
+            {/* Same footer pattern as the right sidebar — fills the
+                remaining height so the bottom edge aligns with the
+                pipeline rail. Surfaces autopilot + clock telemetry. */}
+            <div className="hidden md:flex flex-1 panel p-3 bg-black/15 flex-col justify-between min-h-0">
+              <div>
+                <div className="text-[0.55rem] tracking-[0.35em] text-mist uppercase">
+                  Live status
+                </div>
+                <div className="text-[0.65rem] text-mist mt-1.5 leading-relaxed">
+                  Autopilot polls the Kiyotaka feed; the simulator
+                  fires synthetic events for what-if previews.
+                </div>
+              </div>
+              <div className="flex flex-col gap-1 text-[0.6rem] text-mist num">
+                <div className="flex items-center justify-between">
+                  <span>Autopilot</span>
+                  <span className={autopilotOn ? "text-green" : "text-amber"}>
+                    {autopilotOn ? "polling" : "paused"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Snapshot</span>
+                  <span className="text-slate-200">
+                    {fmt(snap.generated_at)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Phase</span>
+                  <span className="text-slate-200">{phase}</span>
+                </div>
+              </div>
+            </div>
           </div>
         </aside>
       </div>
