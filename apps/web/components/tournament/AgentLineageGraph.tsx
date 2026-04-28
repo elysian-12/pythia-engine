@@ -155,11 +155,12 @@ function softSprite(): THREE.CanvasTexture {
 
 // Particle count scales with viewport — phones get a thinner cloud
 // so the canvas hits 60 fps without melting battery, desktops get
-// the full Bruno-Simon-density experience.
+// the full Bruno-Simon-density experience. Tier bumped ~50% from
+// 25/50/80k → 38/75/120k for a denser, more luminous disc.
 function particleCountFor(width: number): number {
-  if (width < 640) return 25_000;
-  if (width < 1024) return 50_000;
-  return 80_000;
+  if (width < 640) return 38_000;
+  if (width < 1024) return 75_000;
+  return 120_000;
 }
 
 type AgentRecord = {

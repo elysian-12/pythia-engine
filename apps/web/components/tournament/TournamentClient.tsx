@@ -151,15 +151,12 @@ export function TournamentClient() {
   // styling makes the disclosure unmissable.
   const [descOpen, setDescOpen] = useState(false);
 
-  // Track the centre column's rendered height so the left + right
-  // sidebars can cap their max-height to it and overflow-y inside.
-  // Without this, settings/portfolio + autopilot/sim grow taller
-  // than the globe + pipeline column, opening a vertical gap below
-  // the centre and leaving the bottom edges of the three columns
-  // misaligned. ResizeObserver fires on every layout-affecting
-  // change (window resize, font load, snapshot refresh) so the
-  // sidebars stay aligned without polling. Disabled below md so
-  // mobile gets a natural single-column flow.
+  // Track the centre column's *content* height (it has md:self-start
+  // so it doesn't stretch with the row) and cap each sidebar to that
+  // height with overflow-y. The browser respects max-height when
+  // sizing the row track, so the row collapses to the centre's
+  // height instead of the tallest sidebar — bottoms align, sidebars
+  // scroll if their content overflows. Disabled below md.
   const mainColRef = useRef<HTMLElement | null>(null);
   const [mainColHeight, setMainColHeight] = useState<number | null>(null);
   useEffect(() => {
@@ -1076,12 +1073,15 @@ export function TournamentClient() {
           L-shape gap that used to appear below a short sidebar
           before row 2 began. */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 items-stretch">
-        {/* CENTER — globe + pipeline. Mobile order 1. mainColRef is
-            measured by the parent so the sidebars can cap their height
-            to match this column. */}
+        {/* CENTER — globe + pipeline. Mobile order 1. md:self-start
+            stops the cell from stretching with row height — that way
+            mainColRef.offsetHeight reflects the content height the
+            sidebars cap themselves to, and the row track collapses
+            to the centre's natural size instead of the tallest
+            sidebar. */}
         <main
           ref={mainColRef}
-          className="space-y-3 md:space-y-4 min-w-0
+          className="space-y-3 md:space-y-4 min-w-0 md:self-start
             order-1
             md:col-span-7 md:col-start-3 md:row-start-1"
         >
