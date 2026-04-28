@@ -17,18 +17,6 @@ type Marks = { BTC: number | null; ETH: number | null };
 
 const STARTING_EQUITY = 1000;
 
-function fmtUsd(v: number, dp = 0): string {
-  const sign = v < 0 ? "-" : "";
-  return `${sign}$${Math.abs(v).toLocaleString(undefined, {
-    minimumFractionDigits: dp,
-    maximumFractionDigits: dp,
-  })}`;
-}
-
-function fmtPct(v: number, dp = 1): string {
-  return `${(v >= 0 ? "+" : "")}${v.toFixed(dp)}%`;
-}
-
 function MarkTicker({ marks }: { marks: Marks }) {
   return (
     <div className="flex items-center gap-3 text-[0.7rem]">
@@ -204,8 +192,6 @@ export function LandingDashboard() {
 
   const finalEquity =
     equity.length > 0 ? equity[equity.length - 1].equity : STARTING_EQUITY;
-  const pnl = finalEquity - STARTING_EQUITY;
-  const roi = (pnl / STARTING_EQUITY) * 100;
 
   const champ = snap?.champion ?? null;
   const cert = snap?.champion_certification ?? null;
@@ -214,6 +200,10 @@ export function LandingDashboard() {
         (f) => f !== "other",
       )
     : [];
+  const swarmTrades = snap
+    ? snap.agents.reduce((acc, a) => acc + a.wins + a.losses, 0)
+    : 0;
+  const champTrades = champ ? champ.wins + champ.losses : 0;
 
   return (
     <div className="max-w-[110rem] mx-auto space-y-5 md:space-y-6">
@@ -281,18 +271,6 @@ export function LandingDashboard() {
               </div>
               <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Stat
-              label="365-day backtest"
-              value={fmtUsd(STARTING_EQUITY)}
-              sub={`→ ${fmtUsd(finalEquity, 0)}`}
-              tone="cyan"
-            />
-            <Stat
-              label="PnL"
-              value={fmtUsd(pnl, 0)}
-              sub={fmtPct(roi, 1)}
-              tone={pnl >= 0 ? "pos" : "neg"}
-            />
-            <Stat
               label="Champion Σ R"
               value={
                 champ
@@ -301,7 +279,7 @@ export function LandingDashboard() {
               }
               sub={
                 champ
-                  ? `${(champ.win_rate * 100).toFixed(0)}% on ${champ.wins + champ.losses} trades`
+                  ? `${(champ.win_rate * 100).toFixed(0)}% on ${champTrades.toLocaleString()} trades`
                   : ""
               }
               tone={champ && champ.total_r >= 0 ? "pos" : "neg"}
@@ -320,20 +298,61 @@ export function LandingDashboard() {
               }
               tone="cyan"
             />
+            <Stat
+              label="Generation"
+              value={snap?.generation != null ? snap.generation.toLocaleString() : "—"}
+              sub={
+                snap
+                  ? `${snap.agents.length} agents · ${families.length} families`
+                  : ""
+              }
+              tone="cyan"
+            />
+            <Stat
+              label="Sharpe (rolling)"
+              value={
+                champ ? champ.rolling_sharpe.toFixed(2) : "—"
+              }
+              sub={
+                cert && cert.sharpe_ci_lo != null && cert.sharpe_ci_hi != null
+                  ? `95% CI ${cert.sharpe_ci_lo.toFixed(2)} – ${cert.sharpe_ci_hi.toFixed(2)}`
+                  : `${swarmTrades.toLocaleString()} swarm trades`
+              }
+              tone={
+                champ && champ.rolling_sharpe >= 0.5
+                  ? "pos"
+                  : champ && champ.rolling_sharpe >= 0
+                    ? "cyan"
+                    : "neg"
+              }
+            />
               </div>
             </div>
           </div>
 
-          {/* Equity curve */}
+          {/* Equity curve — sourced from a SEPARATE 365 d grid-search
+              backtest of the underlying liq-trend rule (the systematic
+              foundation the swarm builds on), NOT the swarm's live
+              tournament PnL. Labelled explicitly so it doesn't get
+              read as the swarm's own track record. */}
           {equity.length > 1 ? (
             <div className="mt-4 rounded-sm border border-edge/60 bg-black/30 p-3">
-              <div className="flex items-center justify-between text-[0.65rem] uppercase tracking-widest text-mist mb-1.5">
-                <span>Equity curve · 365d</span>
+              <div className="flex items-baseline justify-between text-[0.65rem] uppercase tracking-widest text-mist mb-1.5 gap-2 flex-wrap">
+                <span>
+                  Underlying rule baseline ·{" "}
+                  <span className="text-amber-300">liq-trend @ 1 % risk</span> ·
+                  $1 k → ${Math.round(finalEquity).toLocaleString()} (365 d)
+                </span>
                 <span className="num">
                   {equity.length.toLocaleString()} bars
                 </span>
               </div>
               <MiniSpark points={equity} />
+              <div className="mt-1.5 text-[0.6rem] text-mist/80 leading-relaxed">
+                Independent grid-search of the systematic rule the swarm
+                evolves around — not live swarm equity. Champion stats
+                above come from the deployed swarm snapshot.
+              </div>
             </div>
           ) : null}
         </div>
