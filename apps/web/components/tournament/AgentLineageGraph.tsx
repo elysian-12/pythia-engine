@@ -449,11 +449,13 @@ export function AgentLineageGraph({
         agentGroup.add(group);
 
         const normR = Math.max(0, Math.min(1, (a.total_r - minR) / range));
-        // 0.25 (weakest R) → 0.55 (strongest R). Both bounds well
-        // below 1.0 so every satellite visibly trails the particle
-        // dust; high-R agents still tick faster than the laggards
-        // but the whole population orbits gently.
-        const omegaScale = 0.25 + 0.3 * normR;
+        // Wider spread so the orbital-speed difference between
+        // high-R and low-R agents is unmistakable: 0.08 (laggards
+        // barely move) → 0.65 (top performers tick along at ~⅔
+        // particle speed). ~8× ratio means a strong agent laps
+        // a weak one in roughly the time it takes the weak one
+        // to clear a quarter-arc.
+        const omegaScale = 0.08 + 0.57 * normR;
 
         records.push({
           id: a.agent_id,
