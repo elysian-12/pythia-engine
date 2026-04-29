@@ -315,24 +315,64 @@ type EventPolicyInputs = {
    *  floor so swarm-flip can't close positions younger than the
    *  configured window. */
   now_secs: number;
+  /** Champion-mode override. When provided (live UI path) the
+   *  champion's own reaction direction drives the flip — closes only
+   *  if THE CHAMPION reacted opposite the position. Aligns the exit
+   *  with the entry: in champion-only routing the entry signal is the
+   *  champion's vote, so the exit signal should be too. The ensemble
+   *  has no track record advantage over the champion, so letting it
+   *  override the champion's exit timing creates premature exits.
+   *  Pass null/undefined for research scripts that want the ensemble
+   *  fall-through behaviour. */
+  champion_direction?: "long" | "short" | null;
 };
 
-/** When a fresh ensemble vote on an asset runs *opposite* the side of
- *  an open position with high enough conviction, close the position.
- *  Two thresholds gate the close:
- *    - magnitude: `|conviction| ≥ swarm_flip_conviction`
- *    - age:      `position.opened_at older than min_hold_minutes ago`
- *  Without the age check, fresh entries got cut within seconds of
- *  opening — every opposite poll-event closed them at ~$0 PnL,
- *  poisoning the realised-pnl line on the ledger. Stops + reverse-on-
- *  entry are NOT subject to min_hold; only the swarm-flip rule is. */
+/** When a fresh signal on an asset runs *opposite* an open position
+ *  with sufficient strength, close the position. Two gating modes:
+ *
+ *  Champion mode (live UI path) — `champion_direction` provided:
+ *    The champion's own reaction direction drives the flip. If the
+ *    champion didn't react, or reacted same-side as the position,
+ *    no close. The conviction threshold is bypassed because the
+ *    champion's binary fire/no-fire IS the conviction signal in
+ *    champion-only mode.
+ *
+ *  Ensemble mode (research scripts) — `champion_direction` omitted:
+ *    Ensemble vote magnitude `|conviction| ≥ swarm_flip_conviction`
+ *    must clear the threshold AND vote_direction must oppose the
+ *    position.
+ *
+ *  Both modes apply the `min_hold_minutes` floor so fresh entries
+ *  can't be cut within seconds of opening. Stops + reverse-on-entry
+ *  are NOT subject to min_hold; only the swarm-flip rule is. */
 export function manageOnEvent(inp: EventPolicyInputs): string[] {
-  const { asset, vote_direction, conviction, positions, config, now_secs } = inp;
-  if (vote_direction === "flat") return [];
-  if (Math.abs(conviction) < config.swarm_flip_conviction) return [];
+  const {
+    asset,
+    vote_direction,
+    conviction,
+    positions,
+    config,
+    now_secs,
+    champion_direction,
+  } = inp;
+
+  // Determine the opposing-side test.
+  let opposingSide: "long" | "short" | null = null;
+  if (champion_direction !== undefined) {
+    // Champion mode: champion's reaction direction governs (or null
+    // if champion didn't react this event).
+    if (!champion_direction) return [];
+    opposingSide = champion_direction;
+  } else {
+    // Ensemble fallback (research scripts).
+    if (vote_direction === "flat") return [];
+    if (Math.abs(conviction) < config.swarm_flip_conviction) return [];
+    opposingSide = vote_direction;
+  }
+
   const minAgeSecs = Math.max(0, config.min_hold_minutes) * 60;
   return positions
-    .filter((p) => p.asset === asset && p.side !== vote_direction)
+    .filter((p) => p.asset === asset && p.side !== opposingSide)
     .filter((p) => now_secs - p.opened_at >= minAgeSecs)
     .map((p) => p.id);
 }

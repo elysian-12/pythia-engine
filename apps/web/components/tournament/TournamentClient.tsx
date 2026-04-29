@@ -596,6 +596,16 @@ export function TournamentClient() {
     // "Follow the swarm out" rule, but only when the swarm is sure
     // and the position has had time to find its direction.
     const nowSec = Math.floor(Date.now() / 1000);
+    // Champion-only routing means the CHAMPION drives both entry AND
+    // exit. The ensemble vote is informational only — letting it
+    // override the champion's exit timing produced premature
+    // swarm-flip closes for ~$0 to mildly negative PnL, contradicting
+    // the demo's "follow the champion in and out" thesis. We pass
+    // the champion's reaction direction (null if it didn't react)
+    // so manageOnEvent uses the same agent that opened the trade.
+    const champReaction = championId
+      ? rxs.find((r) => r.agent_id === championId && r.reacted)
+      : null;
     const flipIds = manageOnEvent({
       asset: ev.asset,
       vote_direction: route.vote.direction,
@@ -603,6 +613,7 @@ export function TournamentClient() {
       positions: openPositionsRef.current,
       config: portfolioCfgRef.current,
       now_secs: nowSec,
+      champion_direction: champReaction?.direction ?? null,
     });
     if (flipIds.length > 0) {
       const px = ev.asset === "BTC" ? btcPx : ethPx;
