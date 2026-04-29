@@ -140,6 +140,10 @@ export function TournamentClient() {
   const [pulseKey, setPulseKey] = useState(0);
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
   const [autopilotOn, setAutopilotOn] = useState(false);
+  // Cache the autopilot toggle too so refreshing the page doesn't
+  // silently turn off live polling for users who had it enabled.
+  // Persisted under pythia-autopilot-on; gated by hydratedRef like
+  // the other LS-backed state.
   // Health of the live feed (Kiyotaka poll loop). Used so the header
   // KiyotakaBadge can degrade in lock-step with the in-page feed
   // instead of showing "live" while the feed shows "Reconnecting".
@@ -189,6 +193,13 @@ export function TournamentClient() {
   const portfolioCfgRef = useRef<PortfolioConfig>(DEFAULT_PORTFOLIO_CONFIG);
   const openPositionsRef = useRef<PaperPosition[]>([]);
   const closedPositionsRef = useRef<PaperPosition[]>([]);
+  // Prevents the persist effects below from firing with their initial
+  // [] state on mount, which would wipe localStorage before the
+  // hydration effect can read it. Bug symptom before this flag: every
+  // refresh or click-away-and-back closed all open positions and
+  // erased the closed-position ledger because the persist effects ran
+  // in declaration order before the hydrate effect.
+  const hydratedRef = useRef(false);
   useEffect(() => {
     snapRef.current = snap;
   }, [snap]);
@@ -210,7 +221,10 @@ export function TournamentClient() {
     // doesn't silently disappear (with its unrealised PnL) when
     // the user reloads. Same FIFO LS pattern as closed positions
     // but no cap — a sane portfolio has < 16 open at any time.
+    // Skip until hydration has completed so we don't overwrite saved
+    // state with the initial [] on mount.
     if (typeof window === "undefined") return;
+    if (!hydratedRef.current) return;
     try {
       window.localStorage.setItem(
         "pythia-open-positions",
@@ -228,7 +242,9 @@ export function TournamentClient() {
     // Cap at 500 trades — that's months of typical session activity
     // at the live polling cadence, well under the localStorage 5MB
     // ceiling. Older trades drop off the front (FIFO).
+    // Skip until hydration completes — same reason as above.
     if (typeof window === "undefined") return;
+    if (!hydratedRef.current) return;
     try {
       const trimmed = closedPositions.slice(-500);
       window.localStorage.setItem(
@@ -240,12 +256,48 @@ export function TournamentClient() {
       // ledger still works in-memory.
     }
   }, [closedPositions]);
+  // Persist the swarm trade feed so the chronological view of past
+  // events + reactions + routing decisions doesn't reset on refresh
+  // / click-away. Capped at FEED_MAX entries already in setFeed, so
+  // the LS payload stays tiny.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!hydratedRef.current) return;
+    try {
+      window.localStorage.setItem(
+        "pythia-trade-feed",
+        JSON.stringify(feed),
+      );
+    } catch {
+      /* ignore — feed will rebuild as new events fire */
+    }
+  }, [feed]);
+  // Persist autopilot toggle so refresh doesn't silently disable
+  // live polling.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!hydratedRef.current) return;
+    try {
+      window.localStorage.setItem(
+        "pythia-autopilot-on",
+        autopilotOn ? "1" : "0",
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [autopilotOn]);
 
   // Hydrate from localStorage on mount so a fresh page-load picks up
   // the prior session's closed positions AND any in-flight open
   // positions. Stops the "every reload looks like a brand-new
   // account" UX and prevents silent loss of unrealised PnL on
   // open trades that haven't hit stop/TP yet.
+  //
+  // Critical: sets hydratedRef.current = true at the END so the
+  // persist effects above don't fire with the initial [] on mount.
+  // Without that flag the persist effects would race the hydrate
+  // effect and overwrite localStorage with [] before we could read
+  // it — every refresh and click-away wiped the ledger.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -267,8 +319,20 @@ export function TournamentClient() {
           setOpenPositions(parsedOpen);
         }
       }
+      const feedRaw = window.localStorage.getItem("pythia-trade-feed");
+      if (feedRaw) {
+        const parsedFeed = JSON.parse(feedRaw) as FeedEntry[];
+        if (Array.isArray(parsedFeed) && parsedFeed.length > 0) {
+          setFeed(parsedFeed);
+        }
+      }
+      const apRaw = window.localStorage.getItem("pythia-autopilot-on");
+      if (apRaw === "1") setAutopilotOn(true);
     } catch {
       // ignore corrupt LS payload
+    } finally {
+      // Unblock the persist effects now that LS has been read.
+      hydratedRef.current = true;
     }
   }, []);
 
@@ -519,8 +583,16 @@ export function TournamentClient() {
   }, [marks]);
 
   const handleReset = useCallback(() => {
+    // Clears everything cached for this session: open + closed
+    // positions, the trade feed. Persist effects propagate the empty
+    // arrays into localStorage automatically (gated by hydratedRef
+    // which is already true at this point). Settings, riskFraction,
+    // copy-trade pin, and autopilot toggle are intentionally
+    // preserved — Reset is for "start a fresh paper run", not "wipe
+    // my whole config".
     setOpenPositions([]);
     setClosedPositions([]);
+    setFeed([]);
   }, []);
 
   // Stable across renders — reads dynamic state from refs. AutoPilot stores
