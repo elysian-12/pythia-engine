@@ -206,6 +206,20 @@ export function TournamentClient() {
   }, [portfolioCfg]);
   useEffect(() => {
     openPositionsRef.current = openPositions;
+    // Persist open positions across refresh so an in-flight trade
+    // doesn't silently disappear (with its unrealised PnL) when
+    // the user reloads. Same FIFO LS pattern as closed positions
+    // but no cap — a sane portfolio has < 16 open at any time.
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "pythia-open-positions",
+        JSON.stringify(openPositions),
+      );
+    } catch {
+      // localStorage full / disabled — accept that refresh will
+      // wipe the in-flight ledger this session.
+    }
   }, [openPositions]);
   useEffect(() => {
     closedPositionsRef.current = closedPositions;
@@ -228,17 +242,30 @@ export function TournamentClient() {
   }, [closedPositions]);
 
   // Hydrate from localStorage on mount so a fresh page-load picks up
-  // the prior session's closed positions and the realized-pnl line
-  // doesn't reset to zero. Stops the "every reload looks like a
-  // brand-new account" UX.
+  // the prior session's closed positions AND any in-flight open
+  // positions. Stops the "every reload looks like a brand-new
+  // account" UX and prevents silent loss of unrealised PnL on
+  // open trades that haven't hit stop/TP yet.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const raw = window.localStorage.getItem("pythia-closed-positions");
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as PaperPosition[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        setClosedPositions(parsed);
+      const closedRaw = window.localStorage.getItem("pythia-closed-positions");
+      if (closedRaw) {
+        const parsed = JSON.parse(closedRaw) as PaperPosition[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setClosedPositions(parsed);
+        }
+      }
+      const openRaw = window.localStorage.getItem("pythia-open-positions");
+      if (openRaw) {
+        const parsedOpen = JSON.parse(openRaw) as PaperPosition[];
+        if (Array.isArray(parsedOpen) && parsedOpen.length > 0) {
+          // Hydrating directly into state — manageOnMark on the next
+          // mark refresh will apply trail / time-stop / swarm-flip
+          // rules to these as if they had been open the whole time.
+          // Stops, TPs, and entry timestamps are preserved verbatim.
+          setOpenPositions(parsedOpen);
+        }
       }
     } catch {
       // ignore corrupt LS payload
