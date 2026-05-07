@@ -1,66 +1,66 @@
 [
   {
     "agent_id": "vol-breakout-v1",
-    "total_decisions": 252,
-    "wins": 166,
-    "losses": 86,
-    "total_r": 212.22428142795212,
-    "total_pnl_usd": 2122.2428142795206,
-    "rolling_sharpe": 0.608805030581955,
-    "win_rate": 0.6587301587301587,
-    "last_r": -1.1417083845731337,
+    "total_decisions": 1170,
+    "wins": 783,
+    "losses": 387,
+    "total_r": 1021.7451558782304,
+    "total_pnl_usd": 10217.451558782299,
+    "rolling_sharpe": 0.6370092656421606,
+    "win_rate": 0.6692307692307692,
+    "last_r": 1.8377889238327885,
     "active": true,
-    "gross_win_r": 300.44459331710596,
-    "gross_loss_r": 88.22031188915385,
-    "expectancy_r": 0.842159846936318,
-    "profit_factor": 3.405616993222666,
+    "gross_win_r": 1418.7365593794225,
+    "gross_loss_r": 396.9914035011924,
+    "expectancy_r": 0.8732864580155816,
+    "profit_factor": 3.5737211105004727,
     "max_drawdown_r": 5.497204776236856,
-    "peak_cum_r": 213.36598981252524,
-    "sum_r_squared": 659.0198365298626,
-    "sum_downside_r_squared": 95.50104163780698
+    "peak_cum_r": 1021.7451558782304,
+    "sum_r_squared": 3089.3086183209916,
+    "sum_downside_r_squared": 429.7546873701311
   },
   {
     "agent_id": "vol-breakout-v0",
-    "total_decisions": 394,
-    "wins": 254,
-    "losses": 140,
-    "total_r": 307.6199836842813,
-    "total_pnl_usd": 3076.199836842809,
-    "rolling_sharpe": 0.5649748428767041,
-    "win_rate": 0.6446700507614214,
-    "last_r": 1.9165371173065586,
+    "total_decisions": 1809,
+    "wins": 1179,
+    "losses": 630,
+    "total_r": 1451.0085967589664,
+    "total_pnl_usd": 14510.085967589694,
+    "rolling_sharpe": 0.5833707099116497,
+    "win_rate": 0.6517412935323383,
+    "last_r": 1.8377889238327885,
     "active": true,
-    "gross_win_r": 450.1820548379921,
-    "gross_loss_r": 142.56207115371083,
-    "expectancy_r": 0.7807613799093434,
-    "profit_factor": 3.157796819271828,
-    "max_drawdown_r": 5.374687353201978,
-    "peak_cum_r": 307.6199836842813,
-    "sum_r_squared": 990.7128488060508,
-    "sum_downside_r_squared": 153.62212538797655
+    "gross_win_r": 2092.5379169506673,
+    "gross_loss_r": 641.5293201916983,
+    "expectancy_r": 0.8021053602868803,
+    "profit_factor": 3.261796228308609,
+    "max_drawdown_r": 5.374687353202262,
+    "peak_cum_r": 1451.0085967589664,
+    "sum_r_squared": 4581.861496247004,
+    "sum_downside_r_squared": 691.2995642458936
   },
   {
     "agent_id": "gen2-mut25-vol-breakout-v0",
-    "total_decisions": 316,
-    "wins": 196,
-    "losses": 120,
-    "total_r": 235.23885479440858,
-    "total_pnl_usd": 2352.3885479440846,
-    "rolling_sharpe": 0.5265918380688427,
-    "win_rate": 0.620253164556962,
-    "last_r": 0.19327955897138077,
+    "total_decisions": 1507,
+    "wins": 951,
+    "losses": 556,
+    "total_r": 1194.1709549452007,
+    "total_pnl_usd": 11941.709549451984,
+    "rolling_sharpe": 0.5652490374137628,
+    "win_rate": 0.6310550763105508,
+    "last_r": 1.859115321326751,
     "active": true,
-    "gross_win_r": 357.50814769596934,
-    "gross_loss_r": 122.26929290156086,
-    "expectancy_r": 0.7444267556785081,
-    "profit_factor": 2.9239405840336343,
-    "max_drawdown_r": 5.507957176917131,
-    "peak_cum_r": 235.23885479440858,
-    "sum_r_squared": 804.6333463743695,
-    "sum_downside_r_squared": 131.11238810507615
+    "gross_win_r": 1753.7446580609023,
+    "gross_loss_r": 559.5737031157036,
+    "expectancy_r": 0.7924160284971471,
+    "profit_factor": 3.134072684788547,
+    "max_drawdown_r": 5.507957176917216,
+    "peak_cum_r": 1194.1709549452007,
+    "sum_r_squared": 3906.0082810291215,
+    "sum_downside_r_squared": 598.0894590224996
   },
   {
-    "agent_id": "gen32-mut40-liq-fade-v0",
+    "agent_id": "gen33-mut40-liq-fade-v0",
     "total_decisions": 38,
     "wins": 21,
     "losses": 17,
@@ -75,9 +75,9 @@
     "expectancy_r": 0.18297121513098635,
     "profit_factor": 1.5361357323452778,
     "max_drawdown_r": 8.02040477993566,
-    "peak_cum_r": 9.262539151189541,
+    "peak_cum_r": 9.26253915118954,
     "sum_r_squared": 40.50644107489358,
-    "sum_downside_r_squared": 12.848010606994496
+    "sum_downside_r_squared": 12.848010606994494
   },
   {
     "agent_id": "gen8-mut106-liq-trend-v1",
@@ -86,7 +86,7 @@
     "losses": 20,
     "total_r": 7.165513253495287,
     "total_pnl_usd": 71.65513253495286,
-    "rolling_sharpe": 0.14884928550255452,
+    "rolling_sharpe": 0.1488492855025545,
     "win_rate": 0.5,
     "last_r": -1.0578151640546016,
     "active": true,
@@ -96,7 +96,7 @@
     "profit_factor": 1.418111904378232,
     "max_drawdown_r": 8.459410640376621,
     "peak_cum_r": 11.481274172409924,
-    "sum_r_squared": 57.77025198908811,
+    "sum_r_squared": 57.77025198908812,
     "sum_downside_r_squared": 17.378123492642768
   },
   {
@@ -160,7 +160,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut384-liq-trend-v1",
+    "agent_id": "gen270-mut405-liq-trend-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -180,7 +180,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut385-liq-fade-v0",
+    "agent_id": "gen270-mut406-liq-fade-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -200,7 +200,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut386-funding-trend-v1",
+    "agent_id": "gen270-mut407-funding-trend-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -220,7 +220,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut387-funding-arb-v1",
+    "agent_id": "gen270-mut408-funding-arb-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -240,7 +240,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut388-polyedge-v1",
+    "agent_id": "gen270-mut409-polyedge-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -260,7 +260,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut389-liq-trend-v1",
+    "agent_id": "gen270-mut410-liq-trend-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -280,7 +280,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut390-liq-fade-v0",
+    "agent_id": "gen270-mut411-liq-fade-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -300,7 +300,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut391-funding-trend-v0",
+    "agent_id": "gen270-mut412-funding-trend-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -320,7 +320,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut392-funding-arb-v0",
+    "agent_id": "gen270-mut413-funding-arb-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -340,7 +340,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut393-polyedge-v0",
+    "agent_id": "gen270-mut414-polyedge-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -360,7 +360,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut394-liq-trend-v1",
+    "agent_id": "gen270-mut415-liq-trend-v1",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -380,7 +380,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut395-liq-fade-v0",
+    "agent_id": "gen270-mut416-liq-fade-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -400,7 +400,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut396-funding-trend-v0",
+    "agent_id": "gen270-mut417-funding-trend-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
@@ -420,7 +420,7 @@
     "sum_downside_r_squared": 0.0
   },
   {
-    "agent_id": "gen58-mut397-funding-arb-v0",
+    "agent_id": "gen270-mut418-funding-arb-v0",
     "total_decisions": 0,
     "wins": 0,
     "losses": 0,
